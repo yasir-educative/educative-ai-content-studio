@@ -51,12 +51,3 @@ OPENAI_SEARCH_MODEL=gpt-4o-search-preview
 | Pipeline Graph | `/graph` | Visual DAG of every pipeline stage |
 | Personas | `/personas` | Manage author voice personas |
 | Prompts | `/prompts` | Edit prompt templates for every pipeline stage |
-
-## Hosting notes
-
-Vercel's 60s function timeout won't hold the longer pipelines. Recommended alternatives:
-
-- **Railway** — supports long-running Node processes
-- **Render** — `npm run build && npm start`
-- **Fly.io** — `fly launch` with Next.js preset
-- **Local + Cloudflare Tunnel** — run locally, expose via `cloudflared`
