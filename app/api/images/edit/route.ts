@@ -42,11 +42,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Image file not found on disk' }, { status: 404 });
     }
 
+    // Detect original dimensions from PNG IHDR (bytes 16-23: width uint32BE, height uint32BE).
+    // Map to nearest valid gpt-image-2 edit size to preserve aspect ratio and orientation.
+    function detectSize(buf: Buffer): string {
+      const PNG_SIG = [0x89, 0x50, 0x4e, 0x47];
+      const isPng = buf.length >= 24 && PNG_SIG.every((b, i) => buf[i] === b);
+      if (isPng) {
+        const w = buf.readUInt32BE(16);
+        const h = buf.readUInt32BE(20);
+        if (h > w) return '1024x1536'; // portrait
+        if (w > h) return '1536x1024'; // landscape
+        return '1024x1024';            // square
+      }
+      return '1536x1024'; // fallback for non-PNG
+    }
+
     // Build multipart form for OpenAI /v1/images/edits
     const formData = new FormData();
     formData.append('model', 'gpt-image-2');
     formData.append('prompt', prompt);
-    formData.append('size', '1280x720');
+    formData.append('size', detectSize(imageBuffer));
     formData.append('quality', 'low');
     const arrayBuffer = imageBuffer.buffer.slice(
       imageBuffer.byteOffset,

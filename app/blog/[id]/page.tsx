@@ -23,6 +23,118 @@ const STAGE_ORDER = [
   'sanitize-format', 'widgets-generate', 'editor-blocks', 'publish',
 ];
 
+// ── Image editing helpers ─────────────────────────────────────────────────────
+
+type HtmlSegment =
+  | { type: 'html'; content: string }
+  | { type: 'image'; src: string; alt: string; full: string };
+
+function parseHtmlSegments(html: string): HtmlSegment[] {
+  const parts: HtmlSegment[] = [];
+  const re = /<img\s[^>]*>/gi;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(html)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: 'html', content: html.slice(lastIndex, match.index) });
+    }
+    const fullTag = match[0];
+    const srcM = fullTag.match(/src="([^"]*)"/i);
+    const altM = fullTag.match(/alt="([^"]*)"/i);
+    parts.push({ type: 'image', src: srcM?.[1] || '', alt: altM?.[1] || '', full: fullTag });
+    lastIndex = match.index + fullTag.length;
+  }
+  if (lastIndex < html.length) parts.push({ type: 'html', content: html.slice(lastIndex) });
+  return parts;
+}
+
+interface ImageEditState {
+  originalUrl: string;
+  prompt: string;
+  loading: boolean;
+  editedUrl: string | null;
+  error: string | null;
+}
+
+function ImageEditModal({
+  state,
+  onPromptChange,
+  onSubmit,
+  onUpdate,
+  onClose,
+}: {
+  state: ImageEditState;
+  onPromptChange: (v: string) => void;
+  onSubmit: () => void;
+  onUpdate: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="bg-[var(--panel)] border border-[var(--border)] rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div className="flex items-center justify-between p-5 border-b border-[var(--border)]">
+          <h2 className="text-lg font-semibold">Edit Image</h2>
+          <button onClick={onClose} className="text-[var(--text-dim)] hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <div className="p-5 space-y-5">
+          <div>
+            <label className="block text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide mb-1.5">What should change?</label>
+            <textarea
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--panel-2)] text-sm p-3 resize-none focus:outline-none focus:ring-1 focus:ring-[var(--accent)] min-h-[80px]"
+              placeholder="e.g. Change the background to dark blue, add more contrast…"
+              value={state.prompt}
+              onChange={(e) => onPromptChange(e.target.value)}
+              disabled={state.loading}
+            />
+          </div>
+          {state.error && (
+            <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg p-3">{state.error}</div>
+          )}
+          {(state.editedUrl || state.loading) ? (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-xs text-[var(--text-dim)] uppercase tracking-wide mb-2 font-medium">Original</p>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={state.originalUrl} alt="Original" className="w-full rounded-lg border border-[var(--border)] object-contain max-h-64" />
+              </div>
+              <div>
+                <p className="text-xs text-[var(--text-dim)] uppercase tracking-wide mb-2 font-medium">Edited</p>
+                {state.loading ? (
+                  <div className="w-full max-h-64 rounded-lg border border-[var(--border)] bg-[var(--panel-2)] flex items-center justify-center h-40 text-sm text-[var(--text-dim)]">Generating…</div>
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={state.editedUrl!} alt="Edited" className="w-full rounded-lg border border-[var(--border)] object-contain max-h-64" />
+                )}
+              </div>
+            </div>
+          ) : (
+            <div>
+              <p className="text-xs text-[var(--text-dim)] uppercase tracking-wide mb-2 font-medium">Current image</p>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={state.originalUrl} alt="Current" className="w-full rounded-lg border border-[var(--border)] object-contain max-h-64" />
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 p-5 border-t border-[var(--border)]">
+          <button className="btn-secondary" onClick={onClose} disabled={state.loading}>Cancel</button>
+          {!state.editedUrl ? (
+            <button className="btn-primary" onClick={onSubmit} disabled={state.loading || !state.prompt.trim()}>
+              {state.loading ? 'Generating…' : 'Generate Edit'}
+            </button>
+          ) : (
+            <>
+              <button className="btn-secondary" onClick={onSubmit} disabled={state.loading}>
+                {state.loading ? 'Generating…' : 'Regenerate'}
+              </button>
+              <button className="btn-primary" onClick={onUpdate} disabled={state.loading}>Use This Image</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function BlogRunPage() {
   const { id: slugParam } = useParams<{ id: string }>();
   // URL format is "{title-slug}--{blogId}" — extract the real ID from the suffix.
@@ -45,6 +157,8 @@ export default function BlogRunPage() {
 
   // Content view: null = article, 'html' | 'markdown' = source panel
   const [contentView, setContentView] = useState<null | 'html' | 'markdown'>(null);
+
+  const [imageEdit, setImageEdit] = useState<ImageEditState | null>(null);
 
   // Edit mode — contenteditable div over final.html so user edits rendered blog with widgets
   const [editing, setEditing] = useState(false);
@@ -218,9 +332,63 @@ export default function BlogRunPage() {
     }
   }
 
+  function openImageEdit(src: string) {
+    setImageEdit({ originalUrl: src, prompt: '', loading: false, editedUrl: null, error: null });
+  }
+
+  async function submitImageEdit() {
+    if (!imageEdit) return;
+    setImageEdit((s) => s ? { ...s, loading: true, error: null } : s);
+    try {
+      const res = await fetch('/api/images/edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageUrl: imageEdit.originalUrl, prompt: imageEdit.prompt }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Edit failed');
+      setImageEdit((s) => s ? { ...s, loading: false, editedUrl: json.editedUrl } : s);
+    } catch (e: any) {
+      setImageEdit((s) => s ? { ...s, loading: false, error: e?.message || String(e) } : s);
+    }
+  }
+
+  async function applyImageEdit() {
+    if (!imageEdit?.editedUrl || !final) return;
+    const oldUrl = imageEdit.originalUrl;
+    const newUrl = imageEdit.editedUrl;
+
+    const updatedBlocks = (final.editorBlocks || []).map((block: any) => {
+      if (block?.type === 'Image') {
+        const blockUrl = block?.content?.url || block?.content?.path || '';
+        if (blockUrl === oldUrl) return { ...block, content: { ...block.content, url: newUrl, path: newUrl } };
+      }
+      return block;
+    });
+    const updatedHtml = (final.html || '').replace(
+      new RegExp(oldUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
+      newUrl,
+    );
+
+    try {
+      const res = await fetch(`/api/blog/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: updatedHtml, editorBlocks: updatedBlocks }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Save failed');
+      setFinal((f: any) => ({ ...f, html: updatedHtml, editorBlocks: updatedBlocks }));
+      setImageEdit(null);
+    } catch (e: any) {
+      setImageEdit((s) => s ? { ...s, error: e?.message || String(e) } : s);
+    }
+  }
+
   const isDone = !running && !!final;
   const hasDebug = stages.length > 0 || Object.keys(outputs).length > 0;
   const liveText = typeof outputs['text-generator'] === 'string' ? outputs['text-generator'] : null;
+  const htmlSegments = final?.html ? parseHtmlSegments(final.html) : [];
 
   const activeContentText = contentView === 'html' ? (final?.html || '') : (final?.markdown || '');
   const activeContentExt = contentView === 'html' ? 'html' : 'md';
@@ -238,6 +406,17 @@ export default function BlogRunPage() {
 
   return (
     <div className="space-y-6">
+
+      {/* Image edit modal */}
+      {imageEdit && (
+        <ImageEditModal
+          state={imageEdit}
+          onPromptChange={(v) => setImageEdit((s) => s ? { ...s, prompt: v } : s)}
+          onSubmit={submitImageEdit}
+          onUpdate={applyImageEdit}
+          onClose={() => setImageEdit(null)}
+        />
+      )}
 
       {/* ── Top bar ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -400,7 +579,35 @@ export default function BlogRunPage() {
           <article ref={articleRef} className="card p-8">
             <div className="article-prose">
               {final.html ? (
-                <div dangerouslySetInnerHTML={{ __html: final.html }} />
+                htmlSegments.map((seg, i) =>
+                  seg.type === 'html' ? (
+                    <span key={i} dangerouslySetInnerHTML={{ __html: seg.content }} />
+                  ) : (
+                    <span key={i} className="relative inline-block group w-full">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={seg.src} alt={seg.alt} style={{ width: '100%', display: 'block' }} />
+                      {seg.src.startsWith('/api/') && (
+                        <span className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <a
+                            href={seg.src}
+                            download={seg.src.split('/').pop() || 'image.png'}
+                            className="bg-black/70 hover:bg-black/90 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg border border-white/20 inline-flex items-center"
+                            title="Download image"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                          </a>
+                          <button
+                            className="bg-black/70 hover:bg-black/90 text-white text-xs font-medium px-3 py-1.5 rounded-lg border border-white/20"
+                            onClick={() => openImageEdit(seg.src)}
+                          >
+                            Edit Image
+                          </button>
+                        </span>
+                      )}
+                    </span>
+                  )
+                )
               ) : (
                 <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
                   {final.markdown || ''}

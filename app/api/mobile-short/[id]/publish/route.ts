@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getMobileShort, updateMobileShort } from '@/lib/mobileShortsStorage';
+import { writeSheetPublishResult } from '@/lib/sheetsWriter';
 import {
   createFlashCardShotCollection,
   createLesson,
@@ -405,6 +406,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     status: 'published',
     publishedUrl,
   });
+
+  // Step 6: Write-back to Google Sheet (no-op if service account not configured)
+  if (short.sheetUrl && short.rowIdx !== undefined) {
+    try {
+      await writeSheetPublishResult(short.sheetUrl, short.rowIdx, publishedUrl);
+    } catch (e) {
+      console.error('[publish] sheet write-back failed', e);
+    }
+  }
 
   return Response.json({ ok: errors.length === 0, published: results.length, errors, results, short: updated });
 }

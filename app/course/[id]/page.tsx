@@ -508,12 +508,23 @@ export default function CourseLessonRunPage() {
                           <span key={i} className="relative inline-block group w-full">
                             <img src={seg.src} alt={seg.alt} className="w-full rounded-lg" />
                             {seg.src && (
-                              <button
-                                onClick={() => openImageEdit(seg.src)}
-                                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/70 hover:bg-black/90 text-white text-xs font-medium px-3 py-1.5 rounded-lg border border-white/20"
-                              >
-                                Edit Image
-                              </button>
+                              <span className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <a
+                                  href={seg.src}
+                                  download={seg.src.split('/').pop() || 'image.png'}
+                                  className="bg-black/70 hover:bg-black/90 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg border border-white/20 inline-flex items-center"
+                                  title="Download image"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                                </a>
+                                <button
+                                  onClick={() => openImageEdit(seg.src)}
+                                  className="bg-black/70 hover:bg-black/90 text-white text-xs font-medium px-3 py-1.5 rounded-lg border border-white/20"
+                                >
+                                  Edit Image
+                                </button>
+                              </span>
                             )}
                           </span>
                         )

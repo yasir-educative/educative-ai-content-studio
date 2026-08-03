@@ -72,6 +72,8 @@ export function startMobileShortRun(input: MobileShortInput): MobileShortRunHand
     additionalContext: input.additionalContext,
     isHighlightCardNeeded: input.isHighlightCardNeeded,
     numCards: input.numCards,
+    sheetUrl: input.sheetUrl,
+    rowIdx: input.rowIdx,
     authorId: input.authorId || '',
     cards: [],
     stageOutputs: {},

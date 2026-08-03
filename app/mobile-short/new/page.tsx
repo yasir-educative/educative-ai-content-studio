@@ -18,8 +18,14 @@ interface ShortFormData {
 }
 
 interface SheetRow {
-  idx: number;        // original row index
-  cells: string[];    // raw cell values
+  idx: number;
+  topic: string;
+  domain: string;
+  level: string;
+  additionalContext: string;
+  status: string;
+  numCards: number;
+  includeHighlight: boolean;
 }
 
 type BulkStatus = 'idle' | 'running' | 'done' | 'error';
@@ -33,7 +39,26 @@ interface BulkJob {
   error?: string;
 }
 
-// ── Single short helpers ───────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const norm = (s: string) => s.toLowerCase().trim().replace(/[\s_\-]+/g, '');
+
+function findCol(headers: string[], matchers: Array<(n: string) => boolean>): number {
+  for (const match of matchers) {
+    const i = headers.findIndex((h) => match(norm(h)));
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
+function parseHighlight(val: string): boolean {
+  return ['yes', 'true', '1', 'y'].includes(val.toLowerCase().trim());
+}
+
+function parseNumCards(val: string): number {
+  const n = parseInt(val.trim(), 10);
+  return n >= 1 && n <= 10 ? n : 5;
+}
 
 async function startShortStream(
   body: object,
@@ -96,18 +121,8 @@ export default function NewMobileShortPage() {
   const [sheetUrl, setSheetUrl] = useState('');
   const [sheetLoading, setSheetLoading] = useState(false);
   const [sheetError, setSheetError] = useState('');
-  const [headers, setHeaders] = useState<string[]>([]);
   const [sheetRows, setSheetRows] = useState<SheetRow[]>([]);
-  const [topicCol, setTopicCol] = useState<number>(-1);
-  const [domainCol, setDomainCol] = useState<number>(-1);
-  const [levelCol, setLevelCol] = useState<number>(-1);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
-  const [bulkSettings, setBulkSettings] = useState<Omit<ShortFormData, 'topic' | 'domain' | 'level'>>({
-    objective: '',
-    additionalContext: '',
-    numCards: 5,
-    includeHighlight: true,
-  });
   const [bulkJobs, setBulkJobs] = useState<BulkJob[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
 
@@ -157,12 +172,8 @@ export default function NewMobileShortPage() {
     if (!sheetUrl.trim()) return;
     setSheetLoading(true);
     setSheetError('');
-    setHeaders([]);
     setSheetRows([]);
     setSelectedRows(new Set());
-    setTopicCol(-1);
-    setDomainCol(-1);
-    setLevelCol(-1);
     setBulkJobs([]);
     try {
       const res = await fetch('/api/mobile-short/sheet', {
@@ -172,18 +183,59 @@ export default function NewMobileShortPage() {
       });
       const json = await res.json();
       if (!res.ok) { setSheetError(json.error || 'Failed to fetch sheet'); return; }
-      setHeaders(json.headers);
-      const rows: SheetRow[] = (json.rows as string[][]).map((cells, idx) => ({ idx, cells }));
+
+      const headers: string[] = json.headers;
+      const rawRows: string[][] = json.rows;
+
+      // Auto-detect the six specific columns
+      const topicCol = findCol(headers, [
+        (n) => n === 'topic',
+        (n) => n.includes('topic'),
+        (n) => n.includes('title'),
+      ]);
+      const domainCol = findCol(headers, [
+        (n) => n === 'domain',
+        (n) => n.includes('domain'),
+      ]);
+      const levelCol = findCol(headers, [
+        (n) => n === 'level',
+        (n) => n.includes('level'),
+      ]);
+      const contextCol = findCol(headers, [
+        (n) => n === 'additionalcontext',
+        (n) => n.includes('additionalcontext'),
+        (n) => n.includes('context'),
+      ]);
+      const statusCol = findCol(headers, [
+        (n) => n === 'status',
+        (n) => n.includes('status'),
+      ]);
+      const highlightCol = findCol(headers, [
+        (n) => n.includes('highlightcard') || n.includes('ishighlight'),
+        (n) => n.includes('highlight'),
+      ]);
+      const numCardsCol = findCol(headers, [
+        (n) => n === 'noofcards',
+        (n) => n === 'numcards',
+        (n) => n === 'numberofcards',
+        (n) => n.includes('noofcard'),
+        (n) => n.includes('numcard'),
+        (n) => n.includes('numberofcard'),
+        (n) => n === 'cards',
+      ]);
+
+      const rows: SheetRow[] = rawRows.map((cells, idx) => ({
+        idx,
+        topic: topicCol >= 0 ? (cells[topicCol] ?? '') : '',
+        domain: domainCol >= 0 ? (cells[domainCol] ?? '') : '',
+        level: levelCol >= 0 ? (cells[levelCol] ?? '') : '',
+        additionalContext: contextCol >= 0 ? (cells[contextCol] ?? '') : '',
+        status: statusCol >= 0 ? (cells[statusCol] ?? '') : '',
+        numCards: numCardsCol >= 0 && cells[numCardsCol] ? parseNumCards(cells[numCardsCol]) : 5,
+        includeHighlight: highlightCol >= 0 && cells[highlightCol] ? parseHighlight(cells[highlightCol]) : true,
+      }));
+
       setSheetRows(rows);
-      // Auto-detect columns by header name
-      const h = (json.headers as string[]).map((s: string) => s.toLowerCase().trim());
-      const topicIdx = h.findIndex((x: string) => x.includes('topic') || x.includes('title') || x.includes('subject'));
-      const domainIdx = h.findIndex((x: string) => x.includes('domain') || x.includes('category') || x.includes('vertical'));
-      const levelIdx = h.findIndex((x: string) => x.includes('level') || x.includes('audience') || x.includes('difficulty'));
-      setTopicCol(topicIdx >= 0 ? topicIdx : 0);
-      if (domainIdx >= 0) setDomainCol(domainIdx);
-      if (levelIdx >= 0) setLevelCol(levelIdx);
-      // Select all rows by default
       setSelectedRows(new Set(rows.map((r) => r.idx)));
     } catch (err: any) {
       setSheetError(err?.message || 'Failed to fetch');
@@ -205,45 +257,42 @@ export default function NewMobileShortPage() {
     else setSelectedRows(new Set(sheetRows.map((r) => r.idx)));
   }
 
+  function updateRow(idx: number, patch: Partial<Pick<SheetRow, 'numCards' | 'includeHighlight'>>) {
+    setSheetRows((prev) => prev.map((r) => r.idx === idx ? { ...r, ...patch } : r));
+  }
+
   // ── Sheet: bulk create ──
   async function startBulk() {
-    const toCreate = sheetRows.filter((r) => selectedRows.has(r.idx));
-    if (!toCreate.length || topicCol < 0) return;
+    const toCreate = sheetRows.filter((r) => selectedRows.has(r.idx) && r.topic.trim());
+    if (!toCreate.length) return;
 
     const jobs: BulkJob[] = toCreate.map((r) => ({
       rowIdx: r.idx,
-      topic: r.cells[topicCol] || `Row ${r.idx + 2}`,
+      topic: r.topic,
       status: 'idle',
       stages: [],
     }));
     setBulkJobs(jobs);
     setBulkRunning(true);
 
-    // Fire all in parallel
     await Promise.all(
       toCreate.map(async (row, ji) => {
-        const topic = row.cells[topicCol] || '';
-        if (!topic.trim()) return;
-
-        const domain = domainCol >= 0 ? row.cells[domainCol] : undefined;
-        const level = levelCol >= 0 ? row.cells[levelCol] : undefined;
-
         setBulkJobs((prev) => {
           const next = [...prev];
           next[ji] = { ...next[ji], status: 'running' };
           return next;
         });
-
         try {
           const shortId = await startShortStream(
             {
-              topic: topic.trim(),
-              domain: domain?.trim() || undefined,
-              level: level?.trim() || undefined,
-              objective: bulkSettings.objective?.trim() || undefined,
-              additionalContext: bulkSettings.additionalContext?.trim() || undefined,
-              numCards: bulkSettings.numCards,
-              isHighlightCardNeeded: bulkSettings.includeHighlight,
+              topic: row.topic.trim(),
+              domain: row.domain.trim() || undefined,
+              level: row.level.trim() || undefined,
+              additionalContext: row.additionalContext.trim() || undefined,
+              numCards: row.numCards,
+              isHighlightCardNeeded: row.includeHighlight,
+              sheetUrl: sheetUrl.trim() || undefined,
+              rowIdx: row.idx,
             },
             (s) => setBulkJobs((prev) => {
               const next = [...prev];
@@ -273,6 +322,7 @@ export default function NewMobileShortPage() {
   }
 
   const allDone = bulkJobs.length > 0 && bulkJobs.every((j) => j.status === 'done' || j.status === 'error');
+  const selectedCount = sheetRows.filter((r) => selectedRows.has(r.idx) && r.topic.trim()).length;
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
@@ -392,11 +442,11 @@ export default function NewMobileShortPage() {
       {mode === 'sheet' && (
         <div className="space-y-6">
           {/* URL input */}
-          <div className="card p-5 space-y-4">
+          <div className="card p-5">
             <div className="space-y-1">
               <label className="text-sm font-medium text-[var(--text)]">Google Sheet URL</label>
-              <p className="text-xs text-[var(--text-faint)]">Sheet must be shared with "Anyone with the link" → Viewer</p>
-              <div className="flex gap-2">
+              <p className="text-xs text-[var(--text-faint)]">Fetches rows where Status = "In progress"</p>
+              <div className="flex gap-2 mt-1.5">
                 <input
                   className="input flex-1"
                   placeholder="https://docs.google.com/spreadsheets/d/…"
@@ -412,168 +462,162 @@ export default function NewMobileShortPage() {
                   {sheetLoading ? 'Fetching…' : 'Fetch'}
                 </button>
               </div>
-              {sheetError && <p className="text-xs text-red-400 mt-1">{sheetError}</p>}
+              {sheetError && <p className="text-xs text-red-400 mt-1.5">{sheetError}</p>}
             </div>
           </div>
 
-          {/* Sheet data + column mapping */}
-          {headers.length > 0 && (
+          {/* Row cards */}
+          {sheetRows.length > 0 && (
             <>
-              {/* Column mapping */}
-              <div className="card p-5 space-y-4">
-                <h3 className="text-sm font-semibold text-[var(--text)]">Map columns</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">Topic column <span className="text-red-400">*</span></label>
-                    <select className="input w-full text-sm" value={topicCol} onChange={(e) => setTopicCol(Number(e.target.value))}>
-                      <option value={-1}>— select —</option>
-                      {headers.map((h, i) => <option key={i} value={i}>{h}</option>)}
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">Domain column <span className="text-[var(--text-faint)]">(optional)</span></label>
-                    <select className="input w-full text-sm" value={domainCol} onChange={(e) => setDomainCol(Number(e.target.value))}>
-                      <option value={-1}>— none —</option>
-                      {headers.map((h, i) => <option key={i} value={i}>{h}</option>)}
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">Level column <span className="text-[var(--text-faint)]">(optional)</span></label>
-                    <select className="input w-full text-sm" value={levelCol} onChange={(e) => setLevelCol(Number(e.target.value))}>
-                      <option value={-1}>— none —</option>
-                      {headers.map((h, i) => <option key={i} value={i}>{h}</option>)}
-                    </select>
-                  </div>
+              {/* Toolbar */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      className="accent-[var(--accent)]"
+                      checked={selectedRows.size === sheetRows.length && sheetRows.length > 0}
+                      onChange={toggleAll}
+                    />
+                    <span className="text-sm text-[var(--text-dim)]">
+                      {sheetRows.length} row{sheetRows.length !== 1 ? 's' : ''} · {selectedRows.size} selected
+                    </span>
+                  </label>
                 </div>
-
-                {/* Global settings */}
-                <div className="border-t border-[var(--border)] pt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">Cards per short</label>
-                    <select className="input w-full text-sm" value={bulkSettings.numCards}
-                      onChange={(e) => setBulkSettings((s) => ({ ...s, numCards: parseInt(e.target.value) }))}>
-                      {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} card{n !== 1 ? 's' : ''}</option>)}
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">Objective <span className="text-[var(--text-faint)]">(applies to all)</span></label>
-                    <input className="input w-full text-sm" placeholder="Optional learning goal"
-                      value={bulkSettings.objective}
-                      onChange={(e) => setBulkSettings((s) => ({ ...s, objective: e.target.value }))} />
-                  </div>
-                  <div className="space-y-1 flex flex-col justify-end pb-0.5">
-                    <label className="flex items-start gap-2 cursor-pointer">
-                      <input type="checkbox" className="mt-0.5 shrink-0 accent-[var(--accent)]"
-                        checked={bulkSettings.includeHighlight}
-                        onChange={(e) => setBulkSettings((s) => ({ ...s, includeHighlight: e.target.checked }))} />
-                      <span className="text-sm text-[var(--text-dim)]">Add Highlight Card</span>
-                    </label>
-                  </div>
-                </div>
+                {bulkJobs.length === 0 ? (
+                  <button
+                    className="btn-primary text-xs py-1.5 px-4"
+                    onClick={startBulk}
+                    disabled={selectedCount === 0 || bulkRunning}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                    Generate {selectedCount} short{selectedCount !== 1 ? 's' : ''}
+                  </button>
+                ) : allDone ? (
+                  <button className="btn-secondary text-xs py-1.5 px-4" onClick={() => router.push('/mobile-short')}>
+                    View all shorts →
+                  </button>
+                ) : null}
               </div>
 
-              {/* Row table */}
-              <div className="card overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
-                  <div className="flex items-center gap-3">
-                    <input type="checkbox" className="accent-[var(--accent)]"
-                      checked={selectedRows.size === sheetRows.length && sheetRows.length > 0}
-                      onChange={toggleAll} />
-                    <span className="text-sm font-medium text-[var(--text)]">
-                      {sheetRows.length} rows · {selectedRows.size} selected
-                    </span>
-                  </div>
-                  {bulkJobs.length === 0 && (
-                    <button
-                      className="btn-primary text-xs py-1.5 px-4"
-                      onClick={startBulk}
-                      disabled={selectedRows.size === 0 || topicCol < 0 || bulkRunning}
+              {/* Cards grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {sheetRows.map((row, ji) => {
+                  const job = bulkJobs[ji];
+                  const isSelected = selectedRows.has(row.idx);
+                  return (
+                    <div
+                      key={row.idx}
+                      onClick={() => { if (!bulkRunning && !job) toggleRow(row.idx); }}
+                      className={`card p-4 flex flex-col gap-3 transition-all border-2 ${
+                        isSelected
+                          ? 'border-[var(--accent)]/50 bg-[var(--accent)]/5'
+                          : 'border-transparent opacity-50'
+                      } ${!bulkRunning && !job ? 'cursor-pointer hover:border-[var(--accent)]/30' : ''}`}
                     >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-                      Create {selectedRows.size} short{selectedRows.size !== 1 ? 's' : ''} in parallel
-                    </button>
-                  )}
-                  {allDone && (
-                    <button className="btn-secondary text-xs py-1.5 px-4" onClick={() => router.push('/mobile-course')}>
-                      View all shorts →
-                    </button>
-                  )}
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-[var(--border)] bg-[var(--panel)]">
-                        <th className="w-8 px-4 py-2" />
-                        <th className="px-3 py-2 text-left text-[var(--text-faint)] font-medium">#</th>
-                        {headers.map((h, i) => (
-                          <th key={i} className={`px-3 py-2 text-left font-medium ${
-                            i === topicCol ? 'text-[var(--accent)]' :
-                            i === domainCol ? 'text-teal-400' :
-                            i === levelCol ? 'text-amber-400' :
-                            'text-[var(--text-faint)]'
+                      {/* Top row: checkbox + row number + status */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            className="accent-[var(--accent)] shrink-0"
+                            checked={isSelected}
+                            disabled={bulkRunning || !!job}
+                            onChange={() => toggleRow(row.idx)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <span className="text-[10px] font-mono text-[var(--text-faint)]">Row {row.idx + 2}</span>
+                        </div>
+                        {/* Status badge */}
+                        {job && (
+                          <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                            job.status === 'done' ? 'bg-emerald-500/15 text-emerald-400' :
+                            job.status === 'error' ? 'bg-red-500/15 text-red-400' :
+                            'bg-amber-500/15 text-amber-400'
                           }`}>
-                            {h}
-                            {i === topicCol && <span className="ml-1 text-[10px] opacity-60">topic</span>}
-                            {i === domainCol && <span className="ml-1 text-[10px] opacity-60">domain</span>}
-                            {i === levelCol && <span className="ml-1 text-[10px] opacity-60">level</span>}
-                          </th>
-                        ))}
-                        {bulkJobs.length > 0 && <th className="px-3 py-2 text-left font-medium text-[var(--text-faint)]">Status</th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sheetRows.map((row, ji) => {
-                        const job = bulkJobs[ji];
-                        const isSelected = selectedRows.has(row.idx);
-                        return (
-                          <tr
-                            key={row.idx}
-                            className={`border-b border-[var(--border)] transition-colors ${isSelected ? '' : 'opacity-40'} hover:bg-[var(--panel)]`}
-                            onClick={() => { if (!bulkRunning) toggleRow(row.idx); }}
-                            style={{ cursor: bulkRunning ? 'default' : 'pointer' }}
+                            {job.status === 'running'
+                              ? (job.stages.at(-1)?.name || 'starting…')
+                              : job.status === 'done'
+                              ? '✓ done'
+                              : job.status === 'error'
+                              ? job.error || 'error'
+                              : 'queued'}
+                          </span>
+                        )}
+                        {job?.status === 'done' && job.shortId && (
+                          <a
+                            href={`/mobile-short/${job.shortId}`}
+                            className="text-[10px] text-[var(--accent)] hover:underline ml-1"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            <td className="px-4 py-2">
-                              <input type="checkbox" className="accent-[var(--accent)]"
-                                checked={isSelected}
-                                onChange={() => toggleRow(row.idx)}
-                                disabled={bulkRunning}
-                                onClick={(e) => e.stopPropagation()} />
-                            </td>
-                            <td className="px-3 py-2 text-[var(--text-faint)]">{row.idx + 2}</td>
-                            {row.cells.map((cell, ci) => (
-                              <td key={ci} className={`px-3 py-2 max-w-[180px] truncate ${
-                                ci === topicCol ? 'text-[var(--text)] font-medium' : 'text-[var(--text-dim)]'
-                              }`} title={cell}>
-                                {cell || <span className="text-[var(--text-faint)] italic">—</span>}
-                              </td>
-                            ))}
-                            {bulkJobs.length > 0 && (
-                              <td className="px-3 py-2 whitespace-nowrap">
-                                {!job ? null : job.status === 'idle' ? (
-                                  <span className="text-[var(--text-faint)]">queued</span>
-                                ) : job.status === 'running' ? (
-                                  <span className="inline-flex items-center gap-1.5 text-amber-400">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
-                                    {job.stages.at(-1)?.name || 'starting…'}
-                                  </span>
-                                ) : job.status === 'done' ? (
-                                  <a href={`/mobile-short/${job.shortId}`}
-                                    className="inline-flex items-center gap-1 text-emerald-400 hover:underline"
-                                    onClick={(e) => e.stopPropagation()}>
-                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6L9 17l-5-5"/></svg>
-                                    done — open
-                                  </a>
-                                ) : (
-                                  <span className="text-red-400 text-[11px]">{job.error || 'error'}</span>
-                                )}
-                              </td>
-                            )}
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                            Open →
+                          </a>
+                        )}
+                      </div>
+
+                      {/* Topic */}
+                      <div>
+                        <p className="text-sm font-semibold text-[var(--text)] leading-snug line-clamp-2">
+                          {row.topic || <span className="text-[var(--text-faint)] italic font-normal">No topic</span>}
+                        </p>
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {row.domain && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-400 font-medium">
+                              {row.domain}
+                            </span>
+                          )}
+                          {row.level && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-medium capitalize">
+                              {row.level}
+                            </span>
+                          )}
+                          {row.status && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-medium">
+                              {row.status}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Additional context */}
+                      {row.additionalContext && (
+                        <div className="max-h-20 overflow-y-auto border-l-2 border-[var(--border)] pl-2 pr-1">
+                          <p className="text-[11px] text-[var(--text-dim)] leading-relaxed">
+                            {row.additionalContext}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Editable controls */}
+                      <div
+                        className="flex items-center gap-3 pt-2 border-t border-[var(--border)] mt-auto"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-[var(--text-faint)] whitespace-nowrap">Cards</span>
+                          <select
+                            className="input text-xs py-0.5 px-1.5 h-6 w-14"
+                            value={row.numCards}
+                            disabled={bulkRunning || !!job}
+                            onChange={(e) => updateRow(row.idx, { numCards: parseInt(e.target.value) })}
+                          >
+                            {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                        </div>
+                        <label className="flex items-center gap-1.5 ml-auto cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            className="accent-[var(--accent)]"
+                            checked={row.includeHighlight}
+                            disabled={bulkRunning || !!job}
+                            onChange={(e) => updateRow(row.idx, { includeHighlight: e.target.checked })}
+                          />
+                          <span className="text-[10px] text-[var(--text-faint)]">Highlight</span>
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </>
           )}

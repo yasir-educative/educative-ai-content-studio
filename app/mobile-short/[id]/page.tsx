@@ -148,6 +148,15 @@ const TYPE_BADGE: Record<string, string> = {
   highlightCard: 'bg-amber-500/15 text-amber-600 border-amber-500/20',
 };
 
+function CharBadge({ count, min, max }: { count: number; min: number; max: number }) {
+  const color = count > max ? 'text-red-400' : count < min ? 'text-amber-500' : 'text-emerald-500';
+  return (
+    <span className={`text-[10px] font-mono tabular-nums ${color}`}>
+      {count} / {min}–{max}
+    </span>
+  );
+}
+
 // ── Inline markdown renderer (no external deps) ───────────────────────────────
 
 function renderInline(text: string): React.ReactNode {
@@ -272,10 +281,12 @@ function CardView({
   card,
   onEdit,
   onEditImage,
+  onDelete,
 }: {
   card: MobileCard;
   onEdit: (card: MobileCard) => void;
   onEditImage: (src: string, onApply: (url: string) => void) => void;
+  onDelete?: () => void;
 }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [tfSelected, setTfSelected] = useState<'true' | 'false' | null>(null);
@@ -381,6 +392,30 @@ function CardView({
           >
             ✏
           </button>
+          {onDelete && (
+            <button
+              className="p-1.5 rounded-lg bg-[var(--card)] border border-[var(--border)] text-[var(--text-faint)] hover:text-red-400 hover:border-red-400/50 hover:bg-red-400/5 transition-colors"
+              onClick={() => { if (window.confirm('Delete this card?')) onDelete(); }}
+              title="Delete card"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+              </svg>
+            </button>
+          )}
+          {card.imageUrl && (
+            <a
+              href={card.imageUrl}
+              download={card.imageUrl.split('/').pop() || 'image.png'}
+              className="p-1.5 rounded-lg bg-[var(--card)] border border-[var(--border)] text-[var(--text-faint)] hover:text-emerald-400 hover:border-emerald-400/50 hover:bg-emerald-400/5 transition-colors"
+              title="Download image"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+              </svg>
+            </a>
+          )}
           {card.publishedUrl && (
             <a href={card.publishedUrl} target="_blank" rel="noreferrer"
               className="p-1.5 rounded-lg bg-[var(--card)] hover:bg-[var(--border)] border border-[var(--border)] text-xs text-[var(--text-dim)]">
@@ -413,13 +448,25 @@ function CardView({
 
         {/* ── text ─────────────────────────────────────────────────────── */}
         {card.type === 'text' && card.text && (
-          <Md text={card.text} />
+          <>
+            <Md text={card.text} />
+            <div className="flex justify-end pt-1">
+              <CharBadge count={card.text.length} min={350} max={450} />
+            </div>
+          </>
         )}
 
         {/* ── text_img ─────────────────────────────────────────────────── */}
         {card.type === 'text_img' && (
           <>
-            {card.text && <Md text={card.text} />}
+            {card.text && (
+              <>
+                <Md text={card.text} />
+                <div className="flex justify-end pt-0.5">
+                  <CharBadge count={card.text.length} min={240} max={280} />
+                </div>
+              </>
+            )}
             {card.imageUrl ? (
               <div className="relative group rounded-xl overflow-hidden border border-[var(--border)] mt-1 bg-[var(--card)] flex items-center justify-center">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -432,6 +479,15 @@ function CardView({
                     Edit Image
                   </button>
                 )}
+                <a
+                  href={card.imageUrl}
+                  download={card.imageUrl.split('/').pop() || 'image.png'}
+                  className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                  title="Download image"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                </a>
               </div>
             ) : card.illustration_idea ? (
               <div className="bg-[var(--card)] border border-dashed border-[var(--border)] rounded-xl p-3 text-[11px] text-[var(--text-faint)] italic leading-relaxed">
@@ -456,6 +512,15 @@ function CardView({
                     Edit Image
                   </button>
                 )}
+                <a
+                  href={card.imageUrl}
+                  download={card.imageUrl.split('/').pop() || 'image.png'}
+                  className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                  title="Download image"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                </a>
               </>
             ) : (
               <div className="p-4 text-xs text-[var(--text-faint)] italic text-center leading-relaxed">
@@ -741,17 +806,22 @@ function CardView({
         {card.type === 'highlightCard' && (
           <div className="flex-1 flex flex-col">
             {highlightText ? (
-              <div className="flex-1 flex flex-col items-center justify-center gap-4 bg-amber-500/6 border border-amber-500/20 rounded-2xl p-6 text-center">
-                <span className="text-4xl text-amber-600/30 font-serif leading-none select-none">"</span>
-                <p className="text-[15px] text-amber-700 leading-relaxed font-medium tracking-tight">
-                  {highlightText}
-                </p>
-                {highlightType && (
-                  <span className="text-[10px] px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-600 border border-amber-500/25 font-semibold uppercase tracking-widest">
-                    {highlightType.replace(/-/g, ' ')}
-                  </span>
-                )}
-              </div>
+              <>
+                <div className="flex-1 flex flex-col items-center justify-center gap-4 bg-amber-500/6 border border-amber-500/20 rounded-2xl p-6 text-center">
+                  <span className="text-4xl text-amber-600/30 font-serif leading-none select-none">"</span>
+                  <p className="text-[15px] text-amber-700 leading-relaxed font-medium tracking-tight">
+                    {highlightText}
+                  </p>
+                  {highlightType && (
+                    <span className="text-[10px] px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-600 border border-amber-500/25 font-semibold uppercase tracking-widest">
+                      {highlightType.replace(/-/g, ' ')}
+                    </span>
+                  )}
+                </div>
+                <div className="flex justify-end pt-1">
+                  <CharBadge count={highlightText.length} min={100} max={130} />
+                </div>
+              </>
             ) : (
               <p className="text-xs text-[var(--text-faint)] italic">No highlight text found.</p>
             )}
@@ -768,10 +838,12 @@ function CardCarousel({
   cards,
   onEdit,
   onEditImage,
+  onDelete,
 }: {
   cards: MobileCard[];
   onEdit: (card: MobileCard) => void;
   onEditImage: (src: string, onApply: (url: string) => void) => void;
+  onDelete: (cardId: string) => void;
 }) {
   const [idx, setIdx] = useState(0);
 
@@ -815,7 +887,7 @@ function CardCarousel({
           className="absolute top-0 transition-all duration-300 ease-in-out"
           style={{ left: '50%', transform: 'translateX(-50%) scale(1)', opacity: 1, zIndex: 10 }}
         >
-          <CardView card={cards[idx]} onEdit={onEdit} onEditImage={onEditImage} />
+          <CardView card={cards[idx]} onEdit={onEdit} onEditImage={onEditImage} onDelete={() => onDelete(cards[idx].id)} />
         </div>
 
         {hasNext && (
@@ -920,14 +992,20 @@ function CardEditorModal({
 
           {draft.type === 'text' && (
             <div className="space-y-1">
-              <label className="text-xs font-medium text-[var(--text-faint)]">Text (markdown supported)</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-[var(--text-faint)]">Text (markdown supported)</label>
+                <CharBadge count={(draft.text || '').length} min={350} max={450} />
+              </div>
               <textarea className="input w-full h-36 resize-none text-sm font-mono" value={draft.text || ''} onChange={(e) => upd({ text: e.target.value })} />
             </div>
           )}
 
           {draft.type === 'text_img' && (
             <div className="space-y-1">
-              <label className="text-xs font-medium text-[var(--text-faint)]">Text (markdown supported)</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-[var(--text-faint)]">Text (markdown supported)</label>
+                <CharBadge count={(draft.text || '').length} min={240} max={280} />
+              </div>
               <textarea className="input w-full h-32 resize-none text-sm font-mono" value={draft.text || ''} onChange={(e) => upd({ text: e.target.value })} />
             </div>
           )}
@@ -1080,7 +1158,10 @@ function CardEditorModal({
           {draft.type === 'highlightCard' && (
             <>
               <div className="space-y-1">
-                <label className="text-xs font-medium text-[var(--text-faint)]">Highlight text (plain, no markdown)</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-[var(--text-faint)]">Highlight text (plain, no markdown)</label>
+                  <CharBadge count={(draft.text || '').length} min={100} max={130} />
+                </div>
                 <textarea className="input w-full h-24 resize-none text-sm" value={draft.text || ''} onChange={(e) => upd({ text: e.target.value })} />
               </div>
               <div className="space-y-1">
@@ -1405,6 +1486,7 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
               key={short.id}
               cards={cards}
               onEdit={(c) => setEditCard(c)}
+              onDelete={(cardId) => saveCards(cards.filter((c) => c.id !== cardId))}
               onEditImage={(src, onApply) => openImageEdit(src, (newUrl) => {
                 const updCards = cards.map((k) =>
                   k.imageUrl === src ? { ...k, imageUrl: newUrl } : k

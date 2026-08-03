@@ -26,6 +26,8 @@ export interface MobileShortInput {
   additionalContext?: string;
   isHighlightCardNeeded?: boolean;
   numCards?: number;
+  sheetUrl?: string;
+  rowIdx?: number;
   authorId?: string;
 }
 

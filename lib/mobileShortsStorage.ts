@@ -21,6 +21,8 @@ export interface MobileShort {
   additionalContext?: string;
   isHighlightCardNeeded?: boolean;
   numCards?: number;
+  sheetUrl?: string;
+  rowIdx?: number;
   collectionId?: string;
   authorId: string;
   cards: MobileCard[];
