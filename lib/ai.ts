@@ -24,7 +24,7 @@ const GEMINI_REVIEW = process.env.GEMINI_MODEL_REVIEW || 'gemini-2.5-flash';
 // Exposed so pipeline.ts can pin the heavy text-generator stage to 2.5-pro without ai.ts needing
 // stage-aware logic.
 export const TEXT_GENERATOR_MODEL = process.env.GEMINI_MODEL_TEXTGEN || 'gemini-2.5-pro';
-const OPENAI_SEARCH = process.env.OPENAI_SEARCH_MODEL || 'gpt-4o-search-preview';
+const OPENAI_SEARCH = process.env.OPENAI_SEARCH_MODEL || 'gpt-5-search-api';
 
 // Cache LangChain chat model instances by (provider, model, maxTokens). Construction is cheap
 // but pooling avoids reconnecting HTTP clients on every prompt.
@@ -54,7 +54,7 @@ function buildGemini(model: string, maxTokens: number, noThinking = false): Chat
 
 function buildOpenAI(model: string): ChatOpenAI {
   if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not set');
-  // gpt-4o-search-preview rejects temperature, so omit it. Other models accept the default.
+  // search models reject temperature, so omit it. Other models accept the default.
   return new ChatOpenAI({
     apiKey: process.env.OPENAI_API_KEY,
     model,

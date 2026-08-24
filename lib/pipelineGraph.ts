@@ -59,7 +59,7 @@ export const outlineGraph: PipelineGraph = {
   description: 'Two-step research → Markdown outline. Used by /outline.',
   nodes: [
     { id: 'start',    label: 'Start',         agent: 'terminal',      rank: 0, lane: 0 },
-    { id: 'research', label: 'Web research',  agent: 'openai-search', prompt: 'outline-search',     model: 'gpt search-preview', rank: 1, lane: 0 },
+    { id: 'research', label: 'Web research',  agent: 'openai-search', prompt: 'outline-search',     model: 'gpt-5-search-api', rank: 1, lane: 0 },
     { id: 'outline',  label: 'Outline draft', agent: 'gemini-text',   prompt: 'outline-generator',  model: 'gemini-2.5-flash',   rank: 2, lane: 0 },
     { id: 'end',      label: 'Done',          agent: 'terminal',      rank: 3, lane: 0 },
   ],
@@ -380,7 +380,7 @@ export const courseGraph: PipelineGraph = {
     'parallel widget generation (code, table, RunJS, images) → merge into Educative course editor blocks.',
   nodes: [
     { id: 'cs-start',            label: 'Start',                   agent: 'terminal',                                                                        rank: 0,  lane: 0 },
-    { id: 'cs-web-research',     label: 'Web research',            agent: 'openai-search', prompt: 'course-web-research',    model: 'gpt search-preview',    rank: 1,  lane: 0 },
+    { id: 'cs-web-research',     label: 'Web research',            agent: 'openai-search', prompt: 'course-web-research',    model: 'gpt-5-search-api',    rank: 1,  lane: 0 },
     { id: 'cs-json-outline',     label: 'Lesson JSON outline',     agent: 'gemini-text',   prompt: 'course-outline-generator', model: 'gemini-2.5-flash',    rank: 2,  lane: 0 },
     { id: 'cs-content-creator',  label: 'Content creator',         agent: 'gemini-text',   prompt: 'course-content-creator',                                 rank: 3,  lane: 0 },
     { id: 'cs-summary-elements', label: 'Summary elements',        agent: 'gemini-text',   prompt: 'course-summary-elements', notes: 'Generates quiz, AI assessment, markmap, hint.', rank: 4, lane: 0 },
@@ -540,7 +540,7 @@ export const mobileShortGraph: PipelineGraph = {
   nodes: [
     { id: 'ms-start',             label: 'Start',                      agent: 'terminal',                                                                                                          rank: 0,  lane: 0 },
     { id: 'ms-create-collection', label: 'Create collection',          agent: 'http',          notes: 'Creates flash-card-shot collection via Educative API.',                                    rank: 1,  lane: 0 },
-    { id: 'ms-topic-detailer',    label: 'Topic detailer',             agent: 'openai-search', prompt: 'shorts-topic-detailer',   model: 'gpt-4o-search-preview', notes: 'Foundational summary, card pillars, 2026 insight.', rank: 2, lane: 0 },
+    { id: 'ms-topic-detailer',    label: 'Topic detailer',             agent: 'openai-search', prompt: 'shorts-topic-detailer',   model: 'gpt-5-search-api', notes: 'Foundational summary, card pillars, 2026 insight.', rank: 2, lane: 0 },
     { id: 'ms-cards-generator',   label: 'Cards generator',            agent: 'gemini-text',   prompt: 'shorts-cards-generator',  model: 'gemini-2.5-pro',        notes: 'Generates atomic card content with visual mix rules.', rank: 3, lane: 0 },
     { id: 'ms-json-generator',    label: 'JSON generator',             agent: 'gemini-text',   prompt: 'shorts-json-generator',   model: 'gemini-2.5-pro',        notes: 'Converts to structured JSON per card type.',          rank: 4, lane: 0 },
     { id: 'ms-split-cards',       label: 'Split cards',                agent: 'transform',     notes: 'Parse and split into individual card objects.',                                            rank: 5,  lane: 0 },
