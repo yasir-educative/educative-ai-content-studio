@@ -1,4 +1,4 @@
-import { generateText, reviewText, generateTextStream, openaiSearch, parseJsonLoose, TEXT_GENERATOR_MODEL } from './ai';
+import { generateText, reviewText, generateTextStream, openaiSearch, parseJsonLoose, TEXT_GENERATOR_MODEL, OPENAI_LIGHT } from './ai';
 import {
   outlineSearchPrompt,
   outlineGeneratorPrompt,
@@ -319,7 +319,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
     // passes on top.
     emit({ type: 'stage', name: 'text-generator', status: 'start' });
     const tgPrompt = textGeneratorPrompt(tgInputs);
-    // Heavy drafting stage — pinned to gemini-2.5-pro per project policy. Streamed token-by-token
+    // Heavy drafting stage — pinned to TEXT_GENERATOR_MODEL. Streamed token-by-token
     // (≈30ms throttle) so the UI can show text appearing live in the text-generator output panel
     // instead of waiting ~minute for the full draft. The runManager treats 'stream' events as
     // ephemeral (only the latest payload is retained for late re-attachers).
@@ -343,7 +343,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
     if (isCIP) {
       emit({ type: 'stage', name: 'medium-dna', status: 'start' });
       const dnaPrompt = mediumDnaAnalysisPrompt(input.blogTitle);
-      const dna = await generateText(dnaPrompt, { maxTokens: 4000 });
+      const dna = await generateText(dnaPrompt, { model: OPENAI_LIGHT, maxTokens: 4000 });
       stageLog('medium-dna', dnaPrompt, { blogTitle: input.blogTitle }, dna);
       emit({ type: 'data', name: 'medium-dna', payload: dna });
       emit({ type: 'stage', name: 'medium-dna', status: 'done' });
@@ -400,7 +400,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
 
     emit({ type: 'stage', name: 'zachgpt-review', status: 'start' });
     const zrPrompt = zachGptReviewPrompt(d);
-    const feedback = await reviewText(zrPrompt, 8000);
+    const feedback = await generateText(zrPrompt, { model: OPENAI_LIGHT, maxTokens: 8000 });
     stageLog('zachgpt-review', zrPrompt, { draft: d.slice(0, 600) + '…' }, feedback);
     emit({ type: 'data', name: 'zachgpt-review', payload: feedback });
     emit({ type: 'stage', name: 'zachgpt-review', status: 'done' });
@@ -539,7 +539,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
   const codePromises = codes.map(async (b) => {
     const prompt = codeGeneratorPrompt(JSON.stringify(b.payload));
     const out = await subStage(`code-generator#${b.order}`, prompt, b.payload, () =>
-      generateText(prompt, { maxTokens: 4000 }),
+      generateText(prompt, { model: OPENAI_LIGHT, maxTokens: 4000 }),
     );
     return { order: b.order, raw: out, html: buildCodeWidget(out, b.order) };
   });
@@ -549,7 +549,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
     const reference = await subStage(`table-research#${b.order}`, refPrompt, b.payload, () => openaiSearch(refPrompt));
     const prompt = tableGeneratorPrompt({ reference, original: JSON.stringify(b.payload) });
     const out = await subStage(`table-generator#${b.order}`, prompt, { reference, original: b.payload }, () =>
-      generateText(prompt, { maxTokens: 4000 }),
+      generateText(prompt, { model: OPENAI_LIGHT, maxTokens: 4000 }),
     );
     return { order: b.order, raw: out, html: buildTableWidget(out, b.order) };
   });
@@ -820,7 +820,7 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
 
     emit({ type: 'stage', name: 'zachgpt-review', status: 'start' });
     const zrPrompt = zachGptReviewPrompt(d);
-    const feedback = await reviewText(zrPrompt, 8000);
+    const feedback = await generateText(zrPrompt, { model: OPENAI_LIGHT, maxTokens: 8000 });
     stageLog('zachgpt-review', zrPrompt, { draft: d.slice(0, 600) + '…' }, feedback);
     emit({ type: 'data', name: 'zachgpt-review', payload: feedback });
     emit({ type: 'stage', name: 'zachgpt-review', status: 'done' });
@@ -912,7 +912,7 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
 
   const codePromises = codes.map(async (b) => {
     const prompt = codeGeneratorPrompt(JSON.stringify(b.payload));
-    const out = await subStage(`code-generator#${b.order}`, prompt, b.payload, () => generateText(prompt, { maxTokens: 4000 }));
+    const out = await subStage(`code-generator#${b.order}`, prompt, b.payload, () => generateText(prompt, { model: OPENAI_LIGHT, maxTokens: 4000 }));
     return { order: b.order, raw: out, html: buildCodeWidget(out, b.order) };
   });
 
@@ -920,7 +920,7 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
     const refPrompt = tableResearchPrompt(JSON.stringify(b.payload));
     const reference = await subStage(`table-research#${b.order}`, refPrompt, b.payload, () => openaiSearch(refPrompt));
     const prompt = tableGeneratorPrompt({ reference, original: JSON.stringify(b.payload) });
-    const out = await subStage(`table-generator#${b.order}`, prompt, { reference, original: b.payload }, () => generateText(prompt, { maxTokens: 4000 }));
+    const out = await subStage(`table-generator#${b.order}`, prompt, { reference, original: b.payload }, () => generateText(prompt, { model: OPENAI_LIGHT, maxTokens: 4000 }));
     return { order: b.order, raw: out, html: buildTableWidget(out, b.order) };
   });
 

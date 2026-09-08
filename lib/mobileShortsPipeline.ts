@@ -168,7 +168,9 @@ export async function runMobileShortPipeline(
   let rawCards: any[] = [];
   try {
     const parsed = parseJsonLoose(jsonRaw);
-    rawCards = Array.isArray(parsed) ? parsed : [];
+    if (Array.isArray(parsed)) rawCards = parsed;
+    else if (Array.isArray(parsed?.cards)) rawCards = parsed.cards;
+    else if (Array.isArray(parsed?.data)) rawCards = parsed.data;
   } catch {
     rawCards = [];
   }
