@@ -46,6 +46,75 @@ export interface MobileCourseEvent {
 
 export type MobileCourseEmit = (e: MobileCourseEvent) => void;
 
+// ── Raw card normaliser ───────────────────────────────────────────────────────
+// The JSON generator returns snake_case aliases; the UI / MobileCard type uses
+// camelCase names and expanded type strings (e.g. "compare" → "comparisonCards").
+
+const TYPE_ALIAS: Record<string, MobileCardType> = {
+  text:              'text',
+  text_img:          'text_img',
+  img_only:          'img_only',
+  scenario:          'scenarioCard',
+  scenariocard:      'scenarioCard',
+  compare:           'comparisonCards',
+  comparisoncards:   'comparisonCards',
+  recap:             'recapCard',
+  recapcard:         'recapCard',
+  quiz:              'quiz',
+  highlight:         'highlightCard',
+  highlightcard:     'highlightCard',
+  truefalse:         'trueFalseCard',
+  true_false:        'trueFalseCard',
+  truefalsecard:     'trueFalseCard',
+  fillintheblank:    'fillInTheBlank',
+  fill_in_the_blank: 'fillInTheBlank',
+  'text-with-code':  'text-with-code',
+  textwithcode:      'text-with-code',
+  'code-with-output':'code-with-output',
+  codewithoutput:    'code-with-output',
+};
+
+function normalizeType(raw: string): MobileCardType {
+  const key = raw.toLowerCase().replace(/[\s-]/g, '_');
+  return TYPE_ALIAS[key] || TYPE_ALIAS[raw.toLowerCase()] || 'text';
+}
+
+function mapRawCard(raw: any, index: number): MobileCard {
+  const type = normalizeType(String(raw.card_type || raw.type || 'text'));
+  const isRecap = type === 'recapCard';
+
+  return {
+    id: raw.id || `card-${index + 1}`,
+    type,
+    card_number: Number(raw.card_number || index + 1),
+    title: raw.title || raw.card_title || '',
+    text: isRecap ? undefined : (typeof raw.content === 'string' ? raw.content : raw.text || ''),
+    illustration_idea: raw.illustration_idea || '',
+    visible_labels: raw.visible_labels || '',
+    imageUrl: raw.imageUrl || raw.image_url || '',
+    img_context: raw.img_context || '',
+    text_1: raw.text_1 || '',
+    text_2: raw.text_2 || '',
+    language: raw.language || '',
+    code: raw.code || '',
+    output_available: raw.output_available,
+    output: raw.output || '',
+    heading: raw.heading || '',
+    leftOption: raw.leftOption || raw.left_option,
+    rightOption: raw.rightOption || raw.right_option,
+    content: isRecap ? (Array.isArray(raw.content) ? raw.content : undefined) : undefined,
+    question: raw.question || '',
+    options: raw.options,
+    correctAnswer: raw.correctAnswer ?? raw.correct_answer,
+    incorrectMessage: raw.incorrectMessage || raw.incorrect_message || '',
+    explanation: raw.explanation || '',
+    correctOptions: raw.correctOptions || raw.correct_options,
+    sections: raw.sections,
+    scenarioType: raw.scenarioType || raw.scenario_type || '',
+    highlightCardType: raw.highlightCardType || raw.highlight_card_type || '',
+  };
+}
+
 // ── Image prompt builder (exact n8n template) ─────────────────────────────────
 
 function buildCardImagePrompt(card: any): string {
@@ -175,14 +244,10 @@ async function processChapter(
   }
   emit({ type: 'stage', name: `${chapterId}-json-generator`, status: 'done' });
 
-  // Sort by card_number (JSON Generator assigns these as sequential integers)
-  finalCards = [...finalCards].sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0));
-
-  // Assign stable IDs
-  finalCards = finalCards.map((c: any, i: number) => ({
-    ...c,
-    id: c.id || `card-${i + 1}`,
-  }));
+  // Sort by card_number, then normalize all raw fields to MobileCard shape.
+  finalCards = [...finalCards]
+    .sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0))
+    .map((c: any, i: number) => mapRawCard(c, i));
 
   // Stage 5: Generate images for text_img and img_only cards
   const imageCards = finalCards.filter(
