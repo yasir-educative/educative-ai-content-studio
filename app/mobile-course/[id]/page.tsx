@@ -1339,6 +1339,10 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
   const [editCard, setEditCard] = useState<MobileCard | null>(null);
   const [editCardChapterId, setEditCardChapterId] = useState<string | null>(null);
   const [imageEdit, setImageEdit] = useState<ImageEditState | null>(null);
+  const [regenChapterId, setRegenChapterId] = useState<string | null>(null);
+  const [regenLog, setRegenLog] = useState<string>('');
+  const [chapterPublishing, setChapterPublishing] = useState<string | null>(null);
+  const [chapterPublishResult, setChapterPublishResult] = useState<Record<string, string>>({});
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1418,6 +1422,72 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
     }
   }
 
+  async function regenerateChapter(chapterId: string) {
+    setRegenChapterId(chapterId);
+    setRegenLog('Connecting…');
+    try {
+      const res = await fetch(`/api/mobile-course/${params.id}/chapters/${chapterId}/regenerate`, { method: 'POST' });
+      if (!res.ok || !res.body) {
+        setRegenLog(`Error: HTTP ${res.status}`);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'stage') {
+              setRegenLog(`${event.name}: ${event.status}`);
+            } else if (event.type === 'done') {
+              setRegenLog(`Done — ${event.payload?.cardCount ?? 0} cards`);
+            } else if (event.type === 'error') {
+              setRegenLog(`Error: ${event.message}`);
+            }
+          } catch {}
+        }
+      }
+      await load();
+    } catch (e: any) {
+      setRegenLog(`Error: ${e?.message}`);
+    } finally {
+      setRegenChapterId(null);
+    }
+  }
+
+  async function publishChapter(chapterId: string) {
+    if (!course?.targetCollectionId) return;
+    setChapterPublishing(chapterId);
+    setChapterPublishResult((prev) => ({ ...prev, [chapterId]: '' }));
+    try {
+      const res = await fetch(`/api/mobile-course/${params.id}/chapters/${chapterId}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetCollectionId: course.targetCollectionId }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setChapterPublishResult((prev) => ({ ...prev, [chapterId]: `Error: ${json?.error || `HTTP ${res.status}`}` }));
+      } else if (json.errors?.length > 0) {
+        setChapterPublishResult((prev) => ({ ...prev, [chapterId]: `Published ${json.published} cards. ${json.errors.length} failed.` }));
+      } else {
+        setChapterPublishResult((prev) => ({ ...prev, [chapterId]: `Published ${json.published} cards` }));
+      }
+      await load();
+    } catch (e: any) {
+      setChapterPublishResult((prev) => ({ ...prev, [chapterId]: `Error: ${e?.message}` }));
+    } finally {
+      setChapterPublishing(null);
+    }
+  }
+
   function openImageEdit(src: string, onApply: (url: string) => void) {
     setImageEdit({ src, prompt: '', loading: false, editedUrl: null, onApply });
   }
@@ -1473,9 +1543,9 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
 
         <nav className="flex-1 overflow-y-auto py-2">
           {chapters.map((ch, i) => (
-            <button
+            <div
               key={ch.id}
-              className={`w-full text-left px-4 py-2.5 flex items-start gap-2 transition-colors ${
+              className={`w-full text-left px-3 py-2.5 flex items-start gap-2 transition-colors cursor-pointer ${
                 i === activeChapter
                   ? 'bg-[var(--accent)]/10 border-r-2 border-[var(--accent)]'
                   : 'hover:bg-[var(--border)]/40'
@@ -1493,10 +1563,19 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
                     ch.status === 'processing' ? 'bg-amber-400 animate-pulse' :
                     'bg-[var(--border)]'
                   }`} />
-                  {ch.cards?.length || 0} cards
+                  {regenChapterId === ch.id ? <span className="animate-pulse">{regenLog || 'Regenerating…'}</span> : `${ch.cards?.length || 0} cards`}
                 </p>
               </div>
-            </button>
+              {ch.status !== 'processing' && regenChapterId !== ch.id && (
+                <button
+                  className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-[var(--border)] text-[var(--text-faint)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors"
+                  title="Regenerate this chapter"
+                  onClick={(e) => { e.stopPropagation(); regenerateChapter(ch.id); }}
+                >
+                  ↺
+                </button>
+              )}
+            </div>
           ))}
         </nav>
 
@@ -1553,14 +1632,35 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
                 <h2 className="font-semibold text-xl text-[var(--text)] tracking-tight">{currentChapter.title}</h2>
                 <p className="text-xs text-[var(--text-faint)] mt-1">
                   {currentChapter.cards?.length || 0} cards · use ← → to navigate
+                  {(currentChapter as any).regeneratedAt && (
+                    <span className="ml-2 text-amber-600">· regenerated</span>
+                  )}
                 </p>
               </div>
-              {currentChapter.status === 'processing' && (
-                <span className="text-xs text-amber-600 animate-pulse shrink-0 mt-1">Generating…</span>
-              )}
-              {currentChapter.status === 'failed' && (
-                <span className="text-xs text-red-400 shrink-0 mt-1">Failed: {currentChapter.errorMessage}</span>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                {currentChapter.status === 'processing' && (
+                  <span className="text-xs text-amber-600 animate-pulse">Generating…</span>
+                )}
+                {currentChapter.status === 'failed' && (
+                  <span className="text-xs text-red-400">Failed: {currentChapter.errorMessage}</span>
+                )}
+                {course.status === 'published' && (currentChapter as any).regeneratedAt && currentChapter.status === 'done' && (
+                  <div className="flex flex-col items-end gap-1">
+                    <button
+                      className="btn-primary text-xs px-3 py-1.5"
+                      onClick={() => publishChapter(currentChapter.id)}
+                      disabled={chapterPublishing === currentChapter.id}
+                    >
+                      {chapterPublishing === currentChapter.id ? 'Publishing…' : 'Re-publish chapter'}
+                    </button>
+                    {chapterPublishResult[currentChapter.id] && (
+                      <p className={`text-[11px] ${chapterPublishResult[currentChapter.id].startsWith('Error') ? 'text-red-400' : 'text-emerald-600'}`}>
+                        {chapterPublishResult[currentChapter.id]}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             {(currentChapter.cards?.length || 0) > 0 ? (

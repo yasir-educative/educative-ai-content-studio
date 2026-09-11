@@ -193,7 +193,7 @@ async function generateCardImage(
 
 // ── Per-chapter processing ────────────────────────────────────────────────────
 
-async function processChapter(
+export async function processChapter(
   courseTitle: string,
   chapterTitle: string,
   lessonTitles: string[],
