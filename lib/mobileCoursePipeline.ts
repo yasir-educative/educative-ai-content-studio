@@ -82,13 +82,43 @@ function normalizeType(raw: string): MobileCardType {
 function mapRawCard(raw: any, index: number): MobileCard {
   const type = normalizeType(String(raw.card_type || raw.type || 'text'));
   const isRecap = type === 'recapCard';
+  const isScenario = type === 'scenarioCard';
+  const isCompare = type === 'comparisonCards';
+
+  // The model wraps scenario/compare content in a content.tabs array:
+  // { label, text } pairs — first two become left/right for compare,
+  // all become sections for scenario.
+  const tabs: Array<{ label: string; text: string }> = Array.isArray(raw.content?.tabs)
+    ? raw.content.tabs
+    : [];
+
+  // scenarioCard: tabs → sections[{heading, content}], scenario_type
+  const sections: Array<{ heading: string; content: string }> = isScenario
+    ? (raw.sections || tabs.map((t: any) => ({ heading: t.label || '', content: t.text || '' })))
+    : raw.sections;
+
+  // comparisonCards: tabs[0] → leftOption, tabs[1] → rightOption
+  const leftOption = isCompare
+    ? (raw.leftOption || raw.left_option || (tabs[0] ? { label: tabs[0].label, heading: '', description: tabs[0].text } : undefined))
+    : (raw.leftOption || raw.left_option);
+  const rightOption = isCompare
+    ? (raw.rightOption || raw.right_option || (tabs[1] ? { label: tabs[1].label, heading: '', description: tabs[1].text } : undefined))
+    : (raw.rightOption || raw.right_option);
+
+  // Plain text content for text/text_img cards
+  const text = (isRecap || isScenario || isCompare)
+    ? undefined
+    : (typeof raw.content === 'string' ? raw.content : raw.text || '');
+
+  // recapCard: content is [{heading, text}]
+  const recapContent = isRecap ? (Array.isArray(raw.content) ? raw.content : undefined) : undefined;
 
   return {
     id: raw.id || `card-${index + 1}`,
     type,
     card_number: Number(raw.card_number || index + 1),
     title: raw.title || raw.card_title || '',
-    text: isRecap ? undefined : (typeof raw.content === 'string' ? raw.content : raw.text || ''),
+    text,
     illustration_idea: raw.illustration_idea || '',
     visible_labels: raw.visible_labels || '',
     imageUrl: raw.imageUrl || raw.image_url || '',
@@ -100,17 +130,17 @@ function mapRawCard(raw: any, index: number): MobileCard {
     output_available: raw.output_available,
     output: raw.output || '',
     heading: raw.heading || '',
-    leftOption: raw.leftOption || raw.left_option,
-    rightOption: raw.rightOption || raw.right_option,
-    content: isRecap ? (Array.isArray(raw.content) ? raw.content : undefined) : undefined,
+    leftOption,
+    rightOption,
+    content: recapContent,
     question: raw.question || '',
     options: raw.options,
     correctAnswer: raw.correctAnswer ?? raw.correct_answer,
     incorrectMessage: raw.incorrectMessage || raw.incorrect_message || '',
     explanation: raw.explanation || '',
     correctOptions: raw.correctOptions || raw.correct_options,
-    sections: raw.sections,
-    scenarioType: raw.scenarioType || raw.scenario_type || '',
+    sections,
+    scenarioType: raw.scenarioType || raw.scenario_type || raw.content?.scenario_type || '',
     highlightCardType: raw.highlightCardType || raw.highlight_card_type || '',
   };
 }
