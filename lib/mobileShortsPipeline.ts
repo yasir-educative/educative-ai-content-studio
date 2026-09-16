@@ -118,6 +118,52 @@ function mapRawCard(raw: any, index: number): MobileCard {
   return card;
 }
 
+// ── TEXT_IMG prose enforcer ───────────────────────────────────────────────────
+
+function hasListViolation(text: string): boolean {
+  return String(text || '')
+    .split('\n')
+    .some((l) => l.trim().startsWith('-') || l.trim().startsWith('>') || l.trim().startsWith('|'));
+}
+
+async function enforceTextImgProse(cards: any[]): Promise<any[]> {
+  const violators = cards.filter((c) => c.type === 'text_img' && hasListViolation(c.text || c.content || ''));
+  if (violators.length === 0) return cards;
+
+  const prompt = `You are a prose editor fixing TEXT_IMG card content. Each card below has bullet lists or blockquotes, which must be removed. Rewrite ONLY the content/text field of each card as a single prose paragraph of 1-2 sentences (240-280 chars). The prose must state the key insight or consequence — NOT the steps. The diagram already shows the steps. Ask: "What does completing all these steps achieve? Why does it matter?" — write that as prose.
+
+Cards to fix:
+${JSON.stringify(
+  violators.map((c) => ({
+    card_number: c.card_number,
+    current_text: c.text || c.content,
+    illustration_idea: c.illustration_idea,
+  })),
+)}
+
+Rules:
+- Return a JSON array with objects: { "card_number": N, "new_text": "..." }
+- new_text must be a single prose paragraph, 240-280 chars
+- No hyphens at line start, no blockquotes, no tables
+- Describe consequence/insight, not steps
+- Raw JSON only, no markdown fences`;
+
+  try {
+    const raw = await generateText(prompt, { model: TEXT_GENERATOR_MODEL, maxTokens: 4000 });
+    const parsed = JSON.parse(raw.trim().replace(/^```json\n?|```$/g, ''));
+    const rewrites: Record<number, string> = {};
+    for (const r of (Array.isArray(parsed) ? parsed : [])) {
+      if (r.card_number && r.new_text) rewrites[Number(r.card_number)] = r.new_text;
+    }
+    return cards.map((c) => {
+      const rewritten = c.type === 'text_img' ? rewrites[Number(c.card_number)] : undefined;
+      return rewritten ? { ...c, text: rewritten } : c;
+    });
+  } catch {
+    return cards;
+  }
+}
+
 // ── Main pipeline ─────────────────────────────────────────────────────────────
 
 export async function runMobileShortPipeline(
@@ -177,6 +223,9 @@ export async function runMobileShortPipeline(
   rawCards = rawCards
     .sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0))
     .map((c: any, i: number) => ({ ...c, id: c.id || `card-${i + 1}` }));
+
+  // Post-process: enforce prose-only content on TEXT_IMG cards
+  rawCards = await enforceTextImgProse(rawCards);
 
   // Stage 4: Image generation for visual cards
   const imageCards = rawCards.filter(

@@ -191,6 +191,53 @@ async function generateCardImage(
   }
 }
 
+// ── TEXT_IMG prose enforcer ───────────────────────────────────────────────────
+
+function hasListViolation(text: string): boolean {
+  return String(text || '')
+    .split('\n')
+    .some((l) => l.trim().startsWith('-') || l.trim().startsWith('>') || l.trim().startsWith('|'));
+}
+
+async function enforceTextImgProse(cards: any[]): Promise<any[]> {
+  const textField = (c: any) => c.content || c.text || '';
+  const violators = cards.filter((c) => c.card_type === 'TEXT_IMG' && hasListViolation(textField(c)));
+  if (violators.length === 0) return cards;
+
+  const prompt = `You are a prose editor fixing TEXT_IMG card content. Each card below has bullet lists or blockquotes that must be removed. Rewrite ONLY the content field of each card as a single prose paragraph of 1-2 sentences (240-280 chars). The prose must state the key insight or consequence — NOT the steps. The diagram already shows the steps. Ask: "What does completing all these steps achieve? Why does it matter?" — write that as prose.
+
+Cards to fix:
+${JSON.stringify(
+  violators.map((c) => ({
+    card_number: c.card_number,
+    current_content: textField(c),
+    illustration_idea: c.illustration_idea,
+  })),
+)}
+
+Rules:
+- Return a JSON array with objects: { "card_number": N, "new_content": "..." }
+- new_content must be a single prose paragraph, 240-280 chars
+- No hyphens at line start, no blockquotes, no tables
+- Describe consequence/insight, not steps
+- Raw JSON only, no markdown fences`;
+
+  try {
+    const raw = await generateText(prompt, { maxTokens: 4000, noThinking: true });
+    const parsed = JSON.parse(raw.trim().replace(/^```json\n?|```$/g, ''));
+    const rewrites: Record<number, string> = {};
+    for (const r of (Array.isArray(parsed) ? parsed : [])) {
+      if (r.card_number && r.new_content) rewrites[Number(r.card_number)] = r.new_content;
+    }
+    return cards.map((c) => {
+      const rewritten = c.card_type === 'TEXT_IMG' ? rewrites[Number(c.card_number)] : undefined;
+      return rewritten ? { ...c, content: rewritten } : c;
+    });
+  } catch {
+    return cards;
+  }
+}
+
 // ── Per-chapter processing ────────────────────────────────────────────────────
 
 export async function processChapter(
@@ -243,6 +290,9 @@ export async function processChapter(
     emit({ type: 'log', name: chapterId, message: 'Cards generator returned empty — using plan as fallback' });
     return [];
   }
+
+  // Post-process: enforce prose-only content on TEXT_IMG cards before refiner sees them
+  generatedCards = await enforceTextImgProse(generatedCards);
 
   // Stage 3: Card Text Refiner
   emit({ type: 'stage', name: `${chapterId}-text-refiner`, status: 'start' });

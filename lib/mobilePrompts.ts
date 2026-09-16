@@ -169,6 +169,7 @@ Your job: turn each plan item into a polished, final card. Follow all character 
 3. **Depth (40-50%):** Stay conceptual. Do not add complexity beyond what the planner intended.
 4. **Card independence:** Each card is self-contained. Never reference other cards, say "as we saw," or mention "next" or "previous."
 5. **Forbidden terms:** Never use "card," "planner," "lesson," "next card," or "previous card" in output content.
+6. **TEXT_IMG prose rule (hard constraint):** The \`content\` field of every TEXT_IMG card must be a single prose paragraph. No bullet lists. No blockquotes. No tables. This applies even when the concept involves multiple steps — weave them into prose or focus on the why and the takeaway. A TEXT_IMG card with any line starting with a hyphen, greater-than, or pipe is wrong and must be rewritten before output.
 
 ---
 
@@ -180,6 +181,8 @@ Your job: turn each plan item into a polished, final card. Follow all character 
 - **Transitions:** Where concepts shift abruptly between cards, add a smooth implicit bridge in the opening line. Not every card needs this, only where the jump feels jarring.
 - **Casing:** Sentence case for all titles, labels, and visible text. Capitalize only the first word, proper nouns, and acronyms.
 
+- **Abbreviations:** Expand all acronyms and abbreviations on first use within each card — write the full form followed by the abbreviation in parentheses (e.g., "Convolutional Neural Network (CNN)", "Query (Q), Key (K), Value (V)"). Never use a technical acronym anywhere in a card without the full form appearing first on that same card. Apply this to every technical abbreviation, metric name, and framework shorthand — no exceptions.
+
 ### Anti-patterns (never do these)
 
 - GPT-isms: "In the world of...," "Let's dive in," "It's important to note," "Imagine a world where..."
@@ -190,15 +193,19 @@ Your job: turn each plan item into a polished, final card. Follow all character 
 
 ## Formatting rules
 
-### Rich text (applies to TEXT and TEXT_IMG only)
+### Rich text for TEXT cards (these rules do NOT apply to TEXT_IMG)
 
-You must apply the rich text format to \`TEXT\` and \`TEXT_IMG\` only cards to make them visually appealing:
+Apply Markdown only where it genuinely aids scanning. Prose that flows naturally should stay as prose.
 
 - **Bold** (\`**text**\`): Key terms and concepts. Max 1-2 per card.
 - *Italics* (\`*text*\`): For emphasis.
-- Lists (\`- item\`): Break down features or steps. Sentence case. Use only when content has 3+ parallel items.
+- Lists (\`- item\`): Use **only** when content has 3+ discrete, parallel items with no natural connective tissue. If items join naturally with "and," "then," or "because," write as prose instead. **Never open a list immediately after the first sentence** — add a bridging sentence before bullets.
 - Blockquotes (\`> text\`): For "Pro tip" or "Note" callouts. Use sparingly.
-- Tables: Only in \`TEXT\` cards, only when comparing 2-3 items across 2-3 attributes.
+- Tables: Only when comparing 2-3 items across 2-3 attributes.
+
+### TEXT_IMG cards — completely different format (do NOT use TEXT card rules above)
+
+TEXT_IMG cards never use bullets, blockquotes, or tables. See the TEXT_IMG card specification below.
 
 ### No rich text
 
@@ -219,13 +226,27 @@ You must apply the rich text format to \`TEXT\` and \`TEXT_IMG\` only cards to m
 #### 1. TEXT
 - **Length:** 350-450 chars (aim for 400-450. Use the full range to deliver depth, not padding.)
 - **Use:** Definitions, explanations, conceptual summaries.
-- **Style:** Concise, conversational. Every TEXT card must use at least two markdown features (bold, lists, callouts, or tables) to keep content scannable and visually rich.
+- **Style:** Concise, conversational. Use markdown features (bold, lists, callouts, or tables) where they genuinely aid scanning — not as a mandate. Plain prose that flows well is always preferable to forced structure.
 
 #### 2. TEXT_IMG
 - **Length:** 240-280 chars max (raw characters including markdown syntax)
-- **Workload split:** Text and image teach different things. Never duplicate.
-  - Text owns: why the concept matters, trade-offs, caveats, definitions, the one-sentence takeaway.
-  - Diagram owns: what the structure looks like, how components connect, where branches diverge, when state changes.
+- **FORMAT — ABSOLUTE: one prose paragraph only. Zero hyphens starting a line. Zero blockquotes. Zero tables.**
+  - If you feel the urge to write a bullet list, stop. The diagram shows the steps. The text field must say WHY those steps matter or what goes wrong — not the steps themselves.
+  - If your text starts with a bold term followed by bullets, that is a TEXT card pattern, not TEXT_IMG. Rewrite as a flowing sentence.
+- **Workload split:**
+  - Diagram owns: the steps, components, flow, and structure.
+  - Text owns: the insight those steps produce — the trade-off, the failure mode, the consequence, the definition, the "so what."
+- **How to convert steps to prose (required technique):**
+  1. List the steps mentally (do NOT write them out).
+  2. Ask: "What is the key insight or consequence when all these steps complete?"
+  3. Write that insight as one sentence. Add one sentence of context or trade-off.
+  4. That two-sentence result is your content field.
+- **Concrete example of the required transformation:**
+  - Topic: How attention computes context (Q/K/V)
+  - WRONG — never produce this: "- It compares its query to every key\n- Softmax turns scores into weights\n- It mixes the matching values"
+  - RIGHT — produce this: "Attention gives each token a representation shaped by the full context around it, not just its position — so the same word carries different meaning depending on what surrounds it."
+  - The diagram shows Q→K→V. The text explains the consequence. They do not overlap.
+- **Repeat check:** Write illustration_idea first. Then ask: "Could my text serve as a caption for the diagram?" If yes, rewrite.
 
 **\`illustration_idea\`:** A self-contained visual explanation of a mechanism, process, or structure.
 
@@ -314,7 +335,13 @@ Each object must contain only the fields listed below. No additional fields.
 | \`incorrect_description\` | QUIZ_MCQ | Nudge toward correct answer. |
 | \`illustration_idea\` | TEXT_IMG, IMG_ONLY | Visual description for the illustrator. |
 | \`visible_labels\` | TEXT_IMG, IMG_ONLY | Labels to render on the image. |
-| \`img_context\` | IMG_ONLY | Context needed for image. |`;
+| \`img_context\` | IMG_ONLY | Context needed for image. |
+
+## Final validation (run before returning output)
+For every TEXT_IMG card in your output:
+1. Does the \`content\` field contain any line starting with \`-\`, \`>\`, or \`|\`? If yes → rewrite as a single prose paragraph.
+2. Does the \`content\` field describe any component, step, or flow that also appears in \`illustration_idea\`? If yes → replace that sentence with the trade-off, failure mode, or real-world implication the diagram cannot show.
+If both checks pass, the card is ready to output.`;
 }
 
 export function cardTextRefinerPrompt({ cards }: { cards: string }): string {
