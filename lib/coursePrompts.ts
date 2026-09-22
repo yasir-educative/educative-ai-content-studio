@@ -19,6 +19,7 @@ export function courseOutlineGeneratorPrompt(args: {
   runJsEnabled: boolean;
   aiAssessmentEnabled: boolean;
   referenceContent: string;
+  templateLessonContent?: string;
 }): string {
   const prevContext = args.prevLessonTitle
     ? `## Previous Lesson\n${args.prevLessonTitle}`
@@ -26,6 +27,9 @@ export function courseOutlineGeneratorPrompt(args: {
   const nextContext = args.nextLessonTitle
     ? `## Next Lesson\n${args.nextLessonTitle}`
     : '';
+  const templateContext = args.templateLessonContent
+    ? `## Template Lesson\n${args.templateLessonContent}`
+    : 'Not provided';
 
   return `# ROLE
 You are an expert Educative Technical Content Strategist. Your task is to transform a high-level lesson plan provided as input into a granular, production-ready outline for a highly interactive technical lesson.
@@ -65,7 +69,7 @@ ${prevContext}
 ${nextContext}
 
 - \`Template-Lesson\` (use this as a structural inspiration):
-Not provided
+${templateContext}
 
 - \`Lesson plan\`:
 
@@ -112,6 +116,11 @@ You must strictly adapt your tone, terminology, and depth to the chosen domain/a
 - **Section Outline:** For \`text\` types, provide a concise ; separated section outline. e.g. \`"150-200 words - Introduction to rate limiting;Explain the token bucket algorithm and its role in preventing DDoS attacks;Define key terms like tokens, refill rate, and burst capacity."\`
 
 # Interactivity Types & Blending Rules
+
+**Template Blending Logic:**
+- IF a \`Template-Lesson\` is provided: Use it as a structural inspiration for pacing and the text-to-interactive ratio. Pay special attention to how it utilizes **Images** and **Code** to guide your own placement of those elements.
+- HOWEVER, you are highly encouraged to introduce *new* elements from the master list below, even if they do not exist in the template.
+- **The Master Override:** The constraints defined in the "Allowed Elements List" below are absolute. If the template uses an element that is disallowed below, or exceeds the allowed count, you MUST override the template and follow the list below.
 
 **Allowed Elements List & Master Constraints:**
 
@@ -169,6 +178,7 @@ export function courseContentCreatorPrompt(args: {
   nextLessonTitle: string;
   lessonPurpose: string;
   referenceContent: string;
+  templateLessonContent?: string;
 }): string {
   return `# Role
 You are an expert technical content writer with extensive real-world technical experience. Your mission is to produce a high-quality lesson based on the input provided in pure Markdown.
@@ -310,6 +320,11 @@ Use these exact tags and ensure the content inside describes the requirements of
 * Ensure design decisions include trade-offs.
 * Check abstractions are anchored in real systems.
 * Ensure there are at least 1-2 H3 (###) and 1-2 H2 (##) under the main section in the overall content.
+
+## Compliance to template lesson (if provided, else ignore)
+- Make sure you comply with the following template lesson content in terms of overall structure and content length.
+- \`Template-Lesson\` (use this as a structural inspiration):
+${args.templateLessonContent ? args.templateLessonContent : 'Not provided'}
 
 # Output Format
 - The output must begin with the hook—no lesson title or section title at the start.

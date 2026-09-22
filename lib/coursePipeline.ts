@@ -42,6 +42,7 @@ import {
   resolveImageBlocksForLesson,
   lessonUrlForIds,
   extractCollectionIds,
+  fetchTemplateLessonContent,
 } from './courseEducative';
 import { generateGptImage, slugify } from './imageGen';
 import { buildRunJsHtml } from './runJsTemplate';
@@ -387,14 +388,27 @@ function stageLog(emit: Emit, name: string, prompt: string, args: any, output: a
 // ---------- Main pipeline ----------
 
 export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): Promise<void> {
-  const { authorId: extractedAuthorId, collectionId: extractedCollectionId } =
-    input.templateUrl ? extractCollectionIds(input.templateUrl) : { authorId: '', collectionId: '' };
+  const extractedIds = input.templateUrl
+    ? extractCollectionIds(input.templateUrl)
+    : { authorId: '', collectionId: '', pageId: '' };
+  const extractedAuthorId = extractedIds.authorId;
+  const extractedCollectionId = extractedIds.collectionId;
   const authorId = input.authorId || extractedAuthorId || process.env.EDUCATIVE_AUTHOR_ID || '';
   const collectionId = input.collectionId || extractedCollectionId || '';
 
   const wordsLength = Number(input.wordsLength) || 2000;
   const domain = input.domain || 'System Design';
   const runId = input.blogId || `course-${Date.now()}`;
+
+  // ── Pre-stage: Fetch template lesson content (if templateUrl provided) ─────
+  let templateLessonContent = '';
+  if (input.templateUrl) {
+    try {
+      templateLessonContent = await fetchTemplateLessonContent(input.templateUrl);
+    } catch {
+      // Non-fatal — proceed without template context
+    }
+  }
 
   // ── Stage 1: Web research ──────────────────────────────────────────────────
   emit({ type: 'stage', name: 'web-research', status: 'start' });
@@ -422,6 +436,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     runJsEnabled: Boolean(input.runJsEnabled),
     aiAssessmentEnabled: input.aiAssessmentEnabled !== false,
     referenceContent: research,
+    templateLessonContent,
   };
   const joPrompt = courseOutlineGeneratorPrompt(joArgs);
   const jsonOutlineRaw = await generateText(joPrompt, { maxTokens: 4000 });
@@ -458,6 +473,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     nextLessonTitle: input.nextLessonTitle || '',
     lessonPurpose: input.lessonPurpose || input.blogSummary || '',
     referenceContent: research,
+    templateLessonContent,
   };
   const ccPrompt = courseContentCreatorPrompt(ccArgs);
   let lastStreamAt = 0;
