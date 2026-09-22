@@ -1012,6 +1012,22 @@ function CardEditorModal({
   const [draft, setDraft] = useState<MobileCard>({ ...card });
   const upd = (patch: Partial<MobileCard>) => setDraft((d) => ({ ...d, ...patch }));
 
+  // Local raw-string state for JSON fields so typing intermediate (invalid) JSON
+  // doesn't cause the textarea to snap back to the last valid value.
+  const [recapRaw, setRecapRaw] = useState(() => JSON.stringify(card.content || [], null, 2));
+  const [sectionsRaw, setSectionsRaw] = useState(() => JSON.stringify(card.sections || [], null, 2));
+  const [recapErr, setRecapErr] = useState('');
+  const [sectionsErr, setSectionsErr] = useState('');
+
+  function applyRecap(raw: string) {
+    try { upd({ content: JSON.parse(raw) }); setRecapErr(''); }
+    catch { setRecapErr('Invalid JSON — changes not saved yet'); }
+  }
+  function applySections(raw: string) {
+    try { upd({ sections: JSON.parse(raw) }); setSectionsErr(''); }
+    catch { setSectionsErr('Invalid JSON — changes not saved yet'); }
+  }
+
   const optTexts = Array.isArray(draft.options)
     ? (draft.options as any[]).map((o) => (typeof o === 'string' ? o : o?.text || '')).join('\n')
     : '';
@@ -1110,11 +1126,15 @@ function CardEditorModal({
             <div className="space-y-1">
               <label className="text-xs font-medium text-[var(--text-faint)]">Recap items (JSON)</label>
               <textarea
-                className="input w-full h-40 resize-none text-xs font-mono"
-                value={JSON.stringify(draft.content || [], null, 2)}
-                onChange={(e) => { try { upd({ content: JSON.parse(e.target.value) }); } catch {} }}
+                className={`input w-full h-40 resize-y text-xs font-mono ${recapErr ? 'border-red-400' : ''}`}
+                value={recapRaw}
+                onChange={(e) => { setRecapRaw(e.target.value); setRecapErr(''); }}
+                onBlur={(e) => applyRecap(e.target.value)}
+                spellCheck={false}
               />
-              <p className="text-xs text-[var(--text-faint)]">Format: {`[{"heading": "...", "text": "..."}]`}</p>
+              {recapErr
+                ? <p className="text-xs text-red-500">{recapErr}</p>
+                : <p className="text-xs text-[var(--text-faint)]">Format: {`[{"heading": "...", "text": "..."}]`}</p>}
             </div>
           )}
 
@@ -1181,11 +1201,15 @@ function CardEditorModal({
               <div className="space-y-1">
                 <label className="text-xs font-medium text-[var(--text-faint)]">Sections (JSON)</label>
                 <textarea
-                  className="input w-full h-36 resize-none text-xs font-mono"
-                  value={JSON.stringify(draft.sections || [], null, 2)}
-                  onChange={(e) => { try { upd({ sections: JSON.parse(e.target.value) }); } catch {} }}
+                  className={`input w-full h-36 resize-y text-xs font-mono ${sectionsErr ? 'border-red-400' : ''}`}
+                  value={sectionsRaw}
+                  onChange={(e) => { setSectionsRaw(e.target.value); setSectionsErr(''); }}
+                  onBlur={(e) => applySections(e.target.value)}
+                  spellCheck={false}
                 />
-                <p className="text-xs text-[var(--text-faint)]">Format: {`[{"heading": "...", "content": "..."}]`}</p>
+                {sectionsErr
+                  ? <p className="text-xs text-red-500">{sectionsErr}</p>
+                  : <p className="text-xs text-[var(--text-faint)]">Format: {`[{"heading": "...", "content": "..."}]`}</p>}
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-[var(--text-faint)]">Explanation</label>
@@ -1251,7 +1275,22 @@ function CardEditorModal({
 
         <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-[var(--border)] bg-[var(--card)]">
           <button className="btn-secondary text-sm" onClick={onClose}>Cancel</button>
-          <button className="btn-primary text-sm" onClick={() => onSave(draft)}>Save changes</button>
+          <button
+            className="btn-primary text-sm"
+            onClick={() => {
+              // Flush any pending JSON edits before saving (user may not have blurred)
+              let flushed = { ...draft };
+              if (draft.type === 'recapCard') {
+                try { flushed = { ...flushed, content: JSON.parse(recapRaw) }; } catch {}
+              }
+              if (draft.type === 'scenarioCard') {
+                try { flushed = { ...flushed, sections: JSON.parse(sectionsRaw) }; } catch {}
+              }
+              onSave(flushed);
+            }}
+          >
+            Save changes
+          </button>
         </div>
       </div>
     </div>
