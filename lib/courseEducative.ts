@@ -13,11 +13,19 @@ function uid(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}-${Math.random().toString(16).slice(2)}`;
 }
 
-function readEnv(): { flaskAuth: string; authorId: string } {
+function readEnv(): { flaskAuth: string; courseFlaskAuth: string; authorId: string } {
   const flaskAuth = (process.env.EDUCATIVE_FLASK_AUTH || '').trim();
-  if (!flaskAuth) throw new Error('EDUCATIVE_FLASK_AUTH is not set in .env.local');
+  const courseFlaskAuth = (process.env.EDUCATIVE_COURSE_FLASK_AUTH || '').trim();
+  if (!flaskAuth && !courseFlaskAuth) throw new Error('EDUCATIVE_FLASK_AUTH is not set in .env.local');
   const authorId = (process.env.EDUCATIVE_AUTHOR_ID || '').trim();
-  return { flaskAuth, authorId };
+  return { flaskAuth, courseFlaskAuth, authorId };
+}
+
+// When the aid matches the env's own author (EDUCATIVE_AUTHOR_ID), use EDUCATIVE_COURSE_FLASK_AUTH.
+// Otherwise use EDUCATIVE_FLASK_AUTH (for collections owned by other accounts).
+function pickAuth(aid: string, env: { flaskAuth: string; courseFlaskAuth: string; authorId: string }): string {
+  if (aid && aid === env.authorId && env.courseFlaskAuth) return env.courseFlaskAuth;
+  return env.flaskAuth;
 }
 
 // Extract author ID and collection ID from an Educative editor URL.
@@ -32,6 +40,12 @@ export function extractCollectionIds(url: string): { authorId: string; collectio
   const editorMatch = url.match(/\/pageeditor\/(\d+)\/(\d+)\/(\d+)/);
   if (editorMatch) {
     return { authorId: editorMatch[1], collectionId: editorMatch[2], pageId: editorMatch[3] };
+  }
+
+  // Collection editor URL: /editor/collectioneditor/{authorId}/{collectionId}
+  const colEditorMatch2 = url.match(/\/collectioneditor\/(\d+)\/(\d+)/);
+  if (colEditorMatch2) {
+    return { authorId: colEditorMatch2[1], collectionId: colEditorMatch2[2], pageId: '' };
   }
 
   // Collection editor URL: /editor/author/{authorId}/collection/{collectionId}
@@ -70,7 +84,7 @@ export async function fetchTemplateLessonContent(url: string): Promise<string> {
   const apiUrl = `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`;
   console.log('[fetchTemplateLessonContent] fetching', apiUrl);
 
-  const res = await fetch(apiUrl, { headers: { Cookie: `flask-auth=${env.flaskAuth}` } });
+  const res = await fetch(apiUrl, { headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` } });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     if (res.status === 401) throw new Error(`Auth failed (401) — refresh EDUCATIVE_COURSE_FLASK_AUTH cookie. Response: ${text.slice(0, 200)}`);
@@ -135,7 +149,7 @@ export async function fetchLessonTitle(url: string): Promise<string> {
     const aid = authorId || env.authorId;
     const res = await fetch(
       `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`,
-      { headers: { Cookie: `flask-auth=${env.flaskAuth}` } },
+      { headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` } },
     );
     if (!res.ok) return '';
     const json: any = await res.json();
@@ -162,13 +176,13 @@ export async function createLesson(
     {
       method: 'POST',
       headers: {
-        Cookie: `flask-auth=${env.flaskAuth}`,
+        Cookie: `flask-auth=${pickAuth(aid, env)}`,
       },
     },
   );
   if (!res.ok) {
     const text = await res.text();
-    if (res.status === 401) throw new Error(`Educative auth failed (401) — refresh your flask-auth cookie in EDUCATIVE_COURSE_FLASK_AUTH`);
+    if (res.status === 401) throw new Error(`Educative auth failed (401) — refresh flask-auth cookie`);
     throw new Error(`Educative createLesson failed: ${res.status} ${text}`);
   }
   const json: any = await res.json();
@@ -230,7 +244,7 @@ export async function saveMobileCardPage(
   const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
     method: 'PUT',
     headers: {
-      Cookie: `flask-auth=${env.flaskAuth}`,
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
       'X-Etag': 'overwrite',
       'Content-Type': 'application/json',
     },
@@ -280,7 +294,7 @@ export async function saveLesson(
   const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
     method: 'PUT',
     headers: {
-      Cookie: `flask-auth=${env.flaskAuth}`,
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
       'X-Etag': 'overwrite',
       'Content-Type': 'application/json',
     },
@@ -399,7 +413,7 @@ export async function addPageToChapter(
   const aid = authorId || env.authorId;
 
   // 1. Fetch CHP
-  const raw = await fetchCollectionRaw(aid, collectionId, env.flaskAuth);
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
 
   // Educative validates page/author/collection IDs as numbers — send them as numbers, not strings.
   const numAid = Number(aid);
@@ -482,7 +496,7 @@ export async function addPageToChapter(
   const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
     method: 'PUT',
     headers: {
-      Cookie: `flask-auth=${env.flaskAuth}`,
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
       'X-Etag': 'overwrite',
       'Content-Type': 'application/json',
     },
@@ -518,7 +532,7 @@ export async function createFlashCardShotCollection(
   const res = await fetch(`${EDUCATIVE_BASE}/api/author/collection`, {
     method: 'POST',
     headers: {
-      Cookie: `flask-auth=${env.flaskAuth}`,
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -549,7 +563,7 @@ export async function setCollectionTitle(
   const aid = authorId || env.authorId;
 
   // Fetch current CHP so we preserve categories and all other fields
-  const raw = await fetchCollectionRaw(aid, collectionId, env.flaskAuth);
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
   const categories = pickCategories(raw);
   const putBody = buildChpPutBody(raw, categories);
   // Override title/summary with the provided values
@@ -560,7 +574,7 @@ export async function setCollectionTitle(
   const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
     method: 'PUT',
     headers: {
-      Cookie: `flask-auth=${env.flaskAuth}`,
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
       'X-Etag': 'overwrite',
       'Content-Type': 'application/json',
     },
@@ -580,7 +594,7 @@ export async function publishCourse(authorId: string, collectionId: string): Pro
     `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/publish?work_type=collection`,
     {
       method: 'POST',
-      headers: { Cookie: `flask-auth=${env.flaskAuth}` },
+      headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` },
     },
   );
   if (!res.ok) {
@@ -643,7 +657,7 @@ export async function uploadLessonImage(
   const aid = authorId || env.authorId;
   try {
     // Step 1: get upload slot — only uploadUrl is required; imageId may arrive in step 2
-    const slot = await getLessonImageUploadUrl(aid, collectionId, pageId, env.flaskAuth);
+    const slot = await getLessonImageUploadUrl(aid, collectionId, pageId, pickAuth(aid, env));
     if (!slot?.uploadUrl) return null;
 
     // Step 2: POST the file as multipart/form-data (field name "file-0" matches n8n)
@@ -659,7 +673,7 @@ export async function uploadLessonImage(
 
     const uploadRes = await fetch(uploadFullUrl, {
       method: 'POST',
-      headers: { Cookie: `flask-auth=${env.flaskAuth}`, 'X-Etag': 'overwrite' },
+      headers: { Cookie: `flask-auth=${pickAuth(aid, env)}`, 'X-Etag': 'overwrite' },
       body: formData,
     });
     if (!uploadRes.ok) {
@@ -1148,7 +1162,7 @@ export async function fetchLessonContent(
     const aid = authorId || env.authorId;
     const res = await fetch(
       `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`,
-      { headers: { Cookie: `flask-auth=${env.flaskAuth}` } },
+      { headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` } },
     );
     if (!res.ok) return '';
     const json: any = await res.json();
@@ -1188,7 +1202,7 @@ export async function fetchCollectionWithContent(
   const env = readEnv();
   const aid = authorId || env.authorId;
 
-  const raw = await fetchCollectionRaw(aid, collectionId, env.flaskAuth);
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
   const details = raw?.instance?.details || raw?.details || {};
   const title = details?.title || `Collection ${collectionId}`;
 
@@ -1242,7 +1256,7 @@ export async function fetchCollectionStructure(
 ): Promise<{ title: string; chapters: CollectionChapterRef[] }> {
   const env = readEnv();
   const aid = authorId || env.authorId;
-  const raw = await fetchCollectionRaw(aid, collectionId, env.flaskAuth);
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
   const details = raw?.instance?.details || raw?.details || {};
   const title = details?.title || `Collection ${collectionId}`;
   const categories = pickCategories(raw);
