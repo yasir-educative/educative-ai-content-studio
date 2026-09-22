@@ -629,7 +629,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     const outlineWantsRunJs = outlineSections.some((s: any) =>
       (s.sectionType || '').toLowerCase().includes('runjs'),
     );
-    if (!input.runJsEnabled && !rawRunJs.length && !outlineWantsRunJs) return [];
+    if (!input.runJsEnabled) return [];
     emit({ type: 'stage', name: 'widget-runjs', status: 'start' });
     const targets = rawRunJs.length ? rawRunJs : [{ concept: `Interactive visualization for ${input.lessonTitle}` }];
     const blocks = (await Promise.all(targets.map(async (rawRJ) => {
@@ -715,7 +715,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
 
   // AI assessment blocks from summary-elements
   const aiAssessmentBlocks: any[] =
-    input.aiAssessmentEnabled !== false && summaryElements?.ai_assessment
+    !!input.aiAssessmentEnabled && summaryElements?.ai_assessment
       ? [makePromptAiBlock(summaryElements.ai_assessment)].filter(Boolean)
       : [];
 
