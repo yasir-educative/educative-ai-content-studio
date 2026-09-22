@@ -14,11 +14,8 @@ function uid(prefix: string): string {
 }
 
 function readEnv(): { flaskAuth: string; authorId: string } {
-  const courseAuth = (process.env.EDUCATIVE_COURSE_FLASK_AUTH || '').trim();
-  const sharedAuth = (process.env.EDUCATIVE_FLASK_AUTH || '').trim();
-  const flaskAuth = courseAuth || sharedAuth;
-  if (!flaskAuth) throw new Error('EDUCATIVE_COURSE_FLASK_AUTH is not set');
-  console.log('[courseEducative] using', courseAuth ? 'EDUCATIVE_COURSE_FLASK_AUTH' : 'EDUCATIVE_FLASK_AUTH (fallback)', `(${flaskAuth.slice(0, 12)}…)`);
+  const flaskAuth = (process.env.EDUCATIVE_FLASK_AUTH || '').trim();
+  if (!flaskAuth) throw new Error('EDUCATIVE_FLASK_AUTH is not set in .env.local');
   const authorId = (process.env.EDUCATIVE_AUTHOR_ID || '').trim();
   return { flaskAuth, authorId };
 }
@@ -31,13 +28,19 @@ function readEnv(): { flaskAuth: string; authorId: string } {
 export function extractCollectionIds(url: string): { authorId: string; collectionId: string; pageId: string } {
   if (!url) return { authorId: '', collectionId: '', pageId: '' };
 
-  // Editor URL: /editor/pageeditor/{authorId}/{collectionId}/{pageId}
+  // Pageeditor URL: /editor/pageeditor/{authorId}/{collectionId}/{pageId}
   const editorMatch = url.match(/\/pageeditor\/(\d+)\/(\d+)\/(\d+)/);
   if (editorMatch) {
     return { authorId: editorMatch[1], collectionId: editorMatch[2], pageId: editorMatch[3] };
   }
 
-  // API URL: /author/{authorId}/collection/{collectionId}/page/{pageId}
+  // Collection editor URL: /editor/author/{authorId}/collection/{collectionId}
+  const colEditorMatch = url.match(/\/editor\/author\/(\d+)\/collection\/(\d+)/);
+  if (colEditorMatch) {
+    return { authorId: colEditorMatch[1], collectionId: colEditorMatch[2], pageId: '' };
+  }
+
+  // Generic patterns: /author/{id} and /collection/{id} anywhere in the URL
   const authorMatch = url.match(/\/author\/(\d+)/);
   const collectionMatch = url.match(/\/collection\/(\d+)/);
   const pageMatch = url.match(/\/page\/(\d+)/);
