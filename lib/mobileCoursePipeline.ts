@@ -76,7 +76,9 @@ const TYPE_ALIAS: Record<string, MobileCardType> = {
 
 function normalizeType(raw: string): MobileCardType {
   const key = raw.toLowerCase().replace(/[\s-]/g, '_');
-  return TYPE_ALIAS[key] || TYPE_ALIAS[raw.toLowerCase()] || 'text';
+  const resolved = TYPE_ALIAS[key] || TYPE_ALIAS[raw.toLowerCase()];
+  if (!resolved) console.warn(`[mobileCoursePipeline] unknown card_type "${raw}" — defaulting to "text"`);
+  return resolved || 'text';
 }
 
 function mapRawCard(raw: any, index: number): MobileCard {
@@ -117,8 +119,19 @@ function mapRawCard(raw: any, index: number): MobileCard {
             : raw.text || ''
       );
 
-  // recapCard: content is [{heading, text}]
-  const recapContent = isRecap ? (Array.isArray(raw.content) ? raw.content : undefined) : undefined;
+  // recapCard: content must be [{heading, text}].
+  // Guard: AI sometimes wraps it as {items:[...]} / {content:[...]} or returns a plain string.
+  const recapContent = isRecap
+    ? (() => {
+        if (Array.isArray(raw.content)) return raw.content;
+        if (Array.isArray(raw.content?.items)) return raw.content.items;
+        if (Array.isArray(raw.content?.content)) return raw.content.content;
+        if (Array.isArray(raw.items)) return raw.items;
+        if (typeof raw.content === 'string' && raw.content.trim())
+          return [{ heading: '', text: raw.content.trim() }];
+        return undefined;
+      })()
+    : undefined;
 
   return {
     id: raw.id || `card-${index + 1}`,
