@@ -650,7 +650,6 @@ export default function CourseViewPage() {
 
   // Publish Course modal
   const [publishModalOpen, setPublishModalOpen] = useState(false);
-  const [publishUrl, setPublishUrl] = useState('');
   const [publishAuthorId, setPublishAuthorId] = useState('');
   const [publishCollectionId, setPublishCollectionId] = useState('');
   const [publishing, setPublishing] = useState(false);
@@ -794,7 +793,6 @@ export default function CourseViewPage() {
 
   // ── Publish modal helpers ─────────────────────────────────────────────────────
   function openPublishModal() {
-    setPublishUrl('');
     setPublishAuthorId('');
     setPublishCollectionId('');
     setPublishResults(null);
@@ -803,22 +801,10 @@ export default function CourseViewPage() {
     setPublishModalOpen(true);
   }
 
-  // Parse an Educative collection URL into { authorId, collectionId }
-  function parsePublishUrl(url: string): { authorId: string; collectionId: string } {
-    const editorMatch = url.match(/\/pageeditor\/(\d+)\/(\d+)/);
-    if (editorMatch) return { authorId: editorMatch[1], collectionId: editorMatch[2] };
-    const colEditorMatch = url.match(/\/editor\/author\/(\d+)\/collection\/(\d+)/);
-    if (colEditorMatch) return { authorId: colEditorMatch[1], collectionId: colEditorMatch[2] };
-    const authorMatch = url.match(/\/author\/(\d+)/);
-    const collectionMatch = url.match(/\/collection\/(\d+)/);
-    return { authorId: authorMatch?.[1] || '', collectionId: collectionMatch?.[1] || '' };
-  }
-
   async function runPublishCourse() {
-    const urlTrimmed = publishUrl.trim();
-    if (!urlTrimmed) { setPublishErr('Collection URL is required'); return; }
-    const { authorId: parsedAuthorId, collectionId: parsedCollectionId } = parsePublishUrl(urlTrimmed);
-    if (!parsedCollectionId) { setPublishErr('Could not extract a Collection ID from that URL. Paste the full Educative editor URL for the course.'); return; }
+    const aid = publishAuthorId.trim();
+    const cid = publishCollectionId.trim();
+    if (!cid) { setPublishErr('Collection ID is required'); return; }
     setPublishing(true);
     setPublishErr('');
     setPublishResults(null);
@@ -829,8 +815,8 @@ export default function CourseViewPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           courseTitle,
-          authorId: parsedAuthorId || undefined,
-          collectionId: parsedCollectionId,
+          authorId: aid || undefined,
+          collectionId: cid,
         }),
       });
       const json = await res.json();
@@ -1312,24 +1298,28 @@ export default function CourseViewPage() {
             <div className="px-6 py-5 space-y-4">
               {!publishResults ? (
                 <>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-[var(--text-dim)]">Course Collection URL <span className="text-red-400">*</span></label>
-                    <input
-                      className="input w-full text-sm"
-                      placeholder="https://www.educative.io/editor/author/…/collection/…"
-                      value={publishUrl}
-                      onChange={(e) => setPublishUrl(e.target.value)}
-                      disabled={publishing}
-                    />
-                    <p className="text-[10px] text-[var(--text-faint)]">Paste the Educative editor URL of the <strong>target course</strong> where lessons will be saved.</p>
-                    {publishUrl.trim() && (() => {
-                      const { authorId: a, collectionId: c } = parsePublishUrl(publishUrl.trim());
-                      return c ? (
-                        <p className="text-[10px] text-emerald-400">Parsed → Author: {a || '(env)'} · Collection: {c}</p>
-                      ) : (
-                        <p className="text-[10px] text-red-400">Could not parse a collection ID from this URL.</p>
-                      );
-                    })()}</div>
+                  <div className="flex gap-3">
+                    <div className="space-y-1 flex-1">
+                      <label className="text-xs font-medium text-[var(--text-dim)]">Author ID <span className="text-red-400">*</span></label>
+                      <input
+                        className="input w-full text-sm"
+                        placeholder="e.g. 6436638368727040"
+                        value={publishAuthorId}
+                        onChange={(e) => setPublishAuthorId(e.target.value)}
+                        disabled={publishing}
+                      />
+                    </div>
+                    <div className="space-y-1 flex-1">
+                      <label className="text-xs font-medium text-[var(--text-dim)]">Collection ID <span className="text-red-400">*</span></label>
+                      <input
+                        className="input w-full text-sm"
+                        placeholder="e.g. 5953982300225536"
+                        value={publishCollectionId}
+                        onChange={(e) => setPublishCollectionId(e.target.value)}
+                        disabled={publishing}
+                      />
+                    </div>
+                  </div>
                   {publishErr && (
                     <div className="rounded-lg border border-red-500/40 bg-red-500/10 text-red-300 p-3 text-sm">{publishErr}</div>
                   )}

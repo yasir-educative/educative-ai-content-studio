@@ -40,6 +40,12 @@ export function extractCollectionIds(url: string): { authorId: string; collectio
     return { authorId: colEditorMatch[1], collectionId: colEditorMatch[2], pageId: '' };
   }
 
+  // Public collection URL: /collection/{authorId}/{collectionId}  (e.g. educative.io/collection/643.../595...)
+  const publicColMatch = url.match(/\/collection\/(\d+)\/(\d+)/);
+  if (publicColMatch) {
+    return { authorId: publicColMatch[1], collectionId: publicColMatch[2], pageId: '' };
+  }
+
   // Generic patterns: /author/{id} and /collection/{id} anywhere in the URL
   const authorMatch = url.match(/\/author\/(\d+)/);
   const collectionMatch = url.match(/\/collection\/(\d+)/);
@@ -375,6 +381,8 @@ function buildChpPutBody(raw: any, updatedCategories: any[]): Record<string, any
     collection_template_data: safeJson(details.collection_template_data ?? null, ''),
     enable_collapsible_headings: details.enable_collapsible_headings != null ? safeStr(details.enable_collapsible_headings) : '',
     collection_overview_data: safeJson(details.collection_overview_data ?? null, ''),
+    key_outcomes_json_string: safeJson(details.key_outcomes || [], '[]'),
+    prompt_templates_json_string: safeJson(details.prompt_templates || null, '{"prompt_templates":[]}'),
   };
 }
 
