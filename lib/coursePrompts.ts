@@ -78,7 +78,7 @@ ${templateContext}
 ${args.referenceContent}
 
 # Logic for Narrative Continuity
-- If \`Template-Lesson\` is provided, adhere to its structure and headings/sections (based on the current lesson's outline).
+- If \`Template-Lesson\` is provided, treat it as a **strict structural blueprint**. Mirror its exact sequence of section types and heading names in the same order. Only introduce an additional section (e.g. an extra Hint or Image) where the current lesson's content genuinely requires a slot the template does not have — and only after the equivalent template section, never prepended before it or appended at the end unless the template itself ends there.
 
 ## Contextual Scoping:
 - Scenario A (Both \`Next-Lesson\` and \`Previous-Lesson\` Provided): Act as a strategic bridge. Ensure the current lesson logically flows from Previous-Lesson and provides all necessary scaffolding required for \`Next-Lesson\`.
@@ -91,9 +91,9 @@ ${args.referenceContent}
 1a. The first section of the outline must begin with a technical hook that immediately ties a real-world engineering challenge back to the specific topic of the lesson.
 1b. Introduce the topic formally by presenting it as a solution (use proper heading)
 2. **Anti-Consecutive Constraint:** You must never place two interactive sections back-to-back. Every interactive section must be preceded and followed by a \`text\` section.
-3. **The Conclusion Rule:** The final section must be a text-based conclusion or summary.
-   - **Allowed Headings:** "Conclusion", "Summary", "", etc.
-   - **Banned Headings:** "Key takeaways", "Wrap up", "Summary of the chapter", or "In summary".
+3. **The Conclusion Rule:**
+   - **When NO template is provided:** The final section MUST be a text-based conclusion or summary. Allowed headings: "Conclusion", "Summary", etc. Banned: "Key takeaways", "Wrap up", "Summary of the chapter", "In summary".
+   - **When a template IS provided:** The final section MUST mirror whatever the template ends with. Do **NOT** append a conclusion or summary section if the template does not end with one. The template's last section is the lesson's last section.
 4. **Logical Flow:** 4–6 main text sections following a "Problem → Mechanics → Solutions → Conclusion" narrative.
 5. **Heading Constraints:** Strictly **sentence case**. Max 50 characters. No colons or metaphors.
    - Interactive sections must have \`"sectionTitle": "N/A"\`.
@@ -118,9 +118,10 @@ You must strictly adapt your tone, terminology, and depth to the chosen domain/a
 # Interactivity Types & Blending Rules
 
 **Template Blending Logic:**
-- IF a \`Template-Lesson\` is provided: Use it as a structural inspiration for pacing and the text-to-interactive ratio. Pay special attention to how it utilizes **Images** and **Code** to guide your own placement of those elements.
-- HOWEVER, you are highly encouraged to introduce *new* elements from the master list below, even if they do not exist in the template.
-- **The Master Override:** The constraints defined in the "Allowed Elements List" below are absolute. If the template uses an element that is disallowed below, or exceeds the allowed count, you MUST override the template and follow the list below.
+- IF a \`Template-Lesson\` is provided: Treat it as a **strict structural blueprint**, not merely inspiration. Follow its section sequence precisely — mirror each section's type, heading, and relative position. The template defines the skeleton; your job is to fill it with lesson-specific content.
+- **Adding sections:** Only add a section that does not appear in the template when the current lesson's content strictly requires it (e.g. a critical code snippet that has no equivalent slot). Insert it at the most logical inline position — never append extra sections to the end.
+- **Do NOT add** a conclusion, summary, or any closing section if the template does not end with one.
+- **The Master Override:** The constraints in the "Allowed Elements List" below are absolute for element types and counts. If the template uses a disallowed element or exceeds a count limit, follow the list instead and drop the extra element.
 
 **Allowed Elements List & Master Constraints:**
 
@@ -321,9 +322,12 @@ Use these exact tags and ensure the content inside describes the requirements of
 * Check abstractions are anchored in real systems.
 * Ensure there are at least 1-2 H3 (###) and 1-2 H2 (##) under the main section in the overall content.
 
-## Compliance to template lesson (if provided, else ignore)
-- Make sure you comply with the following template lesson content in terms of overall structure and content length.
-- \`Template-Lesson\` (use this as a structural inspiration):
+## Template lesson compliance (if provided, else ignore)
+- The \`Template-Lesson\` is a **strict structural blueprint**. Follow its section sequence exactly — same heading names, same order, same section types.
+- Only add a section not present in the template when the lesson content strictly requires it; insert it inline, never at the end.
+- **Critical:** Do NOT add a conclusion, summary, or any closing section if the template does not end with one. The template's last section is the lesson's last section.
+- Use the template to calibrate content length and depth per section.
+- \`Template-Lesson\`:
 ${args.templateLessonContent ? args.templateLessonContent : 'Not provided'}
 
 # Output Format
