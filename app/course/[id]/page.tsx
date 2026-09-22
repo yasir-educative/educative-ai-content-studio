@@ -10,6 +10,7 @@ import { Stages, StageItem } from '@/app/_components/Stages';
 import { StageOutputs, StageOutputMap, StageLogMap } from '@/app/_components/StageOutputs';
 
 const STAGE_ORDER = [
+  'template-lesson',
   'web-research',
   'json-outline',
   'content-creator',

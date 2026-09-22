@@ -400,14 +400,31 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
   const domain = input.domain || 'System Design';
   const runId = input.blogId || `course-${Date.now()}`;
 
-  // ── Pre-stage: Fetch template lesson content (if templateUrl provided) ─────
+  // ── Stage 0: Fetch template lesson content (if templateUrl provided) ────────
   let templateLessonContent = '';
   if (input.templateUrl) {
-    try {
-      templateLessonContent = await fetchTemplateLessonContent(input.templateUrl);
-    } catch {
-      // Non-fatal — proceed without template context
+    emit({ type: 'stage', name: 'template-lesson', status: 'start' });
+
+    const parsedIds = extractCollectionIds(input.templateUrl);
+    stageLog(emit, 'template-lesson', 'extractCollectionIds(templateUrl)', { templateUrl: input.templateUrl }, parsedIds);
+
+    if (!parsedIds.authorId || !parsedIds.collectionId || !parsedIds.pageId) {
+      const msg = `URL did not yield authorId/collectionId/pageId — check URL format. Got: ${JSON.stringify(parsedIds)}`;
+      stageLog(emit, 'template-lesson', 'URL parse check', { templateUrl: input.templateUrl }, msg);
+      emit({ type: 'stage', name: 'template-lesson', status: 'error', message: msg });
+    } else {
+      try {
+        templateLessonContent = await fetchTemplateLessonContent(input.templateUrl);
+        stageLog(emit, 'template-lesson', 'fetchTemplateLessonContent', { templateUrl: input.templateUrl, ...parsedIds }, templateLessonContent);
+        emit({ type: 'data', name: 'template-lesson', payload: templateLessonContent });
+        emit({ type: 'stage', name: 'template-lesson', status: 'done' });
+      } catch (err: any) {
+        stageLog(emit, 'template-lesson', 'fetchTemplateLessonContent', { templateUrl: input.templateUrl }, `FAILED: ${err?.message}`);
+        emit({ type: 'stage', name: 'template-lesson', status: 'error', message: err?.message });
+      }
     }
+  } else {
+    stageLog(emit, 'template-lesson', 'no templateUrl', {}, 'skipped — no templateUrl provided');
   }
 
   // ── Stage 1: Web research ──────────────────────────────────────────────────
