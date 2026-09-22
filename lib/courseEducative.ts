@@ -373,7 +373,7 @@ function buildChpPutBody(raw: any, updatedCategories: any[]): Record<string, any
     svg_start_offset: details.svg_start_offset != null ? safeStr(details.svg_start_offset) : '0',
     filtered_languages_json_string: safeJson(details.filtered_languages || null, ''),
     is_collection_frontend_collaborative: safeStr(details.is_collection_frontend_collaborative ?? false),
-    meta_tags_json_string: safeJson(details.meta_tags_config ?? details.meta_tags ?? null, ''),
+    meta_tags_json_string: (() => { const v = details.meta_tags_config ?? details.meta_tags; return (!v || (Array.isArray(v) && v.length === 0)) ? '' : safeJson(v, ''); })(),
     landing_page_content: safeJson(details.landing_page_content || [], '[{"type":"SlateHTML","content":{"html":"<p></p>","comp_id":"default"},"hash":0}]'),
     rating_visibility: safeStr(details.rating_visibility ?? true),
     update_last_published_on_homepage: safeStr(details.update_last_published_on_homepage ?? true),
@@ -382,7 +382,7 @@ function buildChpPutBody(raw: any, updatedCategories: any[]): Record<string, any
     enable_collapsible_headings: details.enable_collapsible_headings != null ? safeStr(details.enable_collapsible_headings) : '',
     collection_overview_data: safeJson(details.collection_overview_data ?? null, ''),
     key_outcomes_json_string: safeJson(details.key_outcomes || [], '[]'),
-    prompt_templates_json_string: safeJson(details.prompt_templates || null, '{"prompt_templates":[]}'),
+    prompt_templates_json_string: safeJson({ prompt_templates: Array.isArray(details.prompt_templates) ? details.prompt_templates : [] }, '{"prompt_templates":[]}'),
   };
 }
 
