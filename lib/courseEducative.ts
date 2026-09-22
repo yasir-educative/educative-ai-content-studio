@@ -72,12 +72,19 @@ export async function fetchTemplateLessonContent(url: string): Promise<string> {
   const body = json?.body || json;
   const title = body?.page_title || body?.summary?.title || '';
 
+  // The page API can return components in two shapes:
+  //   1. Directly: { components: [...], summary: {...} }   ← pageeditor endpoint
+  //   2. Nested:   { body: { page_content: "<json>", page_title: "..." } }  ← author API
   let components: any[] = [];
-  const raw = body?.page_content;
-  try {
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    components = parsed?.components || [];
-  } catch {}
+  if (Array.isArray(body?.components)) {
+    components = body.components;
+  } else {
+    const raw = body?.page_content;
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      components = parsed?.components || [];
+    } catch {}
+  }
 
   console.log(`[fetchTemplateLessonContent] got title="${title}", components=${components.length}, slateHTML=${components.filter((c: any) => c?.type === 'SlateHTML').length}`);
 
@@ -88,7 +95,7 @@ export async function fetchTemplateLessonContent(url: string): Promise<string> {
     .join('\n');
 
   if (!fullHTML.trim()) {
-    throw new Error(`No SlateHTML content found. Components found: ${components.map((c: any) => c?.type).join(', ') || 'none'}. page_content keys: ${body?.page_content ? 'present' : 'missing'}`);
+    throw new Error(`No SlateHTML content found. Component types: [${[...new Set(components.map((c: any) => c?.type))].join(', ') || 'none'}]`);
   }
 
   // Convert HTML to markdown-like text, preserving heading levels
