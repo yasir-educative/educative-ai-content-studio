@@ -105,10 +105,17 @@ function mapRawCard(raw: any, index: number): MobileCard {
     ? (raw.rightOption || raw.right_option || (tabs[1] ? { label: tabs[1].label, heading: '', description: tabs[1].text } : undefined))
     : (raw.rightOption || raw.right_option);
 
-  // Plain text content for text/text_img cards
+  // Plain text content for text/text_img/highlightCard cards.
+  // Guard: AI sometimes returns content as {text: "..."} instead of a plain string.
   const text = (isRecap || isScenario || isCompare)
     ? undefined
-    : (typeof raw.content === 'string' ? raw.content : raw.text || '');
+    : (
+        typeof raw.content === 'string'
+          ? raw.content
+          : typeof raw.content?.text === 'string' && raw.content.text
+            ? raw.content.text
+            : raw.text || ''
+      );
 
   // recapCard: content is [{heading, text}]
   const recapContent = isRecap ? (Array.isArray(raw.content) ? raw.content : undefined) : undefined;

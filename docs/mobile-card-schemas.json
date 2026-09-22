@@ -1,0 +1,152 @@
+{
+  "_comment": "Exact schema for every mobile card type. All fields sent to the AI must match these shapes. 'card_type' is the discriminator — must use these exact string values.",
+
+  "card_types": {
+
+    "text": {
+      "card_type": "text",
+      "card_number": 1,
+      "title": "Card title (required, non-empty)",
+      "content": "Plain string — the body text shown on the card (required, non-empty)"
+    },
+
+    "text_img": {
+      "card_type": "text_img",
+      "card_number": 2,
+      "title": "Card title (required)",
+      "content": "Plain string — supporting text shown below the image",
+      "illustration_idea": "Detailed description of what to draw (required for image generation)",
+      "visible_labels": "Comma-separated labels to render on the diagram (optional)"
+    },
+
+    "img_only": {
+      "card_type": "img_only",
+      "card_number": 3,
+      "title": "Card title (required)",
+      "img_context": "Extra context for image generation (not rendered as text)",
+      "illustration_idea": "Detailed description of what to draw (required for image generation)",
+      "visible_labels": "Comma-separated labels to render on the diagram (optional)"
+    },
+
+    "highlightCard": {
+      "card_type": "highlightCard",
+      "card_number": 4,
+      "title": "Card title (required, non-empty)",
+      "content": "Plain string — the highlighted text body (required, non-empty)",
+      "highlight_card_type": "Optional sub-type hint string (e.g. 'warning', 'tip', 'note')"
+    },
+
+    "comparisonCards": {
+      "card_type": "comparisonCards",
+      "card_number": 5,
+      "title": "Card title (required)",
+      "heading": "Optional sub-heading displayed above both sides",
+      "leftOption": {
+        "label": "Left column header label (required)",
+        "heading": "Left column sub-heading (optional)",
+        "description": "Left column body text (required)"
+      },
+      "rightOption": {
+        "label": "Right column header label (required)",
+        "heading": "Right column sub-heading (optional)",
+        "description": "Right column body text (required)"
+      }
+    },
+
+    "quiz": {
+      "card_type": "quiz",
+      "card_number": 6,
+      "title": "Card title (required)",
+      "question": "The quiz question text (required)",
+      "options": [
+        { "id": 1, "text": "Option A text" },
+        { "id": 2, "text": "Option B text" },
+        { "id": 3, "text": "Option C text" },
+        { "id": 4, "text": "Option D text" }
+      ],
+      "correct_answer": 1,
+      "_comment_correct_answer": "1-based integer index matching an option id",
+      "incorrect_message": "Message shown on wrong answer (optional)"
+    },
+
+    "recapCard": {
+      "card_type": "recapCard",
+      "card_number": 7,
+      "title": "Card title (required)",
+      "heading": "Optional overall heading for the recap",
+      "content": [
+        { "heading": "Point 1 heading", "text": "Point 1 body" },
+        { "heading": "Point 2 heading", "text": "Point 2 body" }
+      ]
+    },
+
+    "fillInTheBlank": {
+      "card_type": "fillInTheBlank",
+      "card_number": 8,
+      "title": "Card title (required)",
+      "question": "Sentence with ___ for the blank (required)",
+      "options": ["option A", "option B", "option C", "option D"],
+      "correct_options": ["option A"],
+      "_comment_correct_options": "Array of the correct answer strings — must match exactly one entry in options"
+    },
+
+    "scenarioCard": {
+      "card_type": "scenarioCard",
+      "card_number": 9,
+      "title": "Card title (required)",
+      "sections": [
+        { "heading": "Step / situation label", "content": "Body text for this step" },
+        { "heading": "Next step", "content": "Body text" }
+      ],
+      "explanation": "Explanation shown after the scenario (optional)",
+      "scenario_type": "Optional sub-type string"
+    },
+
+    "text-with-code": {
+      "card_type": "text-with-code",
+      "card_number": 10,
+      "title": "Card title (required)",
+      "text_1": "Text shown above the code block (required)",
+      "text_2": "Text shown below the code block (optional)",
+      "language": "Programming language identifier e.g. python, javascript, java",
+      "code": "The code snippet (required)"
+    },
+
+    "trueFalseCard": {
+      "card_type": "trueFalseCard",
+      "card_number": 11,
+      "title": "Card title (required)",
+      "question": "The true/false statement (required)",
+      "correct_answer": "true",
+      "_comment_correct_answer": "Must be the string 'true' or 'false'",
+      "explanation": "Explanation shown after the answer (optional)"
+    },
+
+    "code-with-output": {
+      "card_type": "code-with-output",
+      "card_number": 12,
+      "title": "Card title (required)",
+      "code": "The code snippet (required)",
+      "output_available": "true",
+      "_comment_output_available": "String 'true' or 'false'",
+      "output": "Expected output text (required when output_available is 'true')"
+    }
+
+  },
+
+  "type_aliases": {
+    "_comment": "The normalizer accepts these aliases in addition to the canonical names above",
+    "scenario":        "scenarioCard",
+    "compare":         "comparisonCards",
+    "recap":           "recapCard",
+    "highlight":       "highlightCard",
+    "truefalse":       "trueFalseCard",
+    "true_false":      "trueFalseCard",
+    "text_img":        "text_img",
+    "img_only":        "img_only"
+  },
+
+  "image_cards_note": "text_img and img_only cards require a valid imageUrl on the stored card record (populated by the image generation stage). If imageUrl is missing, img_only is skipped entirely; text_img falls back to a plain text card.",
+
+  "empty_card_guard": "content for text / highlightCard MUST be a plain string, not a nested object. If the AI wraps it as {text: '...'}, the normalizer extracts .text automatically."
+}
