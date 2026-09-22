@@ -38,7 +38,6 @@ import {
   createLesson,
   saveLesson,
   addPageToChapter,
-  publishCourse,
   resolveImageBlocksForLesson,
   lessonUrlForIds,
   extractCollectionIds,
@@ -785,14 +784,8 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     }
     emit({ type: 'stage', name: 'save-chapter', status: 'done' });
 
-    emit({ type: 'stage', name: 'publish', status: 'start' });
-    try {
-      await publishCourse(authorId, collectionId);
-      emit({ type: 'data', name: 'publish', payload: { url: lessonUrl } });
-    } catch (e: any) {
-      emit({ type: 'log', name: 'publish', message: `Publish failed (non-fatal): ${e?.message}` });
-    }
-    emit({ type: 'stage', name: 'publish', status: 'done' });
+    // Publish is intentionally removed — lesson saves as draft.
+    // Publish manually from the Educative editor when the content is ready.
   } catch (e: any) {
     emit({ type: 'stage', name: 'save-lesson', status: 'error', message: e?.message });
     emit({ type: 'log', name: 'save-lesson', message: `Educative save failed (non-fatal): ${e?.message}` });
