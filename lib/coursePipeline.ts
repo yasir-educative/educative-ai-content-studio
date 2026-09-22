@@ -42,6 +42,7 @@ import {
   lessonUrlForIds,
   extractCollectionIds,
   fetchTemplateLessonContent,
+  fetchLessonTitle,
 } from './courseEducative';
 import { generateGptImage, slugify } from './imageGen';
 import { buildRunJsHtml } from './runJsTemplate';
@@ -69,6 +70,8 @@ export interface CourseInput {
   templateUrl?: string;
   prevLessonTitle?: string;
   nextLessonTitle?: string;
+  prevLessonUrl?: string;
+  nextLessonUrl?: string;
   blogId?: string;
 }
 
@@ -426,6 +429,21 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     stageLog(emit, 'template-lesson', 'no templateUrl', {}, 'skipped — no templateUrl provided');
   }
 
+  // ── Resolve prev/next lesson titles from URLs (if provided) ────────────────
+  // Fetch in parallel — non-fatal; falls back to the text title from the sheet.
+  let resolvedPrevTitle = input.prevLessonTitle || '';
+  let resolvedNextTitle = input.nextLessonTitle || '';
+  const [fetchedPrev, fetchedNext] = await Promise.all([
+    input.prevLessonUrl ? fetchLessonTitle(input.prevLessonUrl).catch(() => '') : Promise.resolve(''),
+    input.nextLessonUrl ? fetchLessonTitle(input.nextLessonUrl).catch(() => '') : Promise.resolve(''),
+  ]);
+  if (fetchedPrev) resolvedPrevTitle = fetchedPrev;
+  if (fetchedNext) resolvedNextTitle = fetchedNext;
+  stageLog(emit, 'template-lesson', 'prev/next lesson resolution', {
+    prevLessonUrl: input.prevLessonUrl,
+    nextLessonUrl: input.nextLessonUrl,
+  }, { resolvedPrevTitle, resolvedNextTitle });
+
   // ── Stage 1: Web research ──────────────────────────────────────────────────
   emit({ type: 'stage', name: 'web-research', status: 'start' });
   const searchQuery = `${input.chapterTitle} related to the course ${input.courseTitle} implementation concepts best practices examples`;
@@ -447,8 +465,8 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     wordsLength,
     userOutline: input.outline || '',
     lessonPurpose: input.lessonPurpose || input.blogSummary || '',
-    nextLessonTitle: input.nextLessonTitle || '',
-    prevLessonTitle: input.prevLessonTitle || '',
+    nextLessonTitle: resolvedNextTitle,
+    prevLessonTitle: resolvedPrevTitle,
     runJsEnabled: Boolean(input.runJsEnabled),
     aiAssessmentEnabled: input.aiAssessmentEnabled !== false,
     referenceContent: research,
@@ -485,8 +503,8 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     targetAudience: input.targetAudience,
     wordsLength,
     outlineString,
-    prevLessonTitle: input.prevLessonTitle || '',
-    nextLessonTitle: input.nextLessonTitle || '',
+    prevLessonTitle: resolvedPrevTitle,
+    nextLessonTitle: resolvedNextTitle,
     lessonPurpose: input.lessonPurpose || input.blogSummary || '',
     referenceContent: research,
     templateLessonContent,

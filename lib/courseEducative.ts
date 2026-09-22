@@ -116,6 +116,27 @@ export async function fetchTemplateLessonContent(url: string): Promise<string> {
   return title ? `# ${title}\n\n${md}` : md;
 }
 
+// Fetch just the title of a lesson page — lightweight, non-throwing.
+// Used to resolve prev/next lesson URLs from the sheet into displayable titles.
+export async function fetchLessonTitle(url: string): Promise<string> {
+  try {
+    const { authorId, collectionId, pageId } = extractCollectionIds(url);
+    if (!authorId || !collectionId || !pageId) return '';
+    const env = readEnv();
+    const aid = authorId || env.authorId;
+    const res = await fetch(
+      `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`,
+      { headers: { Cookie: `flask-auth=${env.flaskAuth}` } },
+    );
+    if (!res.ok) return '';
+    const json: any = await res.json();
+    const body = json?.body || json;
+    return body?.page_title || body?.summary?.title || '';
+  } catch {
+    return '';
+  }
+}
+
 // --- Lesson creation ---
 
 // Creates a new lesson page in the collection.

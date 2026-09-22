@@ -44,17 +44,24 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   courseTitle:       ['course title', 'course name', 'course'],
   courseSummary:     ['course summary', 'course description'],
   domain:            ['domain', 'vertical', 'track', 'category'],
-  chapterTitle:      ['chapter title', 'chapter name', 'chapter'],
+  // "Topic" is the chapter grouping column in the standard sheet template
+  chapterTitle:      ['chapter title', 'chapter name', 'chapter', 'topic'],
   chapterSummary:    ['chapter summary', 'chapter description'],
   lessonTitle:       ['lesson title', 'lesson name', 'lesson', 'title'],
-  outline:           ['outline', 'lesson outline', 'description', 'lesson description', 'summary'],
+  outline:           ['outline', 'lesson outline', 'description', 'lesson description'],
+  lessonPurpose:     ['purpose', 'lesson purpose', 'goal', 'lesson goal'],
   templateLessonUrl: ['template lesson url', 'template url', 'template lesson', 'template', 'template lesson link', 'lesson template url', 'lesson template'],
   targetAudience:    ['audience', 'target audience', 'level', 'difficulty'],
-  wordsLength:       ['word count', 'words', 'word length', 'length', 'words count'],
+  // 'words length' matches the standard sheet column header exactly
+  wordsLength:       ['word count', 'words length', 'words', 'word length', 'length', 'words count'],
   runJsEnabled:      ['runjs', 'run js', 'interactive', 'playground', 'run javascript'],
   aiAssessmentEnabled: ['ai assessment', 'assessment', 'ai', 'prompt ai'],
-  prevLessonTitle:   ['prev lesson', 'previous lesson', 'prev lesson title', 'previous lesson title', 'prev', 'previous'],
-  nextLessonTitle:   ['next lesson', 'next lesson title', 'next'],
+  // URL columns — separate from the plain-text title columns below
+  prevLessonUrl:     ['previous lesson', 'prev lesson url', 'previous lesson url', 'prev lesson link', 'previous lesson link'],
+  nextLessonUrl:     ['next lesson', 'next lesson url', 'next lesson link'],
+  // Plain-text title columns ("Next", "Prev" / "Previous")
+  prevLessonTitle:   ['prev lesson title', 'previous lesson title', 'prev', 'previous'],
+  nextLessonTitle:   ['next lesson title', 'next title', 'next'],
 };
 
 function buildHeaderMap(headers: string[]): Record<string, number> {
@@ -196,14 +203,22 @@ export async function POST(req: NextRequest) {
       const rawRunJs = cell(row, colMap.runJsEnabled);
       const rawAi = cell(row, colMap.aiAssessmentEnabled);
 
+      const targetAudienceVal = cell(row, colMap.targetAudience);
+      const wordsVal = cell(row, colMap.wordsLength);
+
       chapter.lessons.push({
         lessonTitle,
         outline: cell(row, colMap.outline),
+        lessonPurpose: cell(row, colMap.lessonPurpose),
         templateLessonUrl: cell(row, colMap.templateLessonUrl),
-        targetAudience: cell(row, colMap.targetAudience) || 'Intermediate',
-        wordsLength: parseNum(rawWords, 2000),
+        targetAudience: targetAudienceVal || 'Intermediate',
+        wordsLength: parseNum(wordsVal, 2000),
         runJsEnabled: rawRunJs ? parseBool(rawRunJs) : false,
         aiAssessmentEnabled: rawAi ? parseBool(rawAi) : true,
+        // URL columns — to be fetched in the pipeline for lesson title/content
+        prevLessonUrl: cell(row, colMap.prevLessonUrl),
+        nextLessonUrl: cell(row, colMap.nextLessonUrl),
+        // Plain-text title columns (fallback when no URL)
         prevLessonTitle: cell(row, colMap.prevLessonTitle),
         nextLessonTitle: cell(row, colMap.nextLessonTitle),
       });
