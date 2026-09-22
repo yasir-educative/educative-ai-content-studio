@@ -50,53 +50,63 @@ export function extractCollectionIds(url: string): { authorId: string; collectio
 
 // Fetch a single template lesson and return its section structure as readable markdown text.
 // Preserves heading hierarchy so the model can use it as "structural inspiration".
+// Throws on HTTP errors or missing IDs so the caller can log the failure.
 export async function fetchTemplateLessonContent(url: string): Promise<string> {
-  try {
-    const { authorId, collectionId, pageId } = extractCollectionIds(url);
-    if (!authorId || !collectionId || !pageId) return '';
-    const env = readEnv();
-    const aid = authorId || env.authorId;
-    const res = await fetch(
-      `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`,
-      { headers: { Cookie: `flask-auth=${env.flaskAuth}` } },
-    );
-    if (!res.ok) return '';
-    const json: any = await res.json();
-    const body = json?.body || json;
-    const title = body?.page_title || body?.summary?.title || '';
-
-    let raw = body?.page_content;
-    let components: any[] = [];
-    try {
-      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      components = parsed?.components || [];
-    } catch {}
-
-    // Join all SlateHTML into one HTML string (same as n8n Extract Sections1)
-    const fullHTML = components
-      .filter((c: any) => c?.type === 'SlateHTML')
-      .map((c: any) => c.content?.html || '')
-      .join('\n');
-
-    // Convert HTML to markdown-like text, preserving heading levels
-    const md = fullHTML
-      .replace(/<h1[^>]*>(.*?)<\/h1>/gi, (_, t) => `\n# ${t.replace(/<[^>]+>/g, '').trim()}\n`)
-      .replace(/<h2[^>]*>(.*?)<\/h2>/gi, (_, t) => `\n## ${t.replace(/<[^>]+>/g, '').trim()}\n`)
-      .replace(/<h3[^>]*>(.*?)<\/h3>/gi, (_, t) => `\n### ${t.replace(/<[^>]+>/g, '').trim()}\n`)
-      .replace(/<h4[^>]*>(.*?)<\/h4>/gi, (_, t) => `\n#### ${t.replace(/<[^>]+>/g, '').trim()}\n`)
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/[ \t]{2,}/g, ' ')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-
-    return title ? `# ${title}\n\n${md}` : md;
-  } catch {
-    return '';
+  const { authorId, collectionId, pageId } = extractCollectionIds(url);
+  if (!authorId || !collectionId || !pageId) {
+    throw new Error(`URL did not yield valid IDs — got authorId="${authorId}" collectionId="${collectionId}" pageId="${pageId}". Expected pageeditor or API URL format.`);
   }
+  const env = readEnv();
+  const aid = authorId || env.authorId;
+  const apiUrl = `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`;
+  console.log('[fetchTemplateLessonContent] fetching', apiUrl);
+
+  const res = await fetch(apiUrl, { headers: { Cookie: `flask-auth=${env.flaskAuth}` } });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    if (res.status === 401) throw new Error(`Auth failed (401) — refresh EDUCATIVE_COURSE_FLASK_AUTH cookie. Response: ${text.slice(0, 200)}`);
+    throw new Error(`Fetch failed: HTTP ${res.status}. Response: ${text.slice(0, 200)}`);
+  }
+
+  const json: any = await res.json();
+  const body = json?.body || json;
+  const title = body?.page_title || body?.summary?.title || '';
+
+  let components: any[] = [];
+  const raw = body?.page_content;
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    components = parsed?.components || [];
+  } catch {}
+
+  console.log(`[fetchTemplateLessonContent] got title="${title}", components=${components.length}, slateHTML=${components.filter((c: any) => c?.type === 'SlateHTML').length}`);
+
+  // Join all SlateHTML into one HTML string (same as n8n Extract Sections1)
+  const fullHTML = components
+    .filter((c: any) => c?.type === 'SlateHTML')
+    .map((c: any) => c.content?.html || '')
+    .join('\n');
+
+  if (!fullHTML.trim()) {
+    throw new Error(`No SlateHTML content found. Components found: ${components.map((c: any) => c?.type).join(', ') || 'none'}. page_content keys: ${body?.page_content ? 'present' : 'missing'}`);
+  }
+
+  // Convert HTML to markdown-like text, preserving heading levels
+  const md = fullHTML
+    .replace(/<h1[^>]*>(.*?)<\/h1>/gi, (_, t) => `\n# ${t.replace(/<[^>]+>/g, '').trim()}\n`)
+    .replace(/<h2[^>]*>(.*?)<\/h2>/gi, (_, t) => `\n## ${t.replace(/<[^>]+>/g, '').trim()}\n`)
+    .replace(/<h3[^>]*>(.*?)<\/h3>/gi, (_, t) => `\n### ${t.replace(/<[^>]+>/g, '').trim()}\n`)
+    .replace(/<h4[^>]*>(.*?)<\/h4>/gi, (_, t) => `\n#### ${t.replace(/<[^>]+>/g, '').trim()}\n`)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return title ? `# ${title}\n\n${md}` : md;
 }
 
 // --- Lesson creation ---

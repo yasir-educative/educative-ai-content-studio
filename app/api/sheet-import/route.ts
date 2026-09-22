@@ -40,6 +40,7 @@ function parseCsv(raw: string): string[][] {
 
 // --- Column header matching (case-insensitive, flexible) ---
 const COLUMN_ALIASES: Record<string, string[]> = {
+  status:            ['status', 'state', 'progress'],
   courseTitle:       ['course title', 'course name', 'course'],
   courseSummary:     ['course summary', 'course description'],
   domain:            ['domain', 'vertical', 'track', 'category'],
@@ -168,6 +169,12 @@ export async function POST(req: NextRequest) {
     for (const row of dataRows) {
       const lessonTitle = cell(row, colMap.lessonTitle);
       if (!lessonTitle) continue; // skip rows without a lesson title
+
+      // If a status column exists, only process rows whose status is "in progress"
+      if (colMap.status !== undefined) {
+        const rowStatus = cell(row, colMap.status).toLowerCase().replace(/[-_\s]+/g, ' ').trim();
+        if (rowStatus && rowStatus !== 'in progress') continue;
+      }
 
       const chapterTitle = cell(row, colMap.chapterTitle) || 'Chapter 1';
       const chapterKey = chapterTitle.toLowerCase().trim();
