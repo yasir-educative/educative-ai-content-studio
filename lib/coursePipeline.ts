@@ -390,13 +390,11 @@ function stageLog(emit: Emit, name: string, prompt: string, args: any, output: a
 // ---------- Main pipeline ----------
 
 export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): Promise<void> {
-  const extractedIds = input.templateUrl
-    ? extractCollectionIds(input.templateUrl)
-    : { authorId: '', collectionId: '', pageId: '' };
-  const extractedAuthorId = extractedIds.authorId;
-  const extractedCollectionId = extractedIds.collectionId;
-  const authorId = input.authorId || extractedAuthorId || process.env.EDUCATIVE_AUTHOR_ID || '';
-  const collectionId = input.collectionId || extractedCollectionId || '';
+  // authorId/collectionId are the PUBLISH TARGET — must come from explicit input or env.
+  // The templateUrl is only used to fetch template lesson content; its IDs must never
+  // be used as the publish target (the template course is a different collection).
+  const authorId = input.authorId || process.env.EDUCATIVE_AUTHOR_ID || '';
+  const collectionId = input.collectionId || '';
 
   const wordsLength = Number(input.wordsLength) || 2000;
   const domain = input.domain || 'System Design';
