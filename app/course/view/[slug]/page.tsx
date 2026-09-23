@@ -1405,7 +1405,7 @@ export default function CourseViewPage() {
                     )}
                     {selectedSummary && (
                       <button
-                        className="flex items-center gap-1.5 text-xs px-3 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:border-amber-400 transition-colors font-medium"
+                        className="btn-secondary flex items-center gap-1.5 text-xs py-1 px-3 ring-1 ring-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
                         onClick={() => openRegenModal(selectedSummary)}
                       >
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
