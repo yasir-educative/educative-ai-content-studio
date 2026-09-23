@@ -444,7 +444,17 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
 
   // ── Stage 1: Web research ──────────────────────────────────────────────────
   emit({ type: 'stage', name: 'web-research', status: 'start' });
-  const searchQuery = `${input.chapterTitle} related to the course ${input.courseTitle} implementation concepts best practices examples`;
+  const topicsFromOutline = input.outline
+    ? input.outline.split('\n').map((l) => l.replace(/^[#\-*\d.)\s]+/, '').trim()).filter(Boolean).slice(0, 6).join(', ')
+    : '';
+  const searchQuery = [
+    input.lessonTitle,
+    input.chapterTitle && input.chapterTitle !== input.lessonTitle ? `within ${input.chapterTitle}` : '',
+    input.lessonPurpose ? `Goal: ${input.lessonPurpose}` : '',
+    topicsFromOutline ? `Key topics: ${topicsFromOutline}` : '',
+    `Course: ${input.courseTitle}`,
+    'Include: practical code examples, real-world use cases, common pitfalls, performance trade-offs, and current industry best practices',
+  ].filter(Boolean).join('. ');
   const research = await openaiSearch(searchQuery);
   stageLog(emit, 'web-research', searchQuery, { lessonTitle: input.lessonTitle }, research.slice(0, 500));
   emit({ type: 'data', name: 'web-research', payload: research });

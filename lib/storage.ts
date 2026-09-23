@@ -32,6 +32,8 @@ export interface SavedBlog {
     collectionId?: string;
   };
   coursePageId?: string;
+  // original CourseInput — used for per-lesson regeneration
+  courseInput?: Record<string, any>;
   // pipeline outputs
   finalTitle?: string;
   markdown?: string;

@@ -36,10 +36,22 @@ type FullLesson = {
   finalTitle?: string;
   errorMessage?: string;
   request?: { blogTitle?: string; chapterTitle?: string; courseTitle?: string; authorId?: string; collectionId?: string };
+  courseInput?: Record<string, any>;
   status: Status;
   publishedUrl?: string;
   editorBlocks?: any[];
 };
+
+interface RegenState {
+  lessonId: string;
+  lessonTitle: string;
+  chapterTitle: string;
+  courseInput: Record<string, any>;
+  outline: string;
+  lessonPurpose: string;
+  runJsEnabled: boolean;
+  aiAssessmentEnabled: boolean;
+}
 
 interface ImageEditState {
   originalUrl: string;
@@ -661,6 +673,11 @@ export default function CourseViewPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingCourse, setDeletingCourse] = useState(false);
 
+  // Regenerate state
+  const [regenState, setRegenState] = useState<RegenState | null>(null);
+  const [regenLoading, setRegenLoading] = useState(false);
+  const [regenErr, setRegenErr] = useState('');
+
   // Image edit state
   const [imageEdit, setImageEdit] = useState<ImageEditState | null>(null);
 
@@ -844,6 +861,76 @@ export default function CourseViewPage() {
     }
   }
 
+  async function openRegenModal(lesson: LessonSummary) {
+    // Ensure full lesson data is loaded (need courseInput)
+    let full = lessonData[lesson.id];
+    if (!full) {
+      try {
+        const res = await fetch(`/api/blog/${lesson.id}`);
+        full = await res.json();
+        setLessonData((prev) => ({ ...prev, [lesson.id]: full }));
+      } catch { return; }
+    }
+    const ci = full?.courseInput || {};
+    setRegenErr('');
+    setRegenState({
+      lessonId: lesson.id,
+      lessonTitle: ci.lessonTitle || lesson.blogTitle || '',
+      chapterTitle: ci.chapterTitle || lesson.chapterTitle || '',
+      courseInput: ci,
+      outline: ci.outline || '',
+      lessonPurpose: ci.lessonPurpose || ci.blogSummary || '',
+      runJsEnabled: !!ci.runJsEnabled,
+      aiAssessmentEnabled: ci.aiAssessmentEnabled !== false,
+    });
+  }
+
+  async function runRegenerate() {
+    if (!regenState) return;
+    setRegenLoading(true);
+    setRegenErr('');
+    try {
+      const updatedInput = {
+        ...regenState.courseInput,
+        outline: regenState.outline,
+        lessonPurpose: regenState.lessonPurpose,
+        runJsEnabled: regenState.runJsEnabled,
+        aiAssessmentEnabled: regenState.aiAssessmentEnabled,
+      };
+      const res = await fetch('/api/course', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lessons: [updatedInput] }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Regenerate failed');
+      const newId: string = json.runs[0]?.id;
+      if (!newId) throw new Error('No run ID returned');
+      // Delete old lesson
+      await fetch(`/api/history/${regenState.lessonId}`, { method: 'DELETE' });
+      setAllLessons((prev) => {
+        const filtered = prev.filter((l) => l.id !== regenState.lessonId);
+        const newLesson: LessonSummary = {
+          id: newId,
+          createdAt: new Date().toISOString(),
+          status: 'running',
+          runType: 'course',
+          blogTitle: regenState.lessonTitle,
+          chapterTitle: regenState.chapterTitle,
+          courseTitle,
+        };
+        return [...filtered, newLesson];
+      });
+      setLessonData((prev) => { const next = { ...prev }; delete next[regenState.lessonId]; return next; });
+      setRegenState(null);
+      selectLesson(newId);
+    } catch (e: any) {
+      setRegenErr(e?.message || String(e));
+    } finally {
+      setRegenLoading(false);
+    }
+  }
+
   async function deleteCourse() {
     if (!confirm(`Delete all ${allLessons.length} lessons for "${courseTitle}"? This cannot be undone.`)) return;
     setDeletingCourse(true);
@@ -992,6 +1079,72 @@ export default function CourseViewPage() {
 
   return (
     <>
+      {regenState && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="bg-[var(--panel)] border border-[var(--border)] rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="flex items-center justify-between p-5 border-b border-[var(--border)]">
+              <h2 className="text-lg font-semibold">Regenerate Lesson</h2>
+              <button onClick={() => setRegenState(null)} className="text-[var(--text-dim)] hover:text-white text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-xs text-[var(--text-dim)]">
+                <div><span className="font-medium text-[var(--text-faint)]">Lesson</span><p className="mt-0.5 font-semibold text-[var(--text)]">{regenState.lessonTitle}</p></div>
+                <div><span className="font-medium text-[var(--text-faint)]">Chapter</span><p className="mt-0.5 font-semibold text-[var(--text)]">{regenState.chapterTitle}</p></div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide mb-1.5">Lesson Purpose / Summary</label>
+                <textarea
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--panel-2)] text-sm p-3 resize-none focus:outline-none focus:ring-1 focus:ring-[var(--accent)] min-h-[60px]"
+                  value={regenState.lessonPurpose}
+                  onChange={(e) => setRegenState((s) => s ? { ...s, lessonPurpose: e.target.value } : s)}
+                  placeholder="What should learners get from this lesson?"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide mb-1.5">Outline</label>
+                <textarea
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--panel-2)] text-sm p-3 resize-none focus:outline-none focus:ring-1 focus:ring-[var(--accent)] min-h-[180px] font-mono"
+                  value={regenState.outline}
+                  onChange={(e) => setRegenState((s) => s ? { ...s, outline: e.target.value } : s)}
+                  placeholder="Paste or edit the lesson outline…"
+                />
+              </div>
+              <div className="flex items-center gap-6">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={regenState.runJsEnabled}
+                    onChange={(e) => setRegenState((s) => s ? { ...s, runJsEnabled: e.target.checked } : s)}
+                    className="accent-emerald-500"
+                  />
+                  RunJS widgets
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={regenState.aiAssessmentEnabled}
+                    onChange={(e) => setRegenState((s) => s ? { ...s, aiAssessmentEnabled: e.target.checked } : s)}
+                    className="accent-emerald-500"
+                  />
+                  AI Assessment
+                </label>
+              </div>
+              {regenErr && <p className="text-xs text-red-400">{regenErr}</p>}
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button onClick={() => setRegenState(null)} className="btn-secondary text-sm px-4 py-2">Cancel</button>
+                <button
+                  onClick={runRegenerate}
+                  disabled={regenLoading}
+                  className="btn-primary text-sm px-5 py-2 flex items-center gap-2"
+                >
+                  {regenLoading && <span className="h-3.5 w-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin inline-block" />}
+                  {regenLoading ? 'Regenerating…' : 'Regenerate'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {imageEdit && (
         <ImageEditModal
           state={imageEdit}
@@ -1081,22 +1234,34 @@ export default function CourseViewPage() {
                               <StatusDot status={lesson.status} />
                               <span className="truncate leading-snug flex-1">{lessonLabel(lesson)}</span>
                             </button>
-                            {/* Per-lesson delete button */}
-                            <button
-                              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--text-faint)] hover:text-red-400 opacity-0 group-hover/lesson:opacity-100 transition-opacity"
-                              onClick={(e) => { e.stopPropagation(); deleteLesson(lesson.id); }}
-                              disabled={deletingId === lesson.id}
-                              title="Delete lesson"
-                            >
-                              {deletingId === lesson.id
-                                ? <span className="text-[10px]">…</span>
-                                : (
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
-                                  </svg>
-                                )
-                              }
-                            </button>
+                            {/* Per-lesson action buttons (hover) */}
+                            <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover/lesson:opacity-100 transition-opacity">
+                              <button
+                                className="p-1 text-[var(--text-faint)] hover:text-amber-400"
+                                onClick={(e) => { e.stopPropagation(); openRegenModal(lesson); }}
+                                title="Regenerate lesson"
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M1 4v6h6M23 20v-6h-6"/>
+                                  <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+                                </svg>
+                              </button>
+                              <button
+                                className="p-1 text-[var(--text-faint)] hover:text-red-400"
+                                onClick={(e) => { e.stopPropagation(); deleteLesson(lesson.id); }}
+                                disabled={deletingId === lesson.id}
+                                title="Delete lesson"
+                              >
+                                {deletingId === lesson.id
+                                  ? <span className="text-[10px]">…</span>
+                                  : (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                      <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
+                                    </svg>
+                                  )
+                                }
+                              </button>
+                            </div>
                           </li>
                         );
                       })}

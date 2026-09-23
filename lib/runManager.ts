@@ -272,6 +272,7 @@ export function startCourseRun(input: CourseInput): RunHandle {
       authorId: input.authorId,
       collectionId: input.collectionId,
     },
+    courseInput: { ...input },
     stageOutputs: {},
     stageLogs: {},
   };
