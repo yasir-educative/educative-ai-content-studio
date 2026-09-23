@@ -18,6 +18,16 @@ import OpenAI from 'openai';
 import { jsonrepair } from 'jsonrepair';
 import { getAbortSignal } from './abortContext';
 
+// Search model uses Chat Completions API — not supported on Responses API.
+let _chatClient: OpenAI | null = null;
+function getChatClient(): OpenAI {
+  if (!_chatClient) {
+    if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not set');
+    _chatClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 3 });
+  }
+  return _chatClient;
+}
+
 const OPENAI_DEFAULT = process.env.OPENAI_MODEL_DEFAULT || 'gpt-5.4';
 export const TEXT_GENERATOR_MODEL = process.env.OPENAI_MODEL_TEXTGEN || 'gpt-5.4';
 export const OPENAI_LIGHT = process.env.OPENAI_MODEL_LIGHT || 'gpt-5.4-mini';
@@ -90,11 +100,12 @@ export async function reviewTextStream(
 }
 
 export async function openaiSearch(prompt: string): Promise<string> {
-  const res = await getClient().responses.create({
+  // Search models use Chat Completions API, not Responses API.
+  const res = await getChatClient().chat.completions.create({
     model: OPENAI_SEARCH,
-    input: prompt,
+    messages: [{ role: 'user', content: prompt }],
   }, { signal: getAbortSignal() ?? undefined });
-  return (res as any).output_text ?? '';
+  return res.choices[0]?.message?.content ?? '';
 }
 
 export async function openaiJSON(prompt: string, model = OPENAI_DEFAULT): Promise<string> {
