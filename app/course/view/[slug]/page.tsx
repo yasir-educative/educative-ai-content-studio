@@ -1234,8 +1234,8 @@ export default function CourseViewPage() {
                               <StatusDot status={lesson.status} />
                               <span className="truncate leading-snug flex-1">{lessonLabel(lesson)}</span>
                             </button>
-                            {/* Per-lesson action buttons (hover) */}
-                            <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover/lesson:opacity-100 transition-opacity">
+                            {/* Per-lesson action buttons */}
+                            <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-30 group-hover/lesson:opacity-100 transition-opacity">
                               <button
                                 className="p-1 text-[var(--text-faint)] hover:text-amber-400"
                                 onClick={(e) => { e.stopPropagation(); openRegenModal(lesson); }}
@@ -1383,25 +1383,39 @@ export default function CourseViewPage() {
                       </button>
                     )}
                   </div>
-                  {contentView === 'edit' && (
-                    <div className="flex items-center gap-2">
-                      {editErr && <span className="text-xs text-red-300">{editErr}</span>}
+                  <div className="flex items-center gap-2">
+                    {contentView === 'edit' && (
+                      <>
+                        {editErr && <span className="text-xs text-red-300">{editErr}</span>}
+                        <button
+                          className="btn-secondary text-xs py-1 px-3"
+                          onClick={() => { setContentView('blocks'); setEditErr(''); }}
+                          disabled={editSaving}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="btn-primary text-xs py-1 px-3"
+                          onClick={saveEdit}
+                          disabled={editSaving}
+                        >
+                          {editSaving ? 'Saving…' : 'Save'}
+                        </button>
+                      </>
+                    )}
+                    {selectedSummary && (
                       <button
-                        className="btn-secondary text-xs py-1 px-3"
-                        onClick={() => { setContentView('blocks'); setEditErr(''); }}
-                        disabled={editSaving}
+                        className="flex items-center gap-1.5 text-xs px-3 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:border-amber-400 transition-colors font-medium"
+                        onClick={() => openRegenModal(selectedSummary)}
                       >
-                        Cancel
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <path d="M1 4v6h6M23 20v-6h-6"/>
+                          <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+                        </svg>
+                        Regenerate
                       </button>
-                      <button
-                        className="btn-primary text-xs py-1 px-3"
-                        onClick={saveEdit}
-                        disabled={editSaving}
-                      >
-                        {editSaving ? 'Saving…' : 'Save'}
-                      </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
 
