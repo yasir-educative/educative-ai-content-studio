@@ -207,7 +207,29 @@ ${args.outlineString}
 - Latest insights on topic:
 
 ${args.referenceContent}
+${args.templateLessonContent ? `
+---
+# ⚠ TEMPLATE LESSON — MANDATORY STRUCTURAL OVERRIDE
+A template lesson has been provided. **It is the structural law for this lesson. Every rule that follows is subordinate to it.**
 
+**Before writing a single word, do this:**
+1. Read the Template Lesson below.
+2. Identify every main H1 section heading (lines starting with a single \`#\`) in the order they appear.
+3. Those headings are your fixed skeleton — use the **exact same wording, exact same order**.
+4. Fill each section with content specific to this lesson's topic and outline.
+
+**Non-negotiable constraints:**
+- Section headings must **exactly match** the template's H1 headings — same words, same sentence case.
+- Section order must exactly follow the template — do not reorder, merge, or split sections.
+- Do **NOT** add a conclusion, summary, wrap-up, or any closing section if the template does not end with one.
+- The template's final section is the lesson's final section. Full stop.
+- If the outline has an extra section not in the template, drop it silently — the template wins.
+
+**Template Lesson:**
+${args.templateLessonContent}
+
+---
+` : ''}
 # Structural Rules
 - The Hook: Start the lesson immediately with a hook (described in the outline). No lesson title, H1, or H2 is permitted at the very top of the output. If the outline includes a first text section, the hook must serve as its opening content. (Never start with imagine this or that.)
 - Headings: Use H1 (#) for main section titles in sentence case.
@@ -284,7 +306,7 @@ Include 2–4 callouts in the exact format below (max 2–3 lines each), none sh
  -- If \`Previous Lesson summary\` is provided, hook should link to what we discussed and what we are going to discuss in current lesson.
  -- Else, tie the hook to introduce the topic the lesson is about.
 - If the outline includes a first text section, the hook must serve as its opening content.
-- Conclusion: short section with 2–4 sentences summarizing lessons, insights, and final advice in a motivational tone maybe with a transition to the next lesson, or future direction.
+- Conclusion: ${args.templateLessonContent ? 'ONLY write a conclusion if the Template Lesson ends with a conclusion section. If it does not, do not add one — the template\'s last section is the lesson\'s last section.' : 'Short section with 2–4 sentences summarizing lessons, insights, and final advice in a motivational tone, with a transition to the next lesson or future direction.'}
 
 # Important Technical Requirements
 - Strictly follow the outline, summary, domain, target audience, and defined WordLengths.
@@ -322,13 +344,11 @@ Use these exact tags and ensure the content inside describes the requirements of
 * Check abstractions are anchored in real systems.
 * Ensure there are at least 1-2 H3 (###) and 1-2 H2 (##) under the main section in the overall content.
 
-## Template lesson compliance (if provided, else ignore)
-- The \`Template-Lesson\` is a **strict structural blueprint**. Follow its section sequence exactly — same heading names, same order, same section types.
-- Only add a section not present in the template when the lesson content strictly requires it; insert it inline, never at the end.
-- **Critical:** Do NOT add a conclusion, summary, or any closing section if the template does not end with one. The template's last section is the lesson's last section.
-- Use the template to calibrate content length and depth per section.
-- \`Template-Lesson\`:
-${args.templateLessonContent ? args.templateLessonContent : 'Not provided'}
+## Template lesson compliance
+${args.templateLessonContent
+  ? '- Template was provided — see the TEMPLATE LESSON OVERRIDE block at the top. Its heading names, order, and final section are absolute. Do not contradict that block.'
+  : '- No template provided — follow the outline and structural rules above freely.'
+}
 
 # Output Format
 - The output must begin with the hook—no lesson title or section title at the start.
