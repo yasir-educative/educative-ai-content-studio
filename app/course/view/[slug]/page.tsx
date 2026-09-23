@@ -1234,34 +1234,22 @@ export default function CourseViewPage() {
                               <StatusDot status={lesson.status} />
                               <span className="truncate leading-snug flex-1">{lessonLabel(lesson)}</span>
                             </button>
-                            {/* Per-lesson action buttons */}
-                            <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-30 group-hover/lesson:opacity-100 transition-opacity">
-                              <button
-                                className="p-1 text-[var(--text-faint)] hover:text-amber-400"
-                                onClick={(e) => { e.stopPropagation(); openRegenModal(lesson); }}
-                                title="Regenerate lesson"
-                              >
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                  <path d="M1 4v6h6M23 20v-6h-6"/>
-                                  <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
-                                </svg>
-                              </button>
-                              <button
-                                className="p-1 text-[var(--text-faint)] hover:text-red-400"
-                                onClick={(e) => { e.stopPropagation(); deleteLesson(lesson.id); }}
-                                disabled={deletingId === lesson.id}
-                                title="Delete lesson"
-                              >
-                                {deletingId === lesson.id
-                                  ? <span className="text-[10px]">…</span>
-                                  : (
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                      <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
-                                    </svg>
-                                  )
-                                }
-                              </button>
-                            </div>
+                            {/* Per-lesson delete button */}
+                            <button
+                              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--text-faint)] hover:text-red-400 opacity-0 group-hover/lesson:opacity-100 transition-opacity"
+                              onClick={(e) => { e.stopPropagation(); deleteLesson(lesson.id); }}
+                              disabled={deletingId === lesson.id}
+                              title="Delete lesson"
+                            >
+                              {deletingId === lesson.id
+                                ? <span className="text-[10px]">…</span>
+                                : (
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
+                                  </svg>
+                                )
+                              }
+                            </button>
                           </li>
                         );
                       })}
