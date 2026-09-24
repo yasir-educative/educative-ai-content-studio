@@ -392,7 +392,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   // Step 3: Set the collection title (required — Educative rejects publish without title)
-  await setCollectionTitle(resolvedAuthorId, collectionId, short.topic, short.topic);
+  const shortTitle = `${short.topic}*`;
+  await setCollectionTitle(resolvedAuthorId, collectionId, shortTitle, shortTitle);
 
   // Step 4: Publish the collection
   await publishCourse(resolvedAuthorId, collectionId);
