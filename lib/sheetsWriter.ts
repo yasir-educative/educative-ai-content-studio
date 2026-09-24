@@ -4,7 +4,6 @@ export async function writeSheetPublishResult(
   sheetUrl: string,
   rowIdx: number,
   publishedUrl: string,
-  topic?: string,
 ): Promise<void> {
   const saJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!saJson) return;
@@ -30,7 +29,10 @@ export async function writeSheetPublishResult(
 
   const normalize = (s: string) => s.toLowerCase().trim().replace(/[\s_-]+/g, '');
   let statusCol = headers.findIndex((h) => normalize(h) === 'status');
-  let urlCol = headers.findIndex((h) => ['publishedurl', 'publishurl', 'link', 'url'].includes(normalize(h)));
+  let urlCol = headers.findIndex((h) => {
+    const n = normalize(h);
+    return n.includes('shotlink') || n.includes('publishedurl') || n.includes('publishurl') || n.includes('shortlink') || n === 'link' || n === 'url';
+  });
 
   // If not found, append new header columns
   if (statusCol < 0 || urlCol < 0) {
@@ -66,20 +68,16 @@ export async function writeSheetPublishResult(
   const statusCell = `${sheetName}!${colLetter(statusCol + 1)}${sheetRow}`;
   const urlCell = `${sheetName}!${colLetter(urlCol + 1)}${sheetRow}`;
 
-  // Build a clickable HYPERLINK formula; label is the topic if available
-  const linkLabel = (topic || 'View Short').replace(/"/g, "'");
-  const urlFormula = `=HYPERLINK("${publishedUrl}","${linkLabel}")`;
-
   await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${sid}/values:batchUpdate`,
     {
       method: 'POST',
       headers: { ...authHeader, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        valueInputOption: 'USER_ENTERED',
+        valueInputOption: 'RAW',
         data: [
           { range: statusCell, values: [['Done']] },
-          { range: urlCell, values: [[urlFormula]] },
+          { range: urlCell, values: [[publishedUrl]] },
         ],
       }),
     },
