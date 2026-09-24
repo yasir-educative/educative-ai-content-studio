@@ -29,6 +29,7 @@ interface SheetRow {
 }
 
 type BulkStatus = 'idle' | 'running' | 'done' | 'error';
+type BulkPublishStatus = 'publishing' | 'published' | 'publish-failed';
 
 interface BulkJob {
   rowIdx: number;
@@ -37,6 +38,9 @@ interface BulkJob {
   shortId?: string;
   stages: Array<{ name: string; status: 'start' | 'done' | 'error' }>;
   error?: string;
+  publishStatus?: BulkPublishStatus;
+  publishedUrl?: string;
+  publishError?: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -276,13 +280,26 @@ export default function NewMobileShortPage() {
     setBulkJobs(jobs);
     setBulkRunning(true);
 
+    // Each row gets its own isolated async closure; all state updates key on rowIdx
+    // so concurrent runs can never overwrite each other's slot.
+    function patchJob(rowIdx: number, patch: Partial<BulkJob>) {
+      setBulkJobs((prev) => prev.map((j) => j.rowIdx === rowIdx ? { ...j, ...patch } : j));
+    }
+
+    function patchJobStage(rowIdx: number, stage: { name: string; status: 'start' | 'done' | 'error' }) {
+      setBulkJobs((prev) => prev.map((j) => {
+        if (j.rowIdx !== rowIdx) return j;
+        const stages = [...j.stages];
+        const si = stages.findIndex((x) => x.name === stage.name);
+        if (si >= 0) stages[si] = stage; else stages.push(stage);
+        return { ...j, stages };
+      }));
+    }
+
     await Promise.all(
-      toCreate.map(async (row, ji) => {
-        setBulkJobs((prev) => {
-          const next = [...prev];
-          next[ji] = { ...next[ji], status: 'running' };
-          return next;
-        });
+      toCreate.map(async (row) => {
+        const rowIdx = row.idx;
+        patchJob(rowIdx, { status: 'running' });
         try {
           const shortId = await startShortStream(
             {
@@ -293,28 +310,29 @@ export default function NewMobileShortPage() {
               numCards: row.numCards,
               isHighlightCardNeeded: row.includeHighlight,
               sheetUrl: sheetUrl.trim() || undefined,
-              rowIdx: row.idx,
+              rowIdx,
             },
-            (s) => setBulkJobs((prev) => {
-              const next = [...prev];
-              const stages = [...next[ji].stages];
-              const si = stages.findIndex((x) => x.name === s.name);
-              if (si >= 0) stages[si] = s; else stages.push(s);
-              next[ji] = { ...next[ji], stages };
-              return next;
-            }),
+            (s) => patchJobStage(rowIdx, s),
           );
-          setBulkJobs((prev) => {
-            const next = [...prev];
-            next[ji] = { ...next[ji], status: 'done', shortId: shortId || undefined };
-            return next;
-          });
+          patchJob(rowIdx, { status: 'done', shortId: shortId || undefined });
+
+          // Auto-publish to Educative (sheet bulk flow only)
+          if (shortId) {
+            patchJob(rowIdx, { publishStatus: 'publishing' });
+            try {
+              const pubRes = await fetch(`/api/mobile-short/${shortId}/publish`, { method: 'POST' });
+              const pubJson = await pubRes.json();
+              patchJob(rowIdx, {
+                publishStatus: pubRes.ok ? 'published' : 'publish-failed',
+                publishedUrl: pubJson.short?.publishedUrl,
+                publishError: pubRes.ok ? (pubJson.sheetError || undefined) : (pubJson.error || 'Publish failed'),
+              });
+            } catch (pubErr: any) {
+              patchJob(rowIdx, { publishStatus: 'publish-failed', publishError: pubErr?.message || 'Publish failed' });
+            }
+          }
         } catch (err: any) {
-          setBulkJobs((prev) => {
-            const next = [...prev];
-            next[ji] = { ...next[ji], status: 'error', error: err?.message || 'Failed' };
-            return next;
-          });
+          patchJob(rowIdx, { status: 'error', error: err?.message || 'Failed' });
         }
       }),
     );
@@ -322,7 +340,10 @@ export default function NewMobileShortPage() {
     setBulkRunning(false);
   }
 
-  const allDone = bulkJobs.length > 0 && bulkJobs.every((j) => j.status === 'done' || j.status === 'error');
+  const allDone = bulkJobs.length > 0 && bulkJobs.every((j) =>
+    (j.status === 'error') ||
+    (j.status === 'done' && (j.publishStatus === 'published' || j.publishStatus === 'publish-failed' || !j.shortId))
+  );
   const selectedCount = sheetRows.filter((r) => selectedRows.has(r.idx) && r.topic.trim()).length;
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -503,8 +524,8 @@ export default function NewMobileShortPage() {
 
               {/* Cards grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {sheetRows.map((row, ji) => {
-                  const job = bulkJobs[ji];
+                {sheetRows.map((row) => {
+                  const job = bulkJobs.find((j) => j.rowIdx === row.idx);
                   const isSelected = selectedRows.has(row.idx);
                   return (
                     <div
@@ -529,7 +550,7 @@ export default function NewMobileShortPage() {
                           />
                           <span className="text-[10px] font-mono text-[var(--text-faint)]">Row {row.idx + 2}</span>
                         </div>
-                        {/* Status badge */}
+                        {/* Generation status badge */}
                         {job && (
                           <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
                             job.status === 'done' ? 'bg-emerald-500/15 text-emerald-400' :
@@ -539,22 +560,57 @@ export default function NewMobileShortPage() {
                             {job.status === 'running'
                               ? (job.stages.at(-1)?.name || 'starting…')
                               : job.status === 'done'
-                              ? '✓ done'
+                              ? '✓ generated'
                               : job.status === 'error'
                               ? job.error || 'error'
                               : 'queued'}
                           </span>
                         )}
-                        {job?.status === 'done' && job.shortId && (
-                          <a
-                            href={`/mobile-short/${job.shortId}`}
-                            className="text-[10px] text-[var(--accent)] hover:underline ml-1"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            Open →
-                          </a>
-                        )}
                       </div>
+
+                      {/* Publish status row */}
+                      {job?.status === 'done' && (
+                        <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                          {job.publishStatus === 'publishing' && (
+                            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 animate-pulse">
+                              Publishing…
+                            </span>
+                          )}
+                          {job.publishStatus === 'published' && (
+                            <>
+                              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400">
+                                ✓ published
+                              </span>
+                              {job.publishedUrl && (
+                                <a
+                                  href={job.publishedUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[10px] text-[var(--accent)] hover:underline"
+                                >
+                                  View on Educative →
+                                </a>
+                              )}
+                              {job.publishError && (
+                                <span className="text-[10px] text-amber-400">Sheet: {job.publishError}</span>
+                              )}
+                            </>
+                          )}
+                          {job.publishStatus === 'publish-failed' && (
+                            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-red-500/15 text-red-400" title={job.publishError}>
+                              Publish failed
+                            </span>
+                          )}
+                          {!job.publishStatus && job.shortId && (
+                            <a
+                              href={`/mobile-short/${job.shortId}`}
+                              className="text-[10px] text-[var(--accent)] hover:underline"
+                            >
+                              Open →
+                            </a>
+                          )}
+                        </div>
+                      )}
 
                       {/* Topic */}
                       <div>
