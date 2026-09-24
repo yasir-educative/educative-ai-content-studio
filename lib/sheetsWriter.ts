@@ -4,6 +4,7 @@ export async function writeSheetPublishResult(
   sheetUrl: string,
   rowIdx: number,
   publishedUrl: string,
+  topic?: string,
 ): Promise<void> {
   const saJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!saJson) return;
@@ -65,16 +66,20 @@ export async function writeSheetPublishResult(
   const statusCell = `${sheetName}!${colLetter(statusCol + 1)}${sheetRow}`;
   const urlCell = `${sheetName}!${colLetter(urlCol + 1)}${sheetRow}`;
 
+  // Build a clickable HYPERLINK formula; label is the topic if available
+  const linkLabel = (topic || 'View Short').replace(/"/g, "'");
+  const urlFormula = `=HYPERLINK("${publishedUrl}","${linkLabel}")`;
+
   await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${sid}/values:batchUpdate`,
     {
       method: 'POST',
       headers: { ...authHeader, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        valueInputOption: 'RAW',
+        valueInputOption: 'USER_ENTERED',
         data: [
-          { range: statusCell, values: [['published']] },
-          { range: urlCell, values: [[publishedUrl]] },
+          { range: statusCell, values: [['Done']] },
+          { range: urlCell, values: [[urlFormula]] },
         ],
       }),
     },
