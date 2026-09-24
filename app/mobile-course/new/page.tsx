@@ -36,7 +36,7 @@ export default function NewMobileCoursePage() {
 
   // ── Existing course state ─────────────────────────────────────────────────
   const [collectionId, setCollectionId] = useState('');
-  const [authorId, setAuthorId] = useState('10370001');
+  const [authorId, setAuthorId] = useState(process.env.NEXT_PUBLIC_EDUCATIVE_AUTHOR_ID || '');
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState('');
   const [courseTitle, setCourseTitle] = useState('');
@@ -62,7 +62,7 @@ export default function NewMobileCoursePage() {
     setFetchError('');
     try {
       const res = await fetch(
-        `/api/mobile-course/collection-preview?collectionId=${encodeURIComponent(collectionId.trim())}&authorId=${encodeURIComponent(authorId.trim() || '10370001')}`,
+        `/api/mobile-course/collection-preview?collectionId=${encodeURIComponent(collectionId.trim())}&authorId=${encodeURIComponent(authorId.trim())}`,
       );
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -115,7 +115,7 @@ export default function NewMobileCoursePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           collectionId: collectionId.trim(),
-          authorId: authorId.trim() || '10370001',
+          authorId: authorId.trim(),
           courseTitle,
           previewedChapters: selectedChapters,
         }),
@@ -234,7 +234,7 @@ export default function NewMobileCoursePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           collectionId: 'generated',
-          authorId: '10370001',
+          authorId: authorId.trim(),
           courseTitle: generatedCourseName || newTopic,
           previewedChapters: selectedChapters,
         }),
