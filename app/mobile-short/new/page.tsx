@@ -186,6 +186,7 @@ export default function NewMobileShortPage() {
 
       const headers: string[] = json.headers;
       const rawRows: string[][] = json.rows;
+      const rowIndices: number[] = json.rowIndices ?? rawRows.map((_: any, i: number) => i);
 
       // Auto-detect the six specific columns
       const topicCol = findCol(headers, [
@@ -224,8 +225,8 @@ export default function NewMobileShortPage() {
         (n) => n === 'cards',
       ]);
 
-      const rows: SheetRow[] = rawRows.map((cells, idx) => ({
-        idx,
+      const rows: SheetRow[] = rawRows.map((cells, i) => ({
+        idx: rowIndices[i],
         topic: topicCol >= 0 ? (cells[topicCol] ?? '') : '',
         domain: domainCol >= 0 ? (cells[domainCol] ?? '') : '',
         level: levelCol >= 0 ? (cells[levelCol] ?? '') : '',
