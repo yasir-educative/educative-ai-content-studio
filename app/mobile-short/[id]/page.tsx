@@ -1327,6 +1327,9 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
       if (!json.ok && json.errors?.length) {
         setPublishError(json.errors[0]?.error || 'Publish failed');
       }
+      if (json.sheetError) {
+        setPublishError(`Published OK — sheet update failed: ${json.sheetError}`);
+      }
       await load();
     } catch (e: any) {
       setPublishError(e.message || 'Publish failed');

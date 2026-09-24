@@ -6,80 +6,54 @@ export async function writeSheetPublishResult(
   publishedUrl: string,
 ): Promise<void> {
   const saJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!saJson) return;
+  if (!saJson) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON not set');
 
   const sa: ServiceAccount = JSON.parse(saJson);
   const sid = spreadsheetId(sheetUrl);
-  if (!sid) return;
+  if (!sid) throw new Error(`Could not extract spreadsheet ID from: ${sheetUrl}`);
 
   const token = await getAccessToken(sa);
-  const authHeader = { Authorization: `Bearer ${token}` };
+  const auth = { Authorization: `Bearer ${token}` };
 
   const gid = gidFromUrl(sheetUrl);
   const sheetName = await getSheetName(sid, gid, token);
 
-  // Read header row to find existing "Status" and "Published URL" columns
-  const headerRange = `${sheetName}!1:1`;
+  // Read the first row to locate "Status" and "Shot link" columns
   const headRes = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${sid}/values/${encodeURIComponent(headerRange)}`,
-    { headers: authHeader },
+    `https://sheets.googleapis.com/v4/spreadsheets/${sid}/values/${encodeURIComponent(`${sheetName}!1:1`)}`,
+    { headers: auth },
   );
-  const headJson = await headRes.json() as any;
-  const headers: string[] = headJson.values?.[0] ?? [];
+  if (!headRes.ok) throw new Error(`Sheets read headers failed: ${headRes.status} ${await headRes.text()}`);
+  const headers: string[] = ((await headRes.json() as any).values?.[0] ?? []);
 
-  const normalize = (s: string) => s.toLowerCase().trim().replace(/[\s_-]+/g, '');
-  let statusCol = headers.findIndex((h) => normalize(h) === 'status');
-  let urlCol = headers.findIndex((h) => {
-    const n = normalize(h);
-    return n.includes('shotlink') || n.includes('publishedurl') || n.includes('publishurl') || n.includes('shortlink') || n === 'link' || n === 'url';
+  console.log('[sheetsWriter] headers:', headers);
+
+  const norm = (s: string) => s.toLowerCase().replace(/[\s_\-]/g, '');
+  const statusCol = headers.findIndex((h) => norm(h) === 'status');
+  const urlCol = headers.findIndex((h) => {
+    const n = norm(h);
+    return n === 'shotlink' || n === 'shortlink' || n === 'link' || n === 'url' || n.includes('shotlink') || n.includes('publishedurl');
   });
 
-  // If not found, append new header columns
-  if (statusCol < 0 || urlCol < 0) {
-    const updates: any[] = [];
-    if (statusCol < 0) {
-      statusCol = headers.length;
-      updates.push({
-        range: `${sheetName}!${colLetter(statusCol + 1)}1`,
-        values: [['Status']],
-      });
-    }
-    if (urlCol < 0) {
-      urlCol = statusCol < headers.length ? headers.length : statusCol + 1;
-      updates.push({
-        range: `${sheetName}!${colLetter(urlCol + 1)}1`,
-        values: [['Published URL']],
-      });
-    }
-    if (updates.length) {
-      await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${sid}/values:batchUpdate`,
-        {
-          method: 'POST',
-          headers: { ...authHeader, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ valueInputOption: 'RAW', data: updates }),
-        },
-      );
-    }
-  }
+  console.log(`[sheetsWriter] statusCol=${statusCol} urlCol=${urlCol} rowIdx=${rowIdx} sheetRow=${rowIdx + 2}`);
 
-  // Write status + published URL into the data row
-  const sheetRow = rowIdx + 2; // row 1 = headers, rowIdx 0-based → row 2+
-  const statusCell = `${sheetName}!${colLetter(statusCol + 1)}${sheetRow}`;
-  const urlCell = `${sheetName}!${colLetter(urlCol + 1)}${sheetRow}`;
+  if (statusCol < 0) throw new Error(`"Status" column not found in sheet. Headers: ${headers.join(', ')}`);
+  if (urlCol < 0) throw new Error(`"Shot link" column not found in sheet. Headers: ${headers.join(', ')}`);
 
-  await fetch(
+  const sheetRow = rowIdx + 2; // row 1 = header, data rows are 0-based after header
+  const data = [
+    { range: `${sheetName}!${colLetter(statusCol + 1)}${sheetRow}`, values: [['Done']] },
+    { range: `${sheetName}!${colLetter(urlCol + 1)}${sheetRow}`, values: [[publishedUrl]] },
+  ];
+
+  const writeRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${sid}/values:batchUpdate`,
     {
       method: 'POST',
-      headers: { ...authHeader, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        valueInputOption: 'RAW',
-        data: [
-          { range: statusCell, values: [['Done']] },
-          { range: urlCell, values: [[publishedUrl]] },
-        ],
-      }),
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ valueInputOption: 'RAW', data }),
     },
   );
+  if (!writeRes.ok) throw new Error(`Sheets write failed: ${writeRes.status} ${await writeRes.text()}`);
+  console.log(`[sheetsWriter] wrote Done + URL to row ${sheetRow}`);
 }

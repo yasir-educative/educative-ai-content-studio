@@ -407,14 +407,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     publishedUrl,
   });
 
-  // Step 6: Write-back to Google Sheet (no-op if service account not configured)
+  // Step 6: Write-back to Google Sheet
+  let sheetError: string | null = null;
   if (short.sheetUrl && short.rowIdx !== undefined) {
     try {
       await writeSheetPublishResult(short.sheetUrl, short.rowIdx, publishedUrl);
-    } catch (e) {
-      console.error('[publish] sheet write-back failed', e);
+    } catch (e: any) {
+      sheetError = e?.message || String(e);
+      console.error('[publish] sheet write-back failed:', sheetError);
     }
   }
 
-  return Response.json({ ok: errors.length === 0, published: results.length, errors, results, short: updated });
+  return Response.json({ ok: errors.length === 0, published: results.length, errors, results, short: updated, sheetError });
 }
