@@ -3,11 +3,37 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
+import { Agent } from 'undici';
 
 const EDUCATIVE_BASE = 'https://www.educative.io';
 const IMAGES_DIR = path.join(process.cwd(), 'data', 'images');
 // Legacy path used before imageGen was unified — still referenced by older stored records
 const BLOG_IMAGES_DIR = path.join(process.cwd(), 'data', 'blog-images');
+
+// Custom dispatcher: 60s connect timeout (default undici is 10s which is too short
+// for Educative's API under load — causes UND_ERR_CONNECT_TIMEOUT on publish).
+const educativeAgent = new Agent({ connect: { timeout: 60_000 } });
+
+// Resilient fetch: retries up to `retries` times on network errors or 5xx responses.
+async function educativeFetch(
+  url: string,
+  init: RequestInit & { dispatcher?: any } = {},
+  retries = 3,
+): Promise<Response> {
+  const opts: any = { ...init, dispatcher: educativeAgent };
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const res = await fetch(url, opts);
+      if (res.status < 500) return res; // 4xx are caller errors — don't retry
+      lastErr = new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      lastErr = e;
+    }
+    if (attempt < retries - 1) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+  }
+  throw lastErr;
+}
 
 function uid(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}-${Math.random().toString(16).slice(2)}`;
@@ -84,7 +110,7 @@ export async function fetchTemplateLessonContent(url: string): Promise<string> {
   const apiUrl = `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`;
   console.log('[fetchTemplateLessonContent] fetching', apiUrl);
 
-  const res = await fetch(apiUrl, { headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` } });
+  const res = await educativeFetch(apiUrl, { headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` } });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     if (res.status === 401) throw new Error(`Auth failed (401) — refresh EDUCATIVE_COURSE_FLASK_AUTH cookie. Response: ${text.slice(0, 200)}`);
@@ -147,7 +173,7 @@ export async function fetchLessonTitle(url: string): Promise<string> {
     if (!authorId || !collectionId || !pageId) return '';
     const env = readEnv();
     const aid = authorId || env.authorId;
-    const res = await fetch(
+    const res = await educativeFetch(
       `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`,
       { headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` } },
     );
@@ -171,7 +197,7 @@ export async function createLesson(
   const env = readEnv();
   const aid = authorId || env.authorId;
   if (!aid) throw new Error('authorId is required (set EDUCATIVE_AUTHOR_ID env or pass it explicitly)');
-  const res = await fetch(
+  const res = await educativeFetch(
     `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page?work_type=collection&claim=false&document_type=collection_lesson`,
     {
       method: 'POST',
@@ -241,7 +267,7 @@ export async function saveMobileCardPage(
     meta_tags_json_string: '{}',
   };
 
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
     method: 'PUT',
     headers: {
       Cookie: `flask-auth=${pickAuth(aid, env)}`,
@@ -291,7 +317,7 @@ export async function saveLesson(
     meta_tags_json_string: '{}',
   };
 
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
     method: 'PUT',
     headers: {
       Cookie: `flask-auth=${pickAuth(aid, env)}`,
@@ -307,7 +333,7 @@ export async function saveLesson(
 
 // Fetch the raw collection response body (mirrors n8n "Fetch CHP1" node).
 async function fetchCollectionRaw(aid: string, collectionId: string, flaskAuth: string): Promise<any> {
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
     headers: { Cookie: `flask-auth=${flaskAuth}` },
   });
   if (!res.ok) throw new Error(`Educative fetchCollection failed: ${res.status} ${await res.text()}`);
@@ -493,7 +519,7 @@ export async function addPageToChapter(
   // 3. Build and send the full CHP PUT body
   const putBody = buildChpPutBody(raw, categories);
 
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
     method: 'PUT',
     headers: {
       Cookie: `flask-auth=${pickAuth(aid, env)}`,
@@ -529,7 +555,7 @@ export async function createFlashCardShotCollection(
     enable_collaborative_editor: 'false',
     collection_template_type: '',
   };
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/collection`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/collection`, {
     method: 'POST',
     headers: {
       Cookie: `flask-auth=${pickAuth(aid, env)}`,
@@ -571,7 +597,7 @@ export async function setCollectionTitle(
   putBody.summary = summary || title;
   putBody.brief_summary = summary || title;
 
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
     method: 'PUT',
     headers: {
       Cookie: `flask-auth=${pickAuth(aid, env)}`,
@@ -590,7 +616,7 @@ export async function setCollectionTitle(
 export async function publishCourse(authorId: string, collectionId: string): Promise<void> {
   const env = readEnv();
   const aid = authorId || env.authorId;
-  const res = await fetch(
+  const res = await educativeFetch(
     `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/publish?work_type=collection`,
     {
       method: 'POST',
@@ -619,7 +645,7 @@ async function getLessonImageUploadUrl(
   flaskAuth: string,
 ): Promise<{ uploadUrl: string; imageId: string } | null> {
   try {
-    const res = await fetch(
+    const res = await educativeFetch(
       `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}/image/upload/url?fetch_from_bucket=True`,
       // X-Etag: overwrite + fetch_from_bucket=True matches n8n "Upload image1" exactly
       { headers: { Cookie: `flask-auth=${flaskAuth}`, 'X-Etag': 'overwrite' } },
@@ -1160,7 +1186,7 @@ export async function fetchLessonContent(
   try {
     const env = readEnv();
     const aid = authorId || env.authorId;
-    const res = await fetch(
+    const res = await educativeFetch(
       `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`,
       { headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` } },
     );
