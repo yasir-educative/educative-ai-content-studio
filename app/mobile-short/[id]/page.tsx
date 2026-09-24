@@ -1287,11 +1287,14 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
   const [publishError, setPublishError] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Always-current ref so callbacks (image edit, delete) never close over stale cards
+  const shortRef = useRef<MobileShort | null>(null);
 
   async function load() {
     const res = await fetch(`/api/mobile-short/${params.id}`, { cache: 'no-store' });
     if (!res.ok) return;
     const json = await res.json();
+    shortRef.current = json.short;
     setShort(json.short);
     setLive(json.live);
     setLoading(false);
@@ -1309,13 +1312,17 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   }, [live]);
 
-  async function saveCards(cards: MobileCard[]) {
+  async function saveCards(newCards: MobileCard[]) {
+    // Optimistic update — reflect changes in the UI immediately, persist to server in background.
+    // Do NOT call load() after PATCH: the round-trip can return stale data and flicker the UI
+    // back to the old state. The server write completes before the user can trigger publish.
+    shortRef.current = shortRef.current ? { ...shortRef.current, cards: newCards } : shortRef.current;
+    setShort((s) => s ? { ...s, cards: newCards } : s);
     await fetch(`/api/mobile-short/${params.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cards }),
+      body: JSON.stringify({ cards: newCards }),
     });
-    await load();
   }
 
   async function publish() {
@@ -1512,9 +1519,13 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
               key={short.id}
               cards={cards}
               onEdit={(c) => setEditCard(c)}
-              onDelete={(cardId) => saveCards(cards.filter((c) => c.id !== cardId))}
+              onDelete={(cardId) => {
+                const current = shortRef.current?.cards || [];
+                saveCards(current.filter((c) => c.id !== cardId));
+              }}
               onEditImage={(src, onApply) => openImageEdit(src, (newUrl) => {
-                const updCards = cards.map((k) =>
+                const current = shortRef.current?.cards || [];
+                const updCards = current.map((k) =>
                   k.imageUrl === src ? { ...k, imageUrl: newUrl } : k
                 );
                 saveCards(updCards);
@@ -1534,8 +1545,8 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
         <CardEditorModal
           card={editCard}
           onSave={(updated) => {
-            const updCards = cards.map((k) => (k.id === updated.id ? updated : k));
-            saveCards(updCards);
+            const current = shortRef.current?.cards || [];
+            saveCards(current.map((k) => (k.id === updated.id ? updated : k)));
             setEditCard(null);
           }}
           onClose={() => setEditCard(null)}
