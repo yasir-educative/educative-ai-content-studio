@@ -6,6 +6,8 @@ import {
   addPageToChapter,
   uploadLessonImageFromUrl,
   lessonUrlForIds,
+  setCollectionTitle,
+  publishCourse,
 } from '@/lib/courseEducative';
 import type { MobileCard } from '@/lib/mobileCourseStorage';
 
@@ -421,10 +423,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
+  if (results.length > 0) {
+    await setCollectionTitle(authorId, targetCollectionId, course.title || 'Mobile Course', course.title || 'Mobile Course');
+    await publishCourse(authorId, targetCollectionId);
+  }
+
+  const publishedUrl = results.length > 0
+    ? `https://www.educative.io/collection/${authorId}/${targetCollectionId}`
+    : undefined;
+
   const updated = await updateMobileCourse(id, {
     chapters: updatedChapters,
     status: results.length > 0 ? 'published' : 'draft',
-    publishedUrl: results[0]?.url,
+    publishedUrl: publishedUrl || results[0]?.url,
     targetCollectionId,
   });
 
