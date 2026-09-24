@@ -36,7 +36,7 @@ export default function NewMobileCoursePage() {
 
   // ── Existing course state ─────────────────────────────────────────────────
   const [collectionId, setCollectionId] = useState('');
-  const [authorId, setAuthorId] = useState(process.env.NEXT_PUBLIC_EDUCATIVE_AUTHOR_ID || '');
+  const [authorId, setAuthorId] = useState(process.env.NEXT_PUBLIC_EDUCATIVE_AUTHOR_ID || '10370001');
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState('');
   const [courseTitle, setCourseTitle] = useState('');
