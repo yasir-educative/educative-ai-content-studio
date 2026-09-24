@@ -3,6 +3,7 @@ import { getMobileShort, updateMobileShort } from '@/lib/mobileShortsStorage';
 import { writeSheetPublishResult } from '@/lib/sheetsWriter';
 import {
   createFlashCardShotCollection,
+  clearCollectionChapters,
   createLesson,
   saveMobileCardPage,
   addPageToChapter,
@@ -314,10 +315,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const results: Array<{ cardId: string; cardTitle: string; url: string }> = [];
   const errors: Array<{ cardId: string; cardTitle: string; error: string }> = [];
 
-  // Step 1: Create flash-card-shot collection.
-  // Pass any known authorId as a hint; the canonical author_id always comes back in the response.
+  // Step 1: Create or reuse a flash-card-shot collection.
+  // On re-publish the short already has a collectionId — reuse it and wipe the old
+  // chapters so cards are not duplicated in the table of contents.
   const hintAuthorId = short.authorId || process.env.EDUCATIVE_AUTHOR_ID || '';
-  const { collectionId, authorId: resolvedAuthorId } = await createFlashCardShotCollection(hintAuthorId);
+  let collectionId: string;
+  let resolvedAuthorId: string;
+  const isRepublish = !!(short.collectionId);
+  if (isRepublish) {
+    collectionId = short.collectionId!;
+    resolvedAuthorId = hintAuthorId || '10370001';
+    await clearCollectionChapters(resolvedAuthorId, collectionId);
+  } else {
+    ({ collectionId, authorId: resolvedAuthorId } = await createFlashCardShotCollection(hintAuthorId));
+  }
 
   // Step 2: Publish each card
   const updatedCards = [...short.cards];

@@ -612,6 +612,26 @@ export async function setCollectionTitle(
   console.log(`[courseEducative] setCollectionTitle OK — "${title}"`);
 }
 
+// Clear all chapters from a collection's CHP — used before re-publishing a short
+// so existing pages don't duplicate in the table of contents.
+export async function clearCollectionChapters(authorId: string, collectionId: string): Promise<void> {
+  const env = readEnv();
+  const aid = authorId || env.authorId;
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
+  const putBody = buildChpPutBody(raw, []);
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
+    method: 'PUT',
+    headers: {
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
+      'X-Etag': 'overwrite',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(putBody),
+  });
+  if (!res.ok) throw new Error(`Educative clearCollectionChapters failed: ${res.status} ${await res.text()}`);
+  console.log(`[courseEducative] clearCollectionChapters OK — collection ${collectionId}`);
+}
+
 // Publish the collection (course). Mirrors n8n "Publish course" node — no body, no Content-Type.
 export async function publishCourse(authorId: string, collectionId: string): Promise<void> {
   const env = readEnv();

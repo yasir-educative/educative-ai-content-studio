@@ -1402,16 +1402,29 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
             </div>
           )}
           {short.publishedUrl ? (
-            <div>
-              <p className="text-[10px] text-[var(--text-faint)] uppercase tracking-wide mb-0.5">Published URL</p>
-              <a
-                href={short.publishedUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[11px] text-emerald-400 underline break-all hover:text-emerald-300 transition-colors"
+            <div className="space-y-2">
+              <div>
+                <p className="text-[10px] text-[var(--text-faint)] uppercase tracking-wide mb-0.5">Published URL</p>
+                <a
+                  href={short.publishedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] text-emerald-400 underline break-all hover:text-emerald-300 transition-colors"
+                >
+                  {short.publishedUrl}
+                </a>
+              </div>
+              <button
+                onClick={publish}
+                disabled={publishing || cards.length === 0}
+                className="btn-secondary w-full text-xs py-1.5 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5"
               >
-                {short.publishedUrl}
-              </a>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15"/></svg>
+                {publishing ? 'Re-publishing…' : 'Re-publish'}
+              </button>
+              {publishError && (
+                <p className="text-[11px] text-red-400 leading-relaxed break-all">{publishError}</p>
+              )}
             </div>
           ) : (
             short.status !== 'running' && (
@@ -1462,16 +1475,26 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
             {short.status === 'running' && (
               <span className="text-xs text-amber-600 animate-pulse shrink-0 mt-1">Generating…</span>
             )}
-            {short.status === 'published' && short.publishedUrl && (
-              <a
-                href={short.publishedUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="btn-secondary text-xs shrink-0 mt-0.5 inline-flex items-center gap-1.5"
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>
-                View published
-              </a>
+            {short.publishedUrl && (
+              <div className="flex items-center gap-2 shrink-0 mt-0.5">
+                <a
+                  href={short.publishedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>
+                  View published
+                </a>
+                <button
+                  onClick={publish}
+                  disabled={publishing}
+                  className="btn-secondary text-xs inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15"/></svg>
+                  {publishing ? 'Re-publishing…' : 'Re-publish'}
+                </button>
+              </div>
             )}
             {(short.status === 'draft' || short.status === 'failed') && cards.length > 0 && (
               <button
