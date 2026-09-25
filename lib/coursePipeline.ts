@@ -37,14 +37,13 @@ import {
   makeTempImageBlock,
   createLesson,
   saveLesson,
-  addPageToChapter,
   resolveImageBlocksForLesson,
   lessonUrlForIds,
   extractCollectionIds,
   fetchTemplateLessonContent,
   fetchLessonTitle,
 } from './courseEducative';
-import { generateGptImage, slugify } from './imageGen';
+import { generateGptImage, buildCourseImagePrompt, enhanceImageDescription, slugify } from './imageGen';
 import { buildRunJsHtml } from './runJsTemplate';
 import { updateBlog } from './storage';
 import type { StageEvent, Emit } from './pipeline';
@@ -681,8 +680,9 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     for (let i = 0; i < rawImages.length; i++) {
       const { description, caption } = rawImages[i];
       try {
-        const result = await generateGptImage(`${domain} technical diagram: ${description} (for lesson "${input.lessonTitle}")`, i, imgSubfolder);
-        blocks.push(makeTempImageBlock(result.url, caption || description.slice(0, 80)));
+        const { enhancedOutline, caption: enhancedCaption } = await enhanceImageDescription(description);
+        const result = await generateGptImage(enhancedOutline, i, imgSubfolder, { rawPrompt: buildCourseImagePrompt(enhancedOutline) });
+        blocks.push(makeTempImageBlock(result.url, caption || enhancedCaption || description.slice(0, 80)));
       } catch (e: any) {
         console.warn('[coursePipeline] image widget failed:', e?.message);
         blocks.push(null);
@@ -789,7 +789,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     if (!pageId) throw new Error('createLesson returned no page_id');
 
     const resolvedBlocks = await resolveImageBlocksForLesson(editorBlocks, authorId, collectionId, pageId);
-    await saveLesson(authorId, collectionId, pageId, { title, blocks: resolvedBlocks });
+    await saveLesson(authorId, collectionId, pageId, { title: title.slice(0, 65), blocks: resolvedBlocks });
     const lessonUrl = lessonUrlForIds(authorId, collectionId, pageId);
 
     emit({ type: 'data', name: 'save-lesson', payload: { pageId, url: lessonUrl } });
@@ -801,15 +801,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
       } catch {}
     }
 
-    emit({ type: 'stage', name: 'save-chapter', status: 'start' });
-    try {
-      await addPageToChapter(authorId, collectionId, pageId, input.chapterTitle, title);
-      emit({ type: 'data', name: 'save-chapter', payload: { chapterTitle: input.chapterTitle, pageId } });
-    } catch (e: any) {
-      emit({ type: 'log', name: 'save-chapter', message: `Chapter update failed (non-fatal): ${e?.message}` });
-    }
-    emit({ type: 'stage', name: 'save-chapter', status: 'done' });
-
+    // Adding to CHP (chapter) is intentionally skipped here — use publish-all for that.
     // Publish is intentionally removed — lesson saves as draft.
     // Publish manually from the Educative editor when the content is ready.
   } catch (e: any) {

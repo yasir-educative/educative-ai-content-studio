@@ -224,6 +224,11 @@ export async function runMobileShortPipeline(
     .sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0))
     .map((c: any, i: number) => ({ ...c, id: c.id || `card-${i + 1}` }));
 
+  // Hard-enforce: remove highlightCards when the toggle is off, regardless of LLM output
+  if (!input.isHighlightCardNeeded) {
+    rawCards = rawCards.filter((c: any) => c.type !== 'highlightCard');
+  }
+
   // Post-process: enforce prose-only content on TEXT_IMG cards
   rawCards = await enforceTextImgProse(rawCards);
 

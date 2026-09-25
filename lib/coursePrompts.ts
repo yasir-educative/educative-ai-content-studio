@@ -320,7 +320,7 @@ When generating content, use the following placeholder formats. **Do not generat
 
 ### 1. Placeholder Formatting Rules
 Use these exact tags and ensure the content inside describes the requirements of the asset:
-* [image][Description][2–3 line description][/Description][Caption][Short caption in sentence case][/Caption][/image]
+* [image][Description][Visual illustration brief — 2–3 sentences describing specific objects, components, relationships, or flows to depict as a clean vector illustration. Match the abstraction level of the section: high-level architecture gets chunky boxes, arrows, and labelled services; detailed design gets specific technical objects (servers, queues, databases, gears) with functional relationships. Never describe text, tables, dashboards, code, UI screenshots, or anything that would require dense labels. No cluttered annotations — keep the visual sparse and conceptual. Example good brief: "Two side-by-side stacks. Left: a monolith block feeding into a single database cylinder. Right: five small service boxes connected by thin arrows to separate database cylinders, with a load-balancer icon at the top." Example bad brief: "A diagram showing how microservices work with annotations explaining each step."][/Description][Caption][Short caption in sentence case][/Caption][/image]
 * [table][Brief description of columns, rows, and specific data points to be included][/table]
 * [code][Brief description of the programming language, logic, and specific function to be demonstrated][/code]
 * [markmap][Description of the central topic and the specific #/## hierarchy levels for the taxonomy][/markmap]

@@ -48,7 +48,8 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   chapterTitle:      ['chapter title', 'chapter name', 'chapter', 'topic'],
   chapterSummary:    ['chapter summary', 'chapter description'],
   lessonTitle:       ['lesson title', 'lesson name', 'lesson', 'title'],
-  outline:           ['outline', 'lesson outline', 'description', 'lesson description'],
+  outline:           ['outline', 'description', 'lesson description'],
+  lessonOutline:     ['lesson outline'],
   lessonPurpose:     ['purpose', 'lesson purpose', 'goal', 'lesson goal'],
   templateLessonUrl: ['template lesson url', 'template url', 'template lesson', 'template', 'template lesson link', 'lesson template url', 'lesson template'],
   targetAudience:    ['audience', 'target audience', 'level', 'difficulty'],
@@ -206,10 +207,16 @@ export async function POST(req: NextRequest) {
       const targetAudienceVal = cell(row, colMap.targetAudience);
       const wordsVal = cell(row, colMap.wordsLength);
 
+      const purposeVal = cell(row, colMap.lessonPurpose);
+      const outlineVal = cell(row, colMap.outline);
+      const lessonOutlineVal = cell(row, colMap.lessonOutline);
+      // Combine: purpose first, then "Lesson Outline" column content appended after
+      const combinedOutline = [purposeVal, outlineVal, lessonOutlineVal].filter(Boolean).join('\n');
+
       chapter.lessons.push({
         lessonTitle,
-        outline: cell(row, colMap.outline),
-        lessonPurpose: cell(row, colMap.lessonPurpose),
+        outline: combinedOutline,
+        lessonPurpose: purposeVal,
         templateLessonUrl: cell(row, colMap.templateLessonUrl),
         targetAudience: targetAudienceVal || 'Intermediate',
         wordsLength: parseNum(wordsVal, 2000),

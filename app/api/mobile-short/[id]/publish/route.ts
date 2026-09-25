@@ -3,7 +3,6 @@ import { getMobileShort, updateMobileShort } from '@/lib/mobileShortsStorage';
 import { writeSheetPublishResult } from '@/lib/sheetsWriter';
 import {
   createFlashCardShotCollection,
-  clearCollectionChapters,
   createLesson,
   saveMobileCardPage,
   addPageToChapter,
@@ -315,9 +314,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const results: Array<{ cardId: string; cardTitle: string; url: string }> = [];
   const errors: Array<{ cardId: string; cardTitle: string; error: string }> = [];
 
-  // Step 1: Create or reuse a flash-card-shot collection.
-  // On re-publish the short already has a collectionId — reuse it and wipe the old
-  // chapters so cards are not duplicated in the table of contents.
+  // Step 1: Create collection on first publish; reuse existing on re-publish.
   const hintAuthorId = short.authorId || process.env.EDUCATIVE_AUTHOR_ID || '';
   let collectionId: string;
   let resolvedAuthorId: string;
@@ -325,12 +322,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isRepublish) {
     collectionId = short.collectionId!;
     resolvedAuthorId = hintAuthorId || '10370001';
-    await clearCollectionChapters(resolvedAuthorId, collectionId);
   } else {
     ({ collectionId, authorId: resolvedAuthorId } = await createFlashCardShotCollection(hintAuthorId));
   }
 
-  // Step 2: Publish each card
+  // Step 2: Publish each card.
+  // Re-publish: if the card already has a pageId, PUT to that existing page (in-place update).
+  //             No createLesson or addPageToChapter needed — the TOC entry stays unchanged.
+  // First publish (or new card added after initial publish): create a new lesson page.
   const updatedCards = [...short.cards];
 
   for (let ki = 0; ki < updatedCards.length; ki++) {
@@ -339,8 +338,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const cardTitle = deriveCardTitle(card) || `Card ${ki + 1}`;
 
     try {
-      const { page_id: pageId, collection_id: cid } = await createLesson(resolvedAuthorId, collectionId);
-      const resolvedCid = cid || collectionId;
+      let pageId: string;
+      let resolvedCid: string;
+
+      if (isRepublish && card.pageId) {
+        // Re-publish: update the existing lesson page in-place
+        pageId = card.pageId;
+        resolvedCid = collectionId;
+      } else {
+        // First publish (or new card): create a fresh lesson page and add to TOC
+        const created = await createLesson(resolvedAuthorId, collectionId);
+        pageId = created.page_id;
+        resolvedCid = created.collection_id || collectionId;
+      }
 
       let built: { components: any[]; summary: any } | null = null;
 
@@ -384,8 +394,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         summary: built.summary,
       });
 
-      // Use topic as the chapter name so all cards group under one section
-      await addPageToChapter(resolvedAuthorId, resolvedCid, pageId, short.topic, cardTitle);
+      // Only add to TOC on first publish (or new card) — existing entries stay on re-publish
+      if (!(isRepublish && card.pageId)) {
+        await addPageToChapter(resolvedAuthorId, resolvedCid, pageId, short.topic, cardTitle);
+      }
 
       const url = lessonUrlForIds(resolvedAuthorId, resolvedCid, pageId);
       card.pageId = pageId;

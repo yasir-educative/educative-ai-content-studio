@@ -881,7 +881,7 @@ export default function CourseViewPage() {
       outline: ci.outline || '',
       lessonPurpose: ci.lessonPurpose || ci.blogSummary || '',
       runJsEnabled: !!ci.runJsEnabled,
-      aiAssessmentEnabled: ci.aiAssessmentEnabled !== false,
+      aiAssessmentEnabled: !!ci.aiAssessmentEnabled,
     });
   }
 

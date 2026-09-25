@@ -102,7 +102,8 @@ export async function POST(req: NextRequest) {
       }
 
       const { editorBlocks } = lessonRecord;
-      const title = lessonRecord.finalTitle || lessonRecord.request?.blogTitle || 'Lesson';
+      const rawTitle = lessonRecord.finalTitle || lessonRecord.request?.blogTitle || 'Lesson';
+      const title = rawTitle.slice(0, 65);
       const chapterTitle = lessonRecord.request?.chapterTitle || 'Chapter 1';
 
       // Step 1: Create lesson page — mirrors n8n "Create lesson" node
