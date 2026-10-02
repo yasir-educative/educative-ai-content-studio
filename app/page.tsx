@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { ConfigPanel } from './_components/ConfigPanel';
 
 // Quick-create cards
 const TOOLS = [
@@ -141,6 +142,9 @@ export default function Home() {
           ))}
         </div>
       </section>
+
+      {/* ── Configuration ── */}
+      <ConfigPanel />
 
       {/* ── How it works ── */}
       <section>

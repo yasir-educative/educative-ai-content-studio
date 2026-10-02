@@ -406,8 +406,11 @@ interface EducativeEnv {
   flaskAuth: string;
   templateId: string;
 }
-function readEnv(): EducativeEnv {
-  const flaskAuth = process.env.EDUCATIVE_FLASK_AUTH || '';
+// `authOverride` lets a configured Educative channel supply its own flask-auth cookie instead of
+// the process-wide env value, so several Educative accounts can coexist. Passed explicitly rather
+// than held in module state, which would race across concurrent publishes.
+function readEnv(authOverride?: string): EducativeEnv {
+  const flaskAuth = authOverride || process.env.EDUCATIVE_FLASK_AUTH || '';
   if (!flaskAuth) throw new Error('EDUCATIVE_FLASK_AUTH is not set');
   return {
     flaskAuth,
@@ -415,8 +418,8 @@ function readEnv(): EducativeEnv {
   };
 }
 
-export async function createBlog(templateId?: string): Promise<{ editor_page_id: string; page_id: string }> {
-  const env = readEnv();
+export async function createBlog(templateId?: string, authOverride?: string): Promise<{ editor_page_id: string; page_id: string }> {
+  const env = readEnv(authOverride);
   const tid = templateId || env.templateId;
   const res = await fetch(`${EDUCATIVE_BASE}/api/page/editor/${tid}/create`, {
     method: 'POST',
@@ -428,8 +431,8 @@ export async function createBlog(templateId?: string): Promise<{ editor_page_id:
   return { editor_page_id: String(body.editor_page_id), page_id: String(body.page_id) };
 }
 
-export async function uploadBlog(args: { editorPageId: string; title: string; blocks: any[]; categories?: string }): Promise<void> {
-  const env = readEnv();
+export async function uploadBlog(args: { editorPageId: string; title: string; blocks: any[]; categories?: string; authOverride?: string }): Promise<void> {
+  const env = readEnv(args.authOverride);
   const innerObj: any = {
     marketing_page_id: args.editorPageId,
     marketing_page_title: args.title.slice(0, 65),
@@ -518,8 +521,9 @@ export async function uploadBlog(args: { editorPageId: string; title: string; bl
 // n8n: GET /api/page/editor/{pageId}/image/upload/url → { upload_url, image_id?, ... }
 export async function getImageUploadUrl(
   pageId: string,
+  authOverride?: string,
 ): Promise<{ uploadUrl: string; imageId: string } | null> {
-  const env = readEnv();
+  const env = readEnv(authOverride);
   try {
     const res = await fetch(`${EDUCATIVE_BASE}/api/page/editor/${pageId}/image/upload/url`, {
       headers: { Cookie: `flask-auth=${env.flaskAuth}` },
@@ -543,8 +547,9 @@ export async function uploadImageMultipart(
   uploadUrl: string,
   buffer: Buffer,
   filename: string,
+  authOverride?: string,
 ): Promise<{ page_id: string; image_id: string } | null> {
-  const env = readEnv();
+  const env = readEnv(authOverride);
   try {
     const formData = new FormData();
     formData.append('file-0', new Blob([buffer as unknown as ArrayBuffer], { type: 'image/png' }), filename);

@@ -24,6 +24,12 @@
   --success:      #22c55e;
   --warning:      #f59e0b;
   --danger:       #ef4444;
+  /* Status *text* colours. Kept separate from the solid --success/--warning/--danger fills
+     because text needs enough contrast against the page in BOTH themes: the bright variants
+     below are tuned for dark panels, and the light theme overrides them with darker shades. */
+  --success-text: #34d399;
+  --warning-text: #fbbf24;
+  --danger-text:  #f87171;
 }
 
 html[data-theme='light'] {
@@ -41,6 +47,10 @@ html[data-theme='light'] {
   --accent-soft:  rgba(79, 70, 229, 0.08);
   --accent-2:     #2563eb;
   --accent-3:     #7c3aed;
+  /* Light theme: the dark-mode pastels fail contrast on white, so go several steps darker. */
+  --success-text: #047857;
+  --warning-text: #b45309;
+  --danger-text:  #b91c1c;
 }
 
 html[data-theme='light'] body                             { background: var(--bg); }

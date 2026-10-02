@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Field } from '../_components/Field';
 
 const VERTICALS = [
@@ -35,7 +36,7 @@ export default function BlogPage() {
   const [persona, setPersona] = useState('');
   const [personaOptions, setPersonaOptions] = useState<string[]>([]);
   const [targetAudience, setTargetAudience] = useState('Intermediate');
-  const [wordsLength, setWordsLength] = useState(2500);
+  const [wordsLength, setWordsLength] = useState(1200);
   const [seoMode, setSeoMode] = useState<'none' | 'optimize' | 'rewrite'>('none');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -105,13 +106,19 @@ export default function BlogPage() {
     <div className="max-w-3xl space-y-6">
 
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight" style={{ color: 'var(--text)' }}>
-          Blog Generator
-        </h1>
-        <p className="mt-0.5 text-sm" style={{ color: 'var(--text-dim)' }}>
-          Multi-stage pipeline: draft → editorial review → SEO → PR review → widgets → Educative blocks.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight" style={{ color: 'var(--text)' }}>
+            Blog Generator
+          </h1>
+          <p className="mt-0.5 text-sm" style={{ color: 'var(--text-dim)' }}>
+            Multi-stage pipeline: draft → editorial review → SEO → PR review → widgets → Educative blocks.
+          </p>
+        </div>
+        {/* Channels are global — one added here also appears in the newsletter pipeline. */}
+        <Link href="/channels" className="btn-secondary text-xs shrink-0">
+          Publishing channels
+        </Link>
       </div>
 
       {/* Form */}

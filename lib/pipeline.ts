@@ -1,4 +1,4 @@
-import { generateText, reviewText, generateTextStream, openaiSearch, parseJsonLoose, TEXT_GENERATOR_MODEL, OPENAI_LIGHT } from './ai';
+import { generateText, reviewText, generateTextStream, openaiSearch, parseJsonLoose } from './ai';
 import {
   outlineSearchPrompt,
   outlineGeneratorPrompt,
@@ -22,8 +22,10 @@ import {
   prReviewerPrompt,
   newsletterJsonOutlinePrompt,
   newsletterTextGeneratorPrompt,
+  technicalBlogTextGeneratorPrompt,
 } from './promptsRegistry';
 import { getPersonaBody } from './personaStore';
+import { modelForStage } from './modelTiers';
 import {
   sanitizeText,
   extractWidgetTags,
@@ -31,6 +33,7 @@ import {
   buildTableWidget,
   buildImageWidget,
   mergeWidgets,
+  acceptRewrite,
 } from './transforms';
 import {
   markdownToHtml,
@@ -84,7 +87,7 @@ export async function runOutlinePipeline(input: OutlineInput, emit: Emit): Promi
       description: input.description,
       referenceContent: (input.referenceContent || '') + '\n\n' + research,
     }),
-    { maxTokens: 8000 }
+    { tier: 'main', maxTokens: 8000 }
   );
   emit({ type: 'data', name: 'outline', payload: outline });
   emit({ type: 'stage', name: 'outline', status: 'done' });
@@ -202,10 +205,13 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
 
   // Per-stage logger — emits to UI (log event) AND console for server-side trace.
   const stageLog = (name: string, prompt: string, inputs: any, output: any) => {
-    const entry = { stage: name, prompt, input: inputs, output };
+    // `model` is resolved from the stage→tier map, so the debug panel shows exactly which model
+    // produced this output rather than leaving it to be inferred.
+    const model = modelForStage(name);
+    const entry = { stage: name, model, prompt, input: inputs, output };
     try {
       console.log(
-        `\n========= [stage:${name}] =========\n` +
+        `\n========= [stage:${name}]${model ? ` model=${model}` : ''} =========\n` +
           `--- prompt (first 400 chars) ---\n${String(prompt).slice(0, 400)}\n` +
           `--- input ---\n${typeof inputs === 'string' ? inputs.slice(0, 400) : JSON.stringify(inputs, null, 2).slice(0, 800)}\n` +
           `--- output (first 400 chars) ---\n${typeof output === 'string' ? output.slice(0, 400) : JSON.stringify(output).slice(0, 800)}\n` +
@@ -240,7 +246,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
     extraDetails: `Target audience: ${input.targetAudience}. Blog summary: ${input.blogSummary}`,
   };
   const joPrompt = isGenAI ? genAiJsonOutlinePrompt(joArgs) : createJsonOutlinePrompt(joArgs);
-  const jsonOutlineRaw = await generateText(joPrompt, { maxTokens: 8000 });
+  const jsonOutlineRaw = await generateText(joPrompt, { tier: 'main', maxTokens: 8000 });
   stageLog('json-outline', joPrompt, { wordsLength, blogTitle: input.blogTitle, userOutline: input.outline || '(empty)', agent: isGenAI ? 'genai-json-outline' : 'json-outline' }, jsonOutlineRaw);
   let jsonOutline: any;
   try {
@@ -303,14 +309,14 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
     // text-generator does NOT run for this vertical.
     emit({ type: 'stage', name: 'projects-text-generator', status: 'start' });
     const tgPrompt = projectsTextGeneratorPrompt(tgInputs);
-    const initial = await generateText(tgPrompt, { maxTokens: 16000, noThinking: true });
+    const initial = await generateText(tgPrompt, { tier: 'main', maxTokens: 16000, noThinking: true });
     stageLog('projects-text-generator', tgPrompt, { wordsLength, vertical: input.vertical, audience: input.targetAudience }, initial);
     emit({ type: 'data', name: 'projects-text-generator', payload: initial });
     emit({ type: 'stage', name: 'projects-text-generator', status: 'done' });
 
     emit({ type: 'stage', name: 'projects-reviewer', status: 'start' });
     const prPrompt = projectsReviewerPrompt({ personaPrompt, wordsLength, draft: initial });
-    draft = await generateText(prPrompt, { maxTokens: 16000, noThinking: true });
+    draft = await generateText(prPrompt, { tier: 'main', maxTokens: 16000, noThinking: true });
     stageLog('projects-reviewer', prPrompt, { wordsLength }, draft);
     emit({ type: 'data', name: 'projects-reviewer', payload: draft });
     emit({ type: 'stage', name: 'projects-reviewer', status: 'done' });
@@ -319,7 +325,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
     // passes on top.
     emit({ type: 'stage', name: 'text-generator', status: 'start' });
     const tgPrompt = textGeneratorPrompt(tgInputs);
-    // Heavy drafting stage — pinned to TEXT_GENERATOR_MODEL. Streamed token-by-token
+    // Heavy drafting stage — runs on the 'main' tier model. Streamed token-by-token
     // (≈30ms throttle) so the UI can show text appearing live in the text-generator output panel
     // instead of waiting ~minute for the full draft. The runManager treats 'stream' events as
     // ephemeral (only the latest payload is retained for late re-attachers).
@@ -332,7 +338,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
         lastStreamAt = now;
         emit({ type: 'stream', name: 'text-generator', payload: accumulated });
       },
-      { maxTokens: 16000, model: TEXT_GENERATOR_MODEL },
+      { maxTokens: 16000, tier: 'main' },
     );
     // Final flush so UI shows the complete draft (in case last token landed inside the throttle window).
     emit({ type: 'stream', name: 'text-generator', payload: initial });
@@ -343,7 +349,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
     if (isCIP) {
       emit({ type: 'stage', name: 'medium-dna', status: 'start' });
       const dnaPrompt = mediumDnaAnalysisPrompt(input.blogTitle);
-      const dna = await generateText(dnaPrompt, { model: OPENAI_LIGHT, maxTokens: 4000 });
+      const dna = await generateText(dnaPrompt, { tier: 'normal', maxTokens: 4000 });
       stageLog('medium-dna', dnaPrompt, { blogTitle: input.blogTitle }, dna);
       emit({ type: 'data', name: 'medium-dna', payload: dna });
       emit({ type: 'stage', name: 'medium-dna', status: 'done' });
@@ -357,7 +363,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
         targetAudience: audienceVoiceGuidance(input.targetAudience),
         wordsLength,
       });
-      draft = await generateText(cipPrompt, { maxTokens: 16000, noThinking: true });
+      draft = await generateText(cipPrompt, { tier: 'main', maxTokens: 16000, noThinking: true });
       stageLog('cip-final-pass', cipPrompt, { wordsLength, blogTitle: input.blogTitle }, draft);
       emit({ type: 'data', name: 'cip-final-pass', payload: draft });
       emit({ type: 'stage', name: 'cip-final-pass', status: 'done' });
@@ -400,19 +406,20 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
 
     emit({ type: 'stage', name: 'zachgpt-review', status: 'start' });
     const zrPrompt = zachGptReviewPrompt(d);
-    const feedback = await generateText(zrPrompt, { model: OPENAI_LIGHT, maxTokens: 8000 });
+    const feedback = await generateText(zrPrompt, { tier: 'normal', maxTokens: 8000 });
     stageLog('zachgpt-review', zrPrompt, { draft: d.slice(0, 600) + '…' }, feedback);
     emit({ type: 'data', name: 'zachgpt-review', payload: feedback });
     emit({ type: 'stage', name: 'zachgpt-review', status: 'done' });
 
     emit({ type: 'stage', name: 'zachgpt-incorporate', status: 'start' });
     const ziPrompt = zachGptIncorporatePrompt({ draft: d, feedback, wordsLength });
-    const ziOut = await generateText(ziPrompt, { maxTokens: 16000, noThinking: true });
+    const ziOut = await generateText(ziPrompt, { tier: 'normal', maxTokens: 16000, noThinking: true });
     stageLog('zachgpt-incorporate', ziPrompt, { wordsLength, feedback: feedback.slice(0, 400) + '…' }, ziOut);
-    const ziSanitized = sanitizeText(ziOut);
-    // Guard: if the incorporate output is suspiciously short or looks like a meta-response (the LLM
-    // returning a refusal/placeholder instead of actual blog text), fall back to the original draft.
-    d = ziSanitized.length > 300 ? ziSanitized : d;
+    // Guard against a refusal, a placeholder, or the model reciting the prompt back.
+    d = acceptRewrite(d, sanitizeText(ziOut), ziPrompt, {
+      minRatio: 0.3,
+      onReject: (why) => emit({ type: 'log', name: 'zachgpt-incorporate', message: `Discarded incorporate output: ${why}` }),
+    });
     emit({ type: 'data', name: 'zachgpt-incorporate', payload: d });
     emit({ type: 'stage', name: 'zachgpt-incorporate', status: 'done' });
 
@@ -436,7 +443,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
         finalKeywords: keywords,
         wordsLength,
       });
-      const seOut = await generateText(sePrompt, { maxTokens: 16000, noThinking: true });
+      const seOut = await generateText(sePrompt, { tier: 'normal', maxTokens: 16000, noThinking: true });
       // SEO editor returns JSON { updated_blog: "...", seo_analysis: {...} } — extract just the blog text.
       let seoBlog = seOut;
       try {
@@ -454,7 +461,9 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
         }
       }
       stageLog('seo-editor', sePrompt, { mode: seoModeMapped, uiMode: input.seoMode, wordsLength, keywords }, seoBlog);
-      d = sanitizeText(seoBlog);
+      d = acceptRewrite(d, sanitizeText(seoBlog), sePrompt, {
+        onReject: (why) => emit({ type: 'log', name: 'seo-editor', message: `Discarded seo-editor output: ${why}` }),
+      });
       emit({ type: 'data', name: 'seo-editor', payload: d });
       emit({ type: 'stage', name: 'seo-editor', status: 'done' });
     }
@@ -464,11 +473,12 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
     const prPrompt = prReviewerPrompt({ content: d, wordsLength: Number(wordsLength) || 1300 });
     const prOut = await reviewText(prPrompt, 16000, true);
     stageLog('pr-reviewer', prPrompt, { wordsLength }, prOut);
-    const prSanitized = sanitizeText(prOut);
-    // Guard: PR reviewer must output the full blog. If the output is less than half the input length,
-    // the model was truncated (usually thinking tokens consumed most of the budget). Fall back to
-    // the incorporate output so sentinels and full content are preserved.
-    d = prSanitized.length >= d.length * 0.5 ? prSanitized : d;
+    // The reviewer must return the full article. Reject a truncated reply, and — seen in the
+    // wild — one that recites its own prompt instead of editing. Either way keep the prior draft
+    // so sentinels and content survive.
+    d = acceptRewrite(d, sanitizeText(prOut), prPrompt, {
+      onReject: (why) => emit({ type: 'log', name: 'pr-reviewer', message: `Discarded pr-reviewer output: ${why}` }),
+    });
     emit({ type: 'data', name: 'pr-reviewer', payload: d });
     emit({ type: 'stage', name: 'pr-reviewer', status: 'done' });
 
@@ -539,7 +549,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
   const codePromises = codes.map(async (b) => {
     const prompt = codeGeneratorPrompt(JSON.stringify(b.payload));
     const out = await subStage(`code-generator#${b.order}`, prompt, b.payload, () =>
-      generateText(prompt, { model: OPENAI_LIGHT, maxTokens: 4000 }),
+      generateText(prompt, { tier: 'normal', maxTokens: 4000 }),
     );
     return { order: b.order, raw: out, html: buildCodeWidget(out, b.order) };
   });
@@ -549,7 +559,7 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
     const reference = await subStage(`table-research#${b.order}`, refPrompt, b.payload, () => openaiSearch(refPrompt));
     const prompt = tableGeneratorPrompt({ reference, original: JSON.stringify(b.payload) });
     const out = await subStage(`table-generator#${b.order}`, prompt, { reference, original: b.payload }, () =>
-      generateText(prompt, { model: OPENAI_LIGHT, maxTokens: 4000 }),
+      generateText(prompt, { tier: 'normal', maxTokens: 4000 }),
     );
     return { order: b.order, raw: out, html: buildTableWidget(out, b.order) };
   });
@@ -688,6 +698,11 @@ export interface NewsletterInput {
   seoMode?: 'none' | 'optimize' | 'rewrite';
   outline?: string;
   vertical?: string;
+  /**
+   * Which kind of article this run produces. The pipeline is identical for both; the only
+   * difference is which text-generator prompt runs. Defaults to 'newsletter'.
+   */
+  contentType?: 'newsletter' | 'technical-blog';
 }
 
 export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, waitForResume?: WaitForResume): Promise<any> {
@@ -695,10 +710,13 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
   const vertical = input.vertical || 'Newsletter';
 
   const stageLog = (name: string, prompt: string, inputs: any, output: any) => {
-    const entry = { stage: name, prompt, input: inputs, output };
+    // `model` is resolved from the stage→tier map, so the debug panel shows exactly which model
+    // produced this output rather than leaving it to be inferred.
+    const model = modelForStage(name);
+    const entry = { stage: name, model, prompt, input: inputs, output };
     try {
       console.log(
-        `\n========= [stage:${name}] =========\n` +
+        `\n========= [stage:${name}]${model ? ` model=${model}` : ''} =========\n` +
           `--- prompt (first 400 chars) ---\n${String(prompt).slice(0, 400)}\n` +
           `--- input ---\n${typeof inputs === 'string' ? inputs.slice(0, 400) : JSON.stringify(inputs, null, 2).slice(0, 800)}\n` +
           `--- output (first 400 chars) ---\n${typeof output === 'string' ? output.slice(0, 400) : JSON.stringify(output).slice(0, 800)}\n` +
@@ -729,7 +747,7 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
     extraDetails: input.blogSummary || '',
   };
   const joPrompt = newsletterJsonOutlinePrompt(joArgs);
-  const jsonOutlineRaw = await generateText(joPrompt, { maxTokens: 8000 });
+  const jsonOutlineRaw = await generateText(joPrompt, { tier: 'main', maxTokens: 8000 });
   stageLog('json-outline', joPrompt, joArgs, jsonOutlineRaw);
   let jsonOutline: any;
   try { jsonOutline = parseJsonLoose(jsonOutlineRaw); } catch { jsonOutline = { raw: jsonOutlineRaw }; }
@@ -772,15 +790,22 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
   const outlineSummary = jsonOutline?.['Newsletter summary'] || jsonOutline?.['Blog summary'] || input.blogSummary;
 
   // 3) Text generation — newsletter-specific prompt, no persona, straight through
-  emit({ type: 'stage', name: 'text-generator', status: 'start' });
-  const tgPrompt = newsletterTextGeneratorPrompt({
+  // The pipeline's only branch point. Both content types run every other stage identically;
+  // 'technical-blog' simply swaps the drafting prompt. A distinct stage name is emitted so the
+  // live tracker, stage outputs and /graph show which prompt actually ran.
+  const isTechnicalBlog = input.contentType === 'technical-blog';
+  const tgStage = isTechnicalBlog ? 'technical-blog-text-generator' : 'text-generator';
+
+  emit({ type: 'stage', name: tgStage, status: 'start' });
+  const tgArgs = {
     blogTitle: input.blogTitle,
     wordsLength,
     vertical,
     targetAudience: audienceVoiceGuidance(input.targetAudience),
     blogSummary: outlineSummary,
     outlineString,
-  });
+  };
+  const tgPrompt = isTechnicalBlog ? technicalBlogTextGeneratorPrompt(tgArgs) : newsletterTextGeneratorPrompt(tgArgs);
   let lastStreamAt = 0;
   const initial = await generateTextStream(
     tgPrompt,
@@ -788,14 +813,14 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
       const now = Date.now();
       if (now - lastStreamAt < 30) return;
       lastStreamAt = now;
-      emit({ type: 'stream', name: 'text-generator', payload: accumulated });
+      emit({ type: 'stream', name: tgStage, payload: accumulated });
     },
-    { maxTokens: 16000, model: TEXT_GENERATOR_MODEL },
+    { maxTokens: 16000, tier: 'main' },
   );
-  emit({ type: 'stream', name: 'text-generator', payload: initial });
-  stageLog('text-generator', tgPrompt, { wordsLength, audience: input.targetAudience }, initial);
-  emit({ type: 'data', name: 'text-generator', payload: initial });
-  emit({ type: 'stage', name: 'text-generator', status: 'done' });
+  emit({ type: 'stream', name: tgStage, payload: initial });
+  stageLog(tgStage, tgPrompt, { wordsLength, audience: input.targetAudience, contentType: input.contentType || 'newsletter' }, initial);
+  emit({ type: 'data', name: tgStage, payload: initial });
+  emit({ type: 'stage', name: tgStage, status: 'done' });
 
   const seedDraft = sanitizeText(initial)
     .replace(/(\[image\][\s\S]*?\[\/Caption\])(?!\s*\[\/image\])/gi, '$1[/image]');
@@ -820,17 +845,20 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
 
     emit({ type: 'stage', name: 'zachgpt-review', status: 'start' });
     const zrPrompt = zachGptReviewPrompt(d);
-    const feedback = await generateText(zrPrompt, { model: OPENAI_LIGHT, maxTokens: 8000 });
+    const feedback = await generateText(zrPrompt, { tier: 'normal', maxTokens: 8000 });
     stageLog('zachgpt-review', zrPrompt, { draft: d.slice(0, 600) + '…' }, feedback);
     emit({ type: 'data', name: 'zachgpt-review', payload: feedback });
     emit({ type: 'stage', name: 'zachgpt-review', status: 'done' });
 
     emit({ type: 'stage', name: 'zachgpt-incorporate', status: 'start' });
     const ziPrompt = zachGptIncorporatePrompt({ draft: d, feedback, wordsLength });
-    const ziOut = await generateText(ziPrompt, { maxTokens: 16000, noThinking: true });
+    const ziOut = await generateText(ziPrompt, { tier: 'normal', maxTokens: 16000, noThinking: true });
     stageLog('zachgpt-incorporate', ziPrompt, { wordsLength }, ziOut);
-    const ziSanitized = sanitizeText(ziOut);
-    d = ziSanitized.length > 300 ? ziSanitized : d;
+    // Guard against a refusal, a placeholder, or the model reciting the prompt back.
+    d = acceptRewrite(d, sanitizeText(ziOut), ziPrompt, {
+      minRatio: 0.3,
+      onReject: (why) => emit({ type: 'log', name: 'zachgpt-incorporate', message: `Discarded incorporate output: ${why}` }),
+    });
     emit({ type: 'data', name: 'zachgpt-incorporate', payload: d });
     emit({ type: 'stage', name: 'zachgpt-incorporate', status: 'done' });
 
@@ -845,7 +873,7 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
       emit({ type: 'stage', name: 'seo-editor', status: 'start' });
       const seoModeMapped = input.seoMode === 'rewrite' ? 'FLEXIBLE' : 'STRICT';
       const sePrompt = seoEditorPrompt({ mode: seoModeMapped, blogTitle: input.blogTitle, summary: input.blogSummary, draft: d, finalKeywords: keywords, wordsLength });
-      const seOut = await generateText(sePrompt, { maxTokens: 16000, noThinking: true });
+      const seOut = await generateText(sePrompt, { tier: 'normal', maxTokens: 16000, noThinking: true });
       let seoBlog = seOut;
       try {
         const parsed = parseJsonLoose(seOut);
@@ -856,7 +884,9 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
         if (m && m[1].length > 100) { try { seoBlog = JSON.parse(`"${m[1]}"`); } catch {} }
       }
       stageLog('seo-editor', sePrompt, { mode: seoModeMapped }, seoBlog);
-      d = sanitizeText(seoBlog);
+      d = acceptRewrite(d, sanitizeText(seoBlog), sePrompt, {
+        onReject: (why) => emit({ type: 'log', name: 'seo-editor', message: `Discarded seo-editor output: ${why}` }),
+      });
       emit({ type: 'data', name: 'seo-editor', payload: d });
       emit({ type: 'stage', name: 'seo-editor', status: 'done' });
     }
@@ -865,8 +895,9 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
     const prPrompt = prReviewerPrompt({ content: d, wordsLength: Number(wordsLength) || 1300 });
     const prOut = await reviewText(prPrompt, 16000, true);
     stageLog('pr-reviewer', prPrompt, { wordsLength }, prOut);
-    const prSanitized = sanitizeText(prOut);
-    d = prSanitized.length >= d.length * 0.5 ? prSanitized : d;
+    d = acceptRewrite(d, sanitizeText(prOut), prPrompt, {
+      onReject: (why) => emit({ type: 'log', name: 'pr-reviewer', message: `Discarded pr-reviewer output: ${why}` }),
+    });
     emit({ type: 'data', name: 'pr-reviewer', payload: d });
     emit({ type: 'stage', name: 'pr-reviewer', status: 'done' });
 
@@ -912,7 +943,7 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
 
   const codePromises = codes.map(async (b) => {
     const prompt = codeGeneratorPrompt(JSON.stringify(b.payload));
-    const out = await subStage(`code-generator#${b.order}`, prompt, b.payload, () => generateText(prompt, { model: OPENAI_LIGHT, maxTokens: 4000 }));
+    const out = await subStage(`code-generator#${b.order}`, prompt, b.payload, () => generateText(prompt, { tier: 'normal', maxTokens: 4000 }));
     return { order: b.order, raw: out, html: buildCodeWidget(out, b.order) };
   });
 
@@ -920,7 +951,7 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
     const refPrompt = tableResearchPrompt(JSON.stringify(b.payload));
     const reference = await subStage(`table-research#${b.order}`, refPrompt, b.payload, () => openaiSearch(refPrompt));
     const prompt = tableGeneratorPrompt({ reference, original: JSON.stringify(b.payload) });
-    const out = await subStage(`table-generator#${b.order}`, prompt, { reference, original: b.payload }, () => generateText(prompt, { model: OPENAI_LIGHT, maxTokens: 4000 }));
+    const out = await subStage(`table-generator#${b.order}`, prompt, { reference, original: b.payload }, () => generateText(prompt, { tier: 'normal', maxTokens: 4000 }));
     return { order: b.order, raw: out, html: buildTableWidget(out, b.order) };
   });
 
@@ -973,7 +1004,10 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
   emit({ type: 'stage', name: 'editor-blocks', status: 'done' });
 
   const final = {
-    title: cleanTitle || input.blogTitle,
+    // The title the user typed is authoritative. sanitizeAndFormat() derives `cleanTitle` from
+    // the first <h1> in the article, but section headings are H1 in these prompts — so that is
+    // the first *section* heading, not the article title. Using it silently renamed the post.
+    title: input.blogTitle || cleanTitle,
     persona: '',
     vertical,
     audience: input.targetAudience,

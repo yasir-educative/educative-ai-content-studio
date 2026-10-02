@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Field } from '../../_components/Field';
 
@@ -32,6 +33,8 @@ export default function NewNewsletterPage() {
 
   const [blogTitle, setBlogTitle] = useState('');
   const [vertical, setVertical] = useState('System Design');
+  // The pipeline is identical for both; only the text-generator prompt differs.
+  const [contentType, setContentType] = useState<'newsletter' | 'technical-blog'>('newsletter');
   const [outline, setOutline] = useState('');
   const [targetAudience, setTargetAudience] = useState('Intermediate');
   const [wordsLength, setWordsLength] = useState(1500);
@@ -55,6 +58,7 @@ export default function NewNewsletterPage() {
           blogSummary: '',
           wordsLength: Number(wordsLength),
           seoMode,
+          contentType,
         }),
       });
       if (!res.ok || !res.body) { setErr('Request failed'); setBusy(false); return; }
@@ -96,25 +100,56 @@ export default function NewNewsletterPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <span className="pill mb-3">Newsletter</span>
-        <h1 className="text-3xl font-bold tracking-tight">
-          <span className="brand-gradient">Newsletter</span> Generator
-        </h1>
-        <p className="mt-2 text-[var(--text-dim)] max-w-2xl text-sm">
-          Same multi-stage pipeline as the blog generator — research, drafting, editorial review, SEO, and widget generation — without persona voice selection.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <span className="pill mb-3">Newsletter</span>
+          <h1 className="text-3xl font-bold tracking-tight">
+            <span className="brand-gradient">Newsletter</span> Generator
+          </h1>
+          <p className="mt-2 text-[var(--text-dim)] max-w-2xl text-sm">
+            Same multi-stage pipeline as the blog generator — research, drafting, editorial review, SEO, and widget generation — without persona voice selection.
+          </p>
+        </div>
+        {/* Channels are global — one added here also appears in the blog pipeline. */}
+        <Link href="/channels" className="btn-secondary text-xs shrink-0 mt-1">
+          Publishing channels
+        </Link>
       </div>
 
       <form onSubmit={submit} className="card p-6 space-y-5">
-        <Field label="Newsletter subject / title">
+        <Field label={contentType === 'technical-blog' ? 'Blog title' : 'Newsletter subject / title'}>
           <input
             className="input"
             required
-            placeholder="The subject line or title of the newsletter"
+            placeholder={contentType === 'technical-blog' ? 'The headline of the article' : 'The subject line or title of the newsletter'}
             value={blogTitle}
             onChange={(e) => setBlogTitle(e.target.value)}
           />
+        </Field>
+
+        <Field
+          label="Content type"
+          hint={
+            contentType === 'technical-blog'
+              ? 'Same pipeline, drafted by the Technical Blog prompt — a standalone article with no issue framing or sign-off.'
+              : 'Same pipeline, drafted by the Newsletter prompt.'
+          }
+        >
+          <div className="flex gap-2">
+            {([
+              ['newsletter', 'Newsletter'],
+              ['technical-blog', 'Technical Blog'],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={`btn-secondary text-xs${contentType === value ? ' ring-1 ring-[var(--accent)]' : ''}`}
+                onClick={() => setContentType(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </Field>
 
         <div className="grid sm:grid-cols-4 gap-4">

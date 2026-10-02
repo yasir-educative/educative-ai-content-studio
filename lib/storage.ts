@@ -25,12 +25,19 @@ export interface SavedBlog {
     wordsLength: number;
     seoMode: string;
     outline?: string;
+    // newsletter-specific: 'newsletter' (default) or 'technical-blog'
+    contentType?: 'newsletter' | 'technical-blog';
     // course-specific
     chapterTitle?: string;
     courseTitle?: string;
     authorId?: string;
     collectionId?: string;
   };
+  /**
+   * The model tiers in force when this run started. Recorded so a finished run can be audited:
+   * changing the configuration later must not rewrite the history of what actually ran.
+   */
+  models?: { main: string; normal: string };
   coursePageId?: string;
   // pipeline outputs
   finalTitle?: string;
@@ -41,10 +48,24 @@ export interface SavedBlog {
   // pipeline trace for re-rendering StageOutputs on the detail page
   stageOutputs?: Record<string, any>;
   stageLogs?: Record<string, any[]>;
-  // publish state
+  // publish state — publishedUrl/publishedAt track the most recent publish of any kind,
+  // publishTargets keeps the per-channel history so the UI can show every destination at once.
   publishedUrl?: string;
   publishedAt?: string;
+  publishTargets?: Record<string, PublishTarget>;
   errorMessage?: string;
+}
+
+export interface PublishTarget {
+  channelId: string;
+  channelName: string;
+  channelType: 'educative' | 'wordpress' | 'devto' | 'substack';
+  url: string;
+  externalId?: string;
+  publishedAt: string;
+  warnings?: string[];
+  /** Destination-hosted image URLs, keyed by source filename. */
+  images?: Record<string, string>;
 }
 
 export interface BlogSummary {

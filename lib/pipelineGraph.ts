@@ -248,7 +248,7 @@ export const blogGraph: PipelineGraph = {
 //      │
 //   outline-review (gate — auto-continues after 65s)
 //      │
-//   text-generator (newsletter-text-generator)
+//   text-generator (newsletter-text-generator) | technical-blog-text-generator
 //      │
 //   seed-draft (fan-out)
 //    ┌───────────────────────────────┐
@@ -278,7 +278,8 @@ export const newsletterGraph: PipelineGraph = {
     { id: 'nl-topic-research',      label: 'Topic research',           agent: 'openai-search',  prompt: 'initial-topic-search',                            rank: 1,  lane: 0 },
     { id: 'nl-json-outline',        label: 'JSON outline',             agent: 'gemini-text',    prompt: 'newsletter-json-outline',                         rank: 2,  lane: 0 },
     { id: 'nl-outline-review',      label: 'Outline review (gate)',    agent: 'terminal',       notes: 'Pauses 65s for user edit; auto-continues.',        rank: 3,  lane: 0 },
-    { id: 'nl-text-generator',      label: 'Text generator',           agent: 'gemini-text',    prompt: 'newsletter-text-generator', model: 'gemini-2.5-pro (streaming)', rank: 4, lane: 0 },
+    { id: 'nl-text-generator',      label: 'Text generator',           agent: 'gemini-text',    prompt: 'newsletter-text-generator', model: 'gemini-2.5-pro (streaming)', notes: 'Content type = Newsletter.', rank: 4, lane: 0 },
+    { id: 'nl-tb-text-generator',   label: 'Technical blog generator', agent: 'gemini-text',    prompt: 'technical-blog-text-generator', model: 'gemini-2.5-pro (streaming)', notes: 'Content type = Technical Blog. The pipeline\'s only branch.', rank: 4, lane: -1 },
     { id: 'nl-seed-draft',          label: 'Seed draft (fan-out)',     agent: 'fanout',                                                                    rank: 5,  lane: 0 },
 
     // Editorial branch (left)
@@ -308,8 +309,10 @@ export const newsletterGraph: PipelineGraph = {
     { from: 'nl-start',               to: 'nl-topic-research' },
     { from: 'nl-topic-research',      to: 'nl-json-outline' },
     { from: 'nl-json-outline',        to: 'nl-outline-review' },
-    { from: 'nl-outline-review',      to: 'nl-text-generator' },
+    { from: 'nl-outline-review',      to: 'nl-text-generator',   when: 'contentType = newsletter' },
+    { from: 'nl-outline-review',      to: 'nl-tb-text-generator', when: 'contentType = technical-blog' },
     { from: 'nl-text-generator',      to: 'nl-seed-draft' },
+    { from: 'nl-tb-text-generator',   to: 'nl-seed-draft' },
 
     // Editorial branch
     { from: 'nl-seed-draft',          to: 'nl-zachgpt-review' },

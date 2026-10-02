@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
+import { PublishMenu, PublishResults, type PublishChannel, type PublishOutcome } from '@/app/_components/PublishMenu';
 const MarkdownRenderer = dynamic(() => import('@/app/_components/MarkdownRenderer'), { ssr: false });
 const StageOutputs = dynamic(() => import('@/app/_components/StageOutputs').then((m) => m.StageOutputs), { ssr: false });
 
@@ -183,8 +184,8 @@ export default function HistoryDetailPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [debugOpen, setDebugOpen] = useState(false);
-  const [publishing, setPublishing] = useState(false);
-  const [publishMsg, setPublishMsg] = useState('');
+  const [publishOutcomes, setPublishOutcomes] = useState<PublishOutcome[]>([]);
+  const [publishErr, setPublishErr] = useState('');
 
   const [contentView, setContentView] = useState<null | 'html' | 'markdown'>(null);
   const [editing, setEditing] = useState(false);
@@ -210,24 +211,39 @@ export default function HistoryDetailPage() {
   }
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [params.id]);
 
-  async function rePublish() {
-    if (!blog?.editorBlocks?.length) return;
-    setPublishing(true);
-    setPublishMsg('');
+  async function publish(channel: PublishChannel) {
+    if (!blog?.editorBlocks?.length && !blog?.html) {
+      setPublishErr('Nothing to publish');
+      return;
+    }
+    setPublishErr('');
     try {
       const res = await fetch('/api/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: blog.finalTitle || blog.request?.blogTitle, blocks: blog.editorBlocks, blogId: blog.id }),
+        body: JSON.stringify({
+          channelId: channel.id,
+          title: blog.finalTitle || blog.request?.blogTitle,
+          blocks: blog.editorBlocks,
+          html: blog.html,
+          markdown: blog.markdown,
+          blogId: blog.id,
+          // A newsletter opened from history must still land on the newsletter template when
+          // the destination is Educative. Other destinations ignore these.
+          ...(blog.runType === 'newsletter'
+            ? { templateId: '5005', pageType: 'newsletter' }
+            : {}),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Publish failed');
-      setPublishMsg(json.url);
+      setPublishOutcomes((prev) => [
+        ...prev.filter((o) => o.channelId !== channel.id),
+        { channelId: channel.id, channelName: json.channelName || channel.name, url: json.url, warnings: json.warnings },
+      ]);
       await load();
     } catch (e: any) {
-      setPublishMsg(`Error: ${e?.message || String(e)}`);
-    } finally {
-      setPublishing(false);
+      setPublishErr(`${channel.name}: ${e?.message || String(e)}`);
     }
   }
 
@@ -426,9 +442,11 @@ export default function HistoryDetailPage() {
             </>
           )}
 
-          <button className="btn-primary" disabled={publishing || !blog.editorBlocks?.length} onClick={rePublish}>
-            {publishing ? 'Publishing…' : blog.publishedUrl ? 'Re-publish' : 'Publish to Educative'}
-          </button>
+          <PublishMenu
+            disabled={!blog.editorBlocks?.length && !blog.html}
+            onPublish={publish}
+            publishedChannelIds={Object.keys(blog.publishTargets || {})}
+          />
           {!editing && <button className="btn-secondary" onClick={remove}>Delete</button>}
         </div>
       </div>
@@ -439,12 +457,29 @@ export default function HistoryDetailPage() {
         </div>
       )}
 
-      {blog.publishedUrl && (
+      {/* Saved history first, then this session's results — PublishResults de-duplicates by
+          channel so a freshly published destination is not listed twice. */}
+      <PublishResults
+        outcomes={[
+          ...Object.values(blog.publishTargets || {}).map((t: any) => ({
+            channelId: t.channelId,
+            channelName: t.channelName,
+            url: t.url,
+            warnings: t.warnings,
+          })),
+          ...publishOutcomes,
+        ]}
+        error={publishErr}
+      />
+      {/* Fallback for records published before per-channel history existed. */}
+      {!Object.keys(blog.publishTargets || {}).length && !publishOutcomes.length && blog.publishedUrl && (
         <div className="text-sm">
-          Published: <a className="underline text-emerald-300 break-all" href={blog.publishedUrl} target="_blank" rel="noreferrer">{blog.publishedUrl}</a>
+          <span style={{ color: 'var(--text-dim)' }}>Published:</span>{' '}
+          <a className="underline break-all" style={{ color: 'var(--success-text)' }} href={blog.publishedUrl} target="_blank" rel="noreferrer">
+            {blog.publishedUrl}
+          </a>
         </div>
       )}
-      {publishMsg && <div className="text-xs text-[var(--text-dim)] break-all">{publishMsg}</div>}
 
       {/* Main content area — mutually exclusive views */}
       {editing ? (

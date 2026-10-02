@@ -12,6 +12,7 @@ import { runBlogPipeline, runNewsletterPipeline, type StageEvent, type BlogInput
 import { runCourseLessonPipeline, type CourseInput } from './coursePipeline';
 import { runWithAbort, isAbortError } from './abortContext';
 import { saveBlog, getBlog, newBlogId, type SavedBlog } from './storage';
+import { getModelConfig } from './modelStore';
 
 type Subscriber = (event: any) => void;
 
@@ -87,6 +88,8 @@ export function startBlogRun(input: BlogInput): RunHandle {
       seoMode: (input as any).seoMode || 'none',
       outline: input.outline,
     },
+    // Snapshot the tiers now — a later config change must not rewrite this run's history.
+    models: (() => { const m = getModelConfig(); return { main: m.mainModel, normal: m.normalModel }; })(),
     stageOutputs: {},
     stageLogs: {},
   };
@@ -181,7 +184,10 @@ export function startNewsletterRun(input: NewsletterInput): RunHandle {
       wordsLength: Number(input.wordsLength) || 0,
       seoMode: (input as any).seoMode || 'none',
       outline: input.outline,
+      contentType: input.contentType || 'newsletter',
     },
+    // Snapshot the tiers now — a later config change must not rewrite this run's history.
+    models: (() => { const m = getModelConfig(); return { main: m.mainModel, normal: m.normalModel }; })(),
     stageOutputs: {},
     stageLogs: {},
   };
@@ -272,6 +278,8 @@ export function startCourseRun(input: CourseInput): RunHandle {
       authorId: input.authorId,
       collectionId: input.collectionId,
     },
+    // Snapshot the tiers now — a later config change must not rewrite this run's history.
+    models: (() => { const m = getModelConfig(); return { main: m.mainModel, normal: m.normalModel }; })(),
     stageOutputs: {},
     stageLogs: {},
   };

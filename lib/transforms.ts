@@ -148,3 +148,63 @@ function escapeHtml(s: string): string {
 function escapeAttr(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/'/g, '&apos;').replace(/"/g, '&quot;');
 }
+
+/**
+ * Detect a rewrite stage that echoed its own instructions instead of editing the article.
+ *
+ * Observed in the wild: the pr-reviewer returned the full "You are the Unified Technical
+ * Proofreader…" prompt as the article body. The existing length guard let it through, because
+ * an echoed prompt is long. Comparing against the prompt itself is what actually catches it.
+ *
+ * The subtlety: these prompts EMBED the draft they are editing, so most of the prompt text also
+ * legitimately appears in the output. A probe is therefore only a signal if it is absent from
+ * `exclude` (the draft going in) — otherwise every successful rewrite looks like an echo.
+ */
+export function looksLikePromptEcho(output: string, prompt: string, exclude = ''): boolean {
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const out = norm(output);
+  const p = norm(prompt);
+  const prev = norm(exclude);
+  if (out.length < 120 || p.length < 200) return false;
+
+  const PROBE = 80; // long enough to be unique to the instructions, short enough to survive
+                    // the small wording drift a model introduces while reciting them
+
+  // A probe only discriminates if it is absent from the draft going in: these prompts embed
+  // that draft, so most of the prompt legitimately reappears in a good rewrite.
+  const isEcho = (probe: string, haystack: string) =>
+    probe.length >= PROBE && !prev.includes(probe) && haystack.includes(probe);
+
+  // Primary signal: the output opens with text lifted from the prompt.
+  if (isEcho(out.slice(0, PROBE), p)) return true;
+
+  // Secondary: the output contains the prompt's opening instructions verbatim, even if it
+  // prefixed something of its own.
+  return [0, 0.1, 0.2].some((frac) =>
+    isEcho(p.slice(Math.floor(p.length * frac), Math.floor(p.length * frac) + PROBE), out),
+  );
+}
+
+/**
+ * Accept a rewrite only if it still looks like the article.
+ *
+ * Falls back to the previous draft when the model echoed the prompt or returned something far
+ * too short to be the full piece — both of which would otherwise be published verbatim.
+ */
+export function acceptRewrite(
+  previous: string,
+  candidate: string,
+  prompt: string,
+  opts: { minRatio?: number; onReject?: (reason: string) => void } = {},
+): string {
+  const minRatio = opts.minRatio ?? 0.5;
+  if (looksLikePromptEcho(candidate, prompt, previous)) {
+    opts.onReject?.('output echoed the prompt instead of the article');
+    return previous;
+  }
+  if (candidate.length < previous.length * minRatio) {
+    opts.onReject?.(`output was ${Math.round((candidate.length / previous.length) * 100)}% of the input length`);
+    return previous;
+  }
+  return candidate;
+}

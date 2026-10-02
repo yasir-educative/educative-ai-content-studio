@@ -7,7 +7,7 @@
 //   3. JSON Generator  (Gemini 2.5 Pro)
 //   4. Image generation for text_img / img_only cards
 
-import { openaiSearch, generateText, TEXT_GENERATOR_MODEL, parseJsonLoose } from './ai';
+import { openaiSearch, generateText, parseJsonLoose } from './ai';
 import { generateGptImage, slugify } from './imageGen';
 import type { MobileCard } from './mobileCourseStorage';
 import {
@@ -150,16 +150,16 @@ export async function runMobileShortPipeline(
       objective: input.objective,
       additionalContext: input.additionalContext,
     }),
-    { model: TEXT_GENERATOR_MODEL, maxTokens: 32000 },
+    { tier: 'main', maxTokens: 32000 },
   );
   emit({ type: 'data', name: 'cards-generator', payload: { cardsRaw } });
   emit({ type: 'stage', name: 'cards-generator', status: 'done' });
 
-  // Stage 3: JSON Generator (Gemini 2.5 Pro)
+  // Stage 3: JSON Generator — format normalisation, not authoring
   emit({ type: 'stage', name: 'json-generator', status: 'start' });
   const jsonRaw = await generateText(
     registeredShortsJsonGeneratorPrompt({ cardsOutput: cardsRaw }),
-    { model: TEXT_GENERATOR_MODEL, maxTokens: 32000 },
+    { tier: 'normal', maxTokens: 32000 },
   );
   emit({ type: 'data', name: 'json-generator', payload: { jsonRaw } });
   emit({ type: 'stage', name: 'json-generator', status: 'done' });

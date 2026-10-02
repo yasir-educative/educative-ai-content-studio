@@ -6,7 +6,6 @@ import {
   generateTextStream,
   openaiSearch,
   parseJsonLoose,
-  TEXT_GENERATOR_MODEL,
 } from './ai';
 import {
   courseOutlineGeneratorPrompt,
@@ -47,6 +46,7 @@ import { generateGptImage, slugify } from './imageGen';
 import { buildRunJsHtml } from './runJsTemplate';
 import { updateBlog } from './storage';
 import type { StageEvent, Emit } from './pipeline';
+import { modelForStage } from './modelTiers';
 
 export type { StageEvent, Emit };
 
@@ -381,7 +381,11 @@ function normalizeSummaryElements(raw: any): {
 }
 
 function stageLog(emit: Emit, name: string, prompt: string, args: any, output: any) {
-  emit({ type: 'log', name, message: `stage:${name}`, payload: { prompt, args, output } });
+  const model = modelForStage(name);
+  try {
+    console.log(`[stage:${name}]${model ? ` model=${model}` : ''}`);
+  } catch {}
+  emit({ type: 'log', name, message: `stage:${name}`, payload: { stage: name, model, prompt, args, output } });
 }
 
 // ---------- Main pipeline ----------
@@ -424,7 +428,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     referenceContent: research,
   };
   const joPrompt = courseOutlineGeneratorPrompt(joArgs);
-  const jsonOutlineRaw = await generateText(joPrompt, { maxTokens: 4000 });
+  const jsonOutlineRaw = await generateText(joPrompt, { tier: 'main', maxTokens: 4000 });
   stageLog(emit, 'json-outline', joPrompt, joArgs, jsonOutlineRaw);
   let jsonOutline: any;
   try { jsonOutline = parseJsonLoose(jsonOutlineRaw); } catch { jsonOutline = { raw: jsonOutlineRaw }; }
@@ -469,7 +473,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
       lastStreamAt = now;
       emit({ type: 'stream', name: 'content-creator', payload: accumulated });
     },
-    { maxTokens: 16000, model: TEXT_GENERATOR_MODEL, noThinking: true },
+    { maxTokens: 16000, tier: 'main', noThinking: true },
   );
   emit({ type: 'stream', name: 'content-creator', payload: rawContent });
   stageLog(emit, 'content-creator', ccPrompt, ccArgs, rawContent.slice(0, 300));
@@ -481,7 +485,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
   // ── Stage 4: Summary elements ─────────────────────────────────────────────
   emit({ type: 'stage', name: 'summary-elements', status: 'start' });
   const sePrompt = courseSummaryElementsPrompt({ content: seedContent.slice(0, 8000) });
-  const summaryRaw = await generateText(sePrompt, { maxTokens: 4000, noThinking: true });
+  const summaryRaw = await generateText(sePrompt, { tier: 'normal', maxTokens: 4000, noThinking: true });
   stageLog(emit, 'summary-elements', sePrompt, {}, summaryRaw.slice(0, 300));
   let summaryElements: ReturnType<typeof normalizeSummaryElements> = null;
   try { summaryElements = normalizeSummaryElements(parseJsonLoose(summaryRaw)); } catch {}
@@ -491,7 +495,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
   // ── Stage 5: PR reviewer ──────────────────────────────────────────────────
   emit({ type: 'stage', name: 'pr-reviewer', status: 'start' });
   const prPrompt = coursePrReviewerPrompt({ content: seedContent, summary: summaryElements?.summary || '', wordsLength });
-  const prOut = await generateText(prPrompt, { maxTokens: 16000, noThinking: true });
+  const prOut = await generateText(prPrompt, { tier: 'normal', maxTokens: 16000, noThinking: true });
   stageLog(emit, 'pr-reviewer', prPrompt, {}, prOut.slice(0, 300));
 
   // PR reviewer returns JSON: { Content, Summary }
@@ -542,7 +546,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
       try {
         const codeData = typeof rawCode === 'string' ? rawCode : JSON.stringify(rawCode);
         const p = courseCodeGeneratorPrompt(codeData);
-        const out = await generateText(p, { maxTokens: 2000, noThinking: true });
+        const out = await generateText(p, { tier: 'normal', maxTokens: 2000, noThinking: true });
         stageLog(emit, 'widget-code', p, {}, out);
         const parsed = parseCodeOutput(out);
         return makeCodeBlock(parsed || rawCode) || makeCodeBlock(rawCode);
@@ -563,7 +567,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
       try {
         const desc = typeof rawTable === 'string' ? rawTable : JSON.stringify(rawTable);
         const p = courseTableGeneratorPrompt({ reference: desc, original: desc });
-        const out = await generateText(p, { maxTokens: 1500, noThinking: true });
+        const out = await generateText(p, { tier: 'normal', maxTokens: 1500, noThinking: true });
         stageLog(emit, 'widget-table', p, {}, out);
         const parsed = parseTableOutput(out);
         return makeTableBlock(parsed || rawTable) || makeTableBlock(rawTable);
@@ -590,11 +594,11 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
 
         // Step 1: Elaborate — produce a focused architectural narrative paragraph
         const elaborateP = courseRunJsElaboratePrompt({ lessonTitle: input.lessonTitle, concept, domain });
-        const narrative = await generateText(elaborateP, { maxTokens: 600, noThinking: true });
+        const narrative = await generateText(elaborateP, { tier: 'normal', maxTokens: 600, noThinking: true });
 
         // Step 2: Creator — translate narrative into NODES/CONNECTIONS/STEPS JSON
         const creatorP = courseRunJsCreatorPrompt({ lessonTitle: input.lessonTitle, description: narrative.trim(), domain });
-        const creatorOut = await generateText(creatorP, { maxTokens: 4000, noThinking: true });
+        const creatorOut = await generateText(creatorP, { tier: 'normal', maxTokens: 4000, noThinking: true });
         let sceneData: any = { NODES: [], CONNECTIONS: [], STEPS: [] };
         try {
           const cleaned = creatorOut.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();

@@ -8,6 +8,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { Stages, StageItem } from '@/app/_components/Stages';
 import type { StageOutputMap, StageLogMap } from '@/app/_components/StageOutputs';
+import { PublishMenu, PublishResults, type PublishChannel, type PublishOutcome } from '@/app/_components/PublishMenu';
 
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 const StageOutputs = dynamic(
@@ -16,7 +17,8 @@ const StageOutputs = dynamic(
 );
 
 const STAGE_ORDER = [
-  'topic-research', 'json-outline', 'outline-review', 'text-generator',
+  // Only one of the two text generators runs, decided by the run's content type.
+  'topic-research', 'json-outline', 'outline-review', 'text-generator', 'technical-blog-text-generator',
   'zachgpt-review', 'zachgpt-incorporate', 'seo-keywords', 'seo-editor',
   'pr-reviewer', 'widgets-extract', 'markdown-to-html', 'structure-output',
   'sanitize-format', 'widgets-generate', 'editor-blocks', 'publish',
@@ -159,8 +161,8 @@ export default function NewsletterRunPage() {
   const [running, setRunning] = useState(true);
   const [debugOpen, setDebugOpen] = useState(false);
 
-  const [publishing, setPublishing] = useState(false);
-  const [publishUrl, setPublishUrl] = useState('');
+  // One entry per destination this newsletter has been published to during this session.
+  const [publishOutcomes, setPublishOutcomes] = useState<PublishOutcome[]>([]);
   const [publishErr, setPublishErr] = useState('');
 
   const [contentView, setContentView] = useState<null | 'html' | 'markdown'>(null);
@@ -272,11 +274,14 @@ export default function NewsletterRunPage() {
     abortRef.current?.abort();
   }
 
-  async function publish() {
-    if (!final?.editorBlocks?.length) { setPublishErr('No editor blocks available'); return; }
-    setPublishing(true);
+  async function publish(channel: PublishChannel) {
+    // Educative consumes editor blocks; WordPress and dev.to consume the rendered HTML.
+    // Send everything and let the publisher take what it needs.
+    if (!final?.editorBlocks?.length && !final?.html) {
+      setPublishErr('Nothing to publish yet');
+      return;
+    }
     setPublishErr('');
-    setPublishUrl('');
     try {
       const CATEGORY_MAP: Record<string, string> = {
         'System Design': 'System Design',
@@ -288,9 +293,14 @@ export default function NewsletterRunPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          channelId: channel.id,
           title: final.title,
           blocks: final.editorBlocks,
+          html: final.html,
+          markdown: final.markdown,
           blogId: id,
+          // Educative-only overrides. They take precedence over the channel's own settings so a
+          // newsletter lands on the newsletter template; other destinations ignore them.
           templateId: '5005',
           pageType: 'newsletter',
           categories: JSON.stringify([category]),
@@ -298,11 +308,12 @@ export default function NewsletterRunPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Publish failed');
-      setPublishUrl(json.url);
+      setPublishOutcomes((prev) => [
+        ...prev.filter((o) => o.channelId !== channel.id),
+        { channelId: channel.id, channelName: json.channelName || channel.name, url: json.url, warnings: json.warnings },
+      ]);
     } catch (e: any) {
-      setPublishErr(e?.message || String(e));
-    } finally {
-      setPublishing(false);
+      setPublishErr(`${channel.name}: ${e?.message || String(e)}`);
     }
   }
 
@@ -406,7 +417,11 @@ export default function NewsletterRunPage() {
 
   const isDone = !running && !!final;
   const hasDebug = stages.length > 0 || Object.keys(outputs).length > 0;
-  const liveText = typeof outputs['text-generator'] === 'string' ? outputs['text-generator'] : null;
+  // Either drafting stage may be the live one, depending on content type.
+  const draftStage = typeof outputs['technical-blog-text-generator'] === 'string'
+    ? 'technical-blog-text-generator'
+    : 'text-generator';
+  const liveText = typeof outputs[draftStage] === 'string' ? outputs[draftStage] : null;
 
   const activeContentText = contentView === 'html' ? (final?.html || '') : (final?.markdown || '');
   const activeContentExt = contentView === 'html' ? 'html' : 'md';
@@ -499,26 +514,17 @@ export default function NewsletterRunPage() {
           )}
 
           {isDone && !editing && (
-            <button
-              className="btn-primary"
-              disabled={publishing || !final?.editorBlocks?.length}
-              onClick={publish}
-            >
-              {publishing ? 'Publishing…' : publishUrl ? 'Re-publish' : 'Publish to Educative'}
-            </button>
+            <PublishMenu
+              disabled={!final?.editorBlocks?.length && !final?.html}
+              onPublish={publish}
+              publishedChannelIds={publishOutcomes.map((o) => o.channelId)}
+              storageKey="publish:lastChannel:newsletter"
+            />
           )}
         </div>
       </div>
 
-      {publishUrl && (
-        <div className="text-sm">
-          Published:{' '}
-          <a className="underline text-emerald-300 break-all" href={publishUrl} target="_blank" rel="noreferrer">
-            {publishUrl}
-          </a>
-        </div>
-      )}
-      {publishErr && <div className="text-sm text-red-300">{publishErr}</div>}
+      <PublishResults outcomes={publishOutcomes} error={publishErr} />
       {err && (
         <div className="rounded-xl border border-red-500/40 bg-red-500/10 text-red-300 p-4 text-sm">{err}</div>
       )}
@@ -539,7 +545,7 @@ export default function NewsletterRunPage() {
             </div>
           )}
           {debugOpen && Object.keys(outputs).length > 0 && (
-            <StageOutputs outputs={outputs} logs={logs} order={STAGE_ORDER} defaultTab="text-generator" />
+            <StageOutputs outputs={outputs} logs={logs} order={STAGE_ORDER} defaultTab={draftStage} />
           )}
         </div>
       )}
@@ -575,7 +581,7 @@ export default function NewsletterRunPage() {
             </pre>
           </div>
         ) : debugOpen ? (
-          <StageOutputs outputs={outputs} logs={logs} order={STAGE_ORDER} defaultTab="text-generator" />
+          <StageOutputs outputs={outputs} logs={logs} order={STAGE_ORDER} defaultTab={draftStage} />
         ) : (
           <article ref={articleRef} className="card p-8">
             <div className="article-prose">

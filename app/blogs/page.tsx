@@ -102,6 +102,9 @@ export default function HistoryPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link href="/channels" className="btn-secondary text-xs">
+            Publishing channels
+          </Link>
           <button className="btn-secondary text-xs" onClick={() => router.push('/outline')}>
             Outline Generator
           </button>

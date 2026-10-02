@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
       outline: String(outline || '').trim(),
     });
 
-    const result = await generateText(prompt, { maxTokens: 20000, noThinking: true });
+    const result = await generateText(prompt, { tier: 'main', maxTokens: 20000, noThinking: true });
     let plan: any;
     try {
       plan = parseJsonLoose(result);

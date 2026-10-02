@@ -133,6 +133,7 @@ ${args.userOutline}
 - **Opinionated Insights:** Don't just list facts; provide the persona\u2019s unique perspective on *why* certain industry trends are right or wrong based on the Reference Content.
 - **Tone Matching:** Adapt the energy and vocabulary to the persona\u2014whether it\u2019s high-level strategic, deeply academic, or gritty "in-the-trenches" engineering.
 - **Vertical Filtering:** Strictly align the persona\u2019s "lived experience" with the "Vertical/domain". Suppress irrelevant expertise; for example, if the Vertical is Cloud Computing, the persona should not reference System Design skills or career milestones unless they are directly tied to the topic.
+**Cross-domain focus:** Keep the persona’s discussion focused on the domain of the current topic. Do not insert terminology, examples, or implementation details from the persona’s own background unless they directly help explain the topic. For example, a persona with a coding background discussing system design must prioritize architecture, system behavior, and design trade-offs; include code only when necessary to explain a specific design decision.
 
 # Structural & Logic Rules
 1. **Outline Source:** - If "User-Provided Outline" is present, use those exact headings/order. Update ONLY for sentence case formatting.
@@ -159,7 +160,7 @@ You must strictly adapt your tone, terminology, and depth to the chosen **Vertic
 # Interactivity Requirements
 - **Images:** (strictly and exactly 3 total images) Must be non-generic. It must contain a detailed 2-3 sentence description of the intended visual, highlighting specific components, data flows, or visual elements.
 - **Tables:** Use only for instructional comparisons, trade-offs, or before/after states.
-- **Code:** Use only for critical implementation logic or configuration.
+- **Code:** Use only for critical implementation logic or configuration. Do not add or suggest any code widget when vertical is "System Design".
 - **Placement:** Interactive items should be contextually appropriate to the preceding text section.
   -- Example: (workflow \u2192 image, comparison \u2192 table, code logic \u2192 code).
 - No interactive section as the first or last section.
@@ -207,6 +208,7 @@ You are an expert technical content writer and software architect. Your mission 
 - **Voice:** Write strictly in the **first-person singular ("I", "my")**. You are the author.
 - **Narrative Style:** Use a "scars-to-insights" approach. Reference specific architectural failures, late-night debugging sessions, or strategic wins from your past roles (Microsoft, Meta, etc.) as described in the persona.
 - **Tone:** Opinionated, authoritative, yet grounded. Avoid corporate "fluff" or generic AI enthusiasm.
+**Cross-domain focus:** Keep the persona’s discussion focused on the domain of the current topic. Do not insert terminology, examples, or implementation details from the persona’s own background unless they directly help explain the topic. For example, a persona with a coding background discussing system design must prioritize architecture, system behavior, and design trade-offs; include code only when necessary to explain a specific design decision.
 
 # Inputs & Constraints
 - **Total Word Length:** ${args.wordsLength} (Strictly adhere to this total).
@@ -1719,7 +1721,7 @@ ${args.draft}
 
 # Interactivity Elements
 Use placeholder format only (no images/tables/code generated):
-- [image][2–3 line description][/image]
+- [image][2–3 line description][Short caption in sentence case][/image]
 - [table][Brief description][/table]
 - [code][Brief description][/code]
 
@@ -1798,7 +1800,7 @@ You must strictly adapt your tone, terminology, and depth to the chosen **Vertic
 # Interactivity Requirements
 - **Images:** (strictly and exactly 3 total images) Must be non-generic. It must contain a detailed 2-3 sentence description of the intended visual, highlighting specific components, data flows, or visual elements.
 - **Tables:** Use only for instructional comparisons, trade-offs, or before/after states.
-- **Code:** Use only for critical implementation logic or configuration.
+- **Code:** Use only for critical implementation logic or configuration. Do not add or suggest code widget when the vertical is "System Design"
 - **Placement:** Interactive items should be contextually appropriate to the preceding text section.
   -- Example: (workflow → image, comparison → table, code logic → code).
 - No interactive section as the first or last section.
@@ -2009,3 +2011,173 @@ Rules for interactivity elements:
 - [ ] Paragraphs are 3–4 sentences, 300–450 characters each.
 - [ ] Code terms and commands use inline code formatting.`;
 }
+
+// Technical-blog variant of the newsletter text generator.
+//
+// The newsletter pipeline runs unchanged for both content types; the ONLY difference is which
+// text-generator prompt it calls. Selecting "Technical Blog" swaps this in, so the output reads
+// as a standalone article (no issue framing, preview list, or sign-off) while keeping the same
+// structure, widget placeholders and keyword syntax the rest of the pipeline depends on.
+export function technicalBlogTextGeneratorPrompt(args: {
+  blogTitle: string;
+  wordsLength: string;
+  vertical: string;
+  targetAudience: string;
+  blogSummary: string;
+  outlineString: string;
+}): string {
+  return `You are an expert technical writer. Generate a high-quality standalone technical blog for experienced engineers, technical leads, and practitioners based on the provided outline and reference content.
+
+This is a self-contained article, not a newsletter issue: it has no recurring-digest framing, no "in this issue" preview, and no sign-off. A reader arriving from search or a link must get full value from this page alone.
+
+---
+
+## Inputs
+- **Blog Title:** ${args.blogTitle}
+- **Total word length:** ${args.wordsLength}
+- **Vertical / Audience:** ${args.vertical} / ${args.targetAudience}
+- **Reference content:** ${args.blogSummary}
+- **Outline (source of truth):**
+
+${args.outlineString}
+
+---
+
+## Output format
+
+- Output must be pure Markdown. No JSON, no code blocks wrapping the article.
+- Begin immediately with the hook paragraph. No blog title, no heading before the hook.
+- Section headings use \`#\` (H1) in sentence case.
+- Subsections use \`##\` or \`###\` in sentence case, under 40 characters, no colons.
+
+---
+
+## Document structure
+
+### Opening (introduction)
+
+- Start with a hook that frames a real developer challenge or question.
+- Ground the hook in a concrete scenario, symptom, or decision an engineer would recognise.
+- State the value proposition: what readers will learn and why it matters.
+- Do NOT add an "in this issue" or "what this covers" preview list — that is newsletter framing and does not belong in a standalone article.
+- Do NOT open with clichés ("In today's fast-paced world," "In the rapidly evolving landscape," etc.).
+
+### Body sections
+
+- Follow the outline section order, titles, and types exactly.
+- Use progressive layering within each section: high-level idea → technical depth → examples or use cases → outcomes.
+- End each section with a 1–2 sentence takeaway reinforcing the main point, followed by a transition sentence leading into the next section.
+
+### Closing (conclusion)
+
+- Keep the title short.
+- Write 3–5 sentences covering broad lessons learned, final advice or insights, and a closing thought that reflects post-experience guidance.
+- Do NOT add a newsletter sign-off, subscription nudge, or "see you next issue" line.
+
+---
+
+## Writing rules
+
+### Paragraphs and sentences
+
+- Use short, direct sentences. Avoid fluff, hype, clichés, and exaggerated claims.
+- Each paragraph: 3–4 sentences, roughly 300–450 characters. If a paragraph exceeds this, split it.
+- Break monotony by alternating between narrative paragraphs, short lists, and blockquotes across sections. Each section should use different structural elements from the previous one.
+
+### Tone and language
+
+- Write as a practical engineer explaining to another engineer. No persona or first-person framing.
+- Address the reader with "you" for action-oriented guidance; use "we" for shared industry context.
+- Prioritize technical clarity over cleverness or personality.
+- Avoid metaphors, idioms, stylistic expressions ("just another Tuesday"), and dramatic phrasing.
+- Use only terminology relevant to the chosen vertical. Do not mix verticals unless the outline explicitly requires it.
+
+> **Example of what to avoid:**
+> Dramatic: "Modern System Design must embed security from its inception, treating it as a core architectural primitive rather than an afterthought."
+> Preferred: "Modern system design should build security from the start, treating it as a core part of the architecture."
+
+### Technical depth
+
+- Verify the correctness of every architectural explanation, system behavior, or technical claim.
+- Use precise engineering terminology (e.g., cache invalidation, idempotency, replication lag) — not vague words like "chaos," "glitches," or "issues."
+- Include trade-offs for every design decision, not just benefits.
+- Anchor abstractions in real systems or credible engineering reasoning. Do not fabricate facts.
+- Provide deep explanation for architecture, trade-offs, principles, and comparisons (legacy vs. modern) where relevant.
+- Use LaTeX for math inline: \`$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$\`.
+
+## Structural constraints
+
+| Element | Limit | Rules |
+|---|---|---|
+| Subsections (\`##\`/\`###\`) | ≤ 6 total across the entire article | Use only for comparisons, decisions, or multi-step processes. Otherwise write a paragraph or list. |
+| Lists | 1–3 total across the entire article | Use for breakdowns only. Precede each list with a transition sentence. Items in sentence case: \`1. **Item title:** Detail.\` Narrative paragraphs take priority. |
+| Callouts | 4–6 total | Max 2–3 lines each. Use the exact formats below. |
+| External links | 3–4 inline links to official tools, standards, docs, or reputable companies | + 2–3 [Educative.io](https://www.educative.io) links (prioritize the defined vertical). Anchor text must be descriptive (never "click here"). Never link to competitor e-learning platforms (ByteByteGo, Design Gurus, Hello Interview, etc.). |
+
+### Callout formats
+
+Use these exact formats:
+
+\`\`\`
+> **Note:** …
+> **Practical tip:** …
+> **Watch out:** …
+\`\`\`
+
+### Interactivity placeholders
+
+Use placeholder format only — do not generate actual images, or tables:
+
+\`\`\`
+[image][Description][2–3 line description][/Description][Caption][Short caption in sentence case][/Caption][/image]
+
+[table][Brief description][/table]
+
+\`\`\`
+
+Rules for interactivity elements:
+
+- Add a transition sentence immediately before each placeholder.
+- Place them exactly where the outline's section types require.
+- Never end a section with an interactivity element. Follow it with at least one sentence or a transition.
+- Placeholder text does NOT count toward word totals.
+
+### Transitions
+
+- Every section must end with a transition into the next section.
+- Every interactivity element must be preceded by a transition sentence.
+- Use smooth, natural transitions — avoid abrupt jumps between topics.
+
+---
+
+### Sections writeup
+- Always bring variety to the section writeup. Each section must have different structural elements like short or long paras with lists, blockquotes, etc. Keep shuffling the structural elements in each section to make it look natural and original.
+- To break monotony in paragraphs, break long paragraphs into short (1-3 bullet) lists. e.g. - **point 1:** <detail> ...- **point 2:** <detail>.
+
+
+## Word count compliance
+
+- Each section must match its assigned \`WordLength\` from the outline exactly.
+- The total article must match the requested total word length.
+- Interactivity placeholder text is excluded from word counts.
+
+---
+
+## Self-audit checklist (do NOT output this — verify silently before finalizing)
+
+- [ ] No title or heading before the hook. Article starts with text.
+- [ ] Section count, order, and titles match the outline exactly.
+- [ ] Each section hits its assigned \`WordLength\`. Total matches the target.
+- [ ] Total subsections (\`##\`/\`###\`) ≤ 6.
+- [ ] Total lists: 1–3. All list items in sentence case.
+- [ ] Callouts: 4–6 total.
+- [ ] Every section ends with a transition. Every interactivity element is preceded by a transition.
+- [ ] External links: 3–4 descriptive inline links + 2–3 Educative.io links.
+- [ ] No competitor e-learning links.
+- [ ] Markdown formatting is correct (\`#\` for sections, \`##\`/\`###\` for subsections).
+- [ ] No persona voice. No first-person framing. No newsletter framing, preview list, or sign-off.
+- [ ] No fabricated facts. Trade-offs included for design decisions.
+- [ ] Terminology is precise and vertical-appropriate.
+- [ ] Paragraphs are 3–4 sentences, 300–450 characters each.`;
+}
+

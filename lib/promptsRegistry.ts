@@ -39,6 +39,8 @@ export const tableGeneratorPrompt = registerPrompt('table-generator', P.tableGen
 // --- Newsletter pipeline ---
 export const newsletterJsonOutlinePrompt = registerPrompt('newsletter-json-outline', P.newsletterJsonOutlinePrompt, 'newsletter');
 export const newsletterTextGeneratorPrompt = registerPrompt('newsletter-text-generator', P.newsletterTextGeneratorPrompt, 'newsletter');
+// Technical Blog content type — the newsletter pipeline's only branch point.
+export const technicalBlogTextGeneratorPrompt = registerPrompt('technical-blog-text-generator', P.technicalBlogTextGeneratorPrompt, 'newsletter');
 
 // Branching logic — cannot be template-extracted. Re-exported as-is so pipeline can use it.
 export const audienceVoiceGuidance = P.audienceVoiceGuidance;

@@ -9,6 +9,8 @@ const items = [
   { href: '/newsletter',     label: 'Newsletter',    public: false },
   { href: '/course',         label: 'Course',        public: false },
   { href: '/mobile-course',  label: 'Mobile Course', public: false },
+  { href: '/channels',       label: 'Channels',      public: false },
+  { href: '/models',         label: 'Models',        public: false },
 ];
 
 export function NavLinks() {

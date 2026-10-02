@@ -107,7 +107,7 @@ async function processChapter(
   emit({ type: 'stage', name: `${chapterId}-card-planner`, status: 'start' });
   const plannerOut = await generateText(
     registeredCardPlannerPrompt({ courseTitle, chapterTitle, lessonList: lessonTitles.join(', '), content: content.slice(0, 6000) }),
-    { maxTokens: 4000, noThinking: true },
+    { tier: 'main', maxTokens: 4000, noThinking: true },
   );
   let cardPlan: any[] = [];
   try {
@@ -128,7 +128,7 @@ async function processChapter(
   emit({ type: 'stage', name: `${chapterId}-cards-generator`, status: 'start' });
   const generatorOut = await generateText(
     registeredCardsGeneratorPrompt({ planStr: JSON.stringify(cardPlan) }),
-    { maxTokens: 8000, noThinking: true },
+    { tier: 'main', maxTokens: 8000, noThinking: true },
   );
   let generatedCards: any[] = [];
   try {
@@ -149,7 +149,7 @@ async function processChapter(
   emit({ type: 'stage', name: `${chapterId}-text-refiner`, status: 'start' });
   const refinerOut = await generateText(
     registeredCardTextRefinerPrompt({ cards: JSON.stringify(generatedCards) }),
-    { maxTokens: 8000, noThinking: true },
+    { tier: 'normal', maxTokens: 8000, noThinking: true },
   );
   let refinedCards: any[] = [];
   try {
@@ -164,7 +164,7 @@ async function processChapter(
   emit({ type: 'stage', name: `${chapterId}-json-generator`, status: 'start' });
   const jsonGenOut = await generateText(
     registeredJsonGeneratorPrompt({ refinedInput: JSON.stringify(refinedCards) }),
-    { maxTokens: 8000, noThinking: true },
+    { tier: 'normal', maxTokens: 8000, noThinking: true },
   );
   let finalCards: any[] = [];
   try {

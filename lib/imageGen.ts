@@ -79,23 +79,87 @@ export async function generateGptImage(
   throw lastError ?? new Error('Image generation failed after 3 attempts');
 }
 
-// Extract the raw inner content of each [image]...[/image] tag.
-// Also tries to pull a caption from [Caption]...[/Caption] sub-tags for the editor block.
-export function extractImageContents(draft: string): Array<{ content: string; caption: string }> {
-  const results: Array<{ content: string; caption: string }> = [];
+export interface ImageTagContent {
+  /** The visual description handed to the image generator. */
+  content: string;
+  /** Short caption rendered under the image, and used as its alt text. */
+  caption: string;
+}
+
+/**
+ * Split a string into its top-level `[...]` segments, ignoring nested brackets.
+ *
+ * Descriptions routinely contain brackets of their own ("labeled [A] and [B]"), so a plain
+ * split on `][` would carve them up. Depth tracking keeps each segment whole.
+ */
+function splitTopLevelBrackets(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '[') {
+      if (depth === 0) start = i + 1;
+      depth++;
+    } else if (ch === ']') {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        out.push(s.slice(start, i));
+        start = -1;
+      }
+      if (depth < 0) depth = 0;
+    }
+  }
+  return out.map((x) => x.trim()).filter(Boolean);
+}
+
+/** Strip one redundant `[...]` wrapper, which the models sometimes add around a value. */
+function unwrap(s: string): string {
+  const m = s.trim().match(/^\[([\s\S]+)\]$/);
+  return (m ? m[1] : s).trim();
+}
+
+/**
+ * Pull the description and caption out of every `[image]…[/image]` tag.
+ *
+ * The prompts specify two shapes and the models emit both, so both are parsed here:
+ *
+ *   A (newsletter)  [image][Description][…][/Description][Caption][…][/Caption][/image]
+ *   B (blog)        [image][2–3 line description][Short caption][/image]
+ *
+ * Only shape A used to be handled, so every blog image shipped with an empty caption and empty
+ * alt text. Shape B's caption is simply the last top-level segment.
+ */
+export function extractImageContents(draft: string): ImageTagContent[] {
+  const results: ImageTagContent[] = [];
   const re = /\[image\]([\s\S]*?)\[\/image\]/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(draft)) !== null) {
     const raw = match[1].trim();
-    // Try to pull caption from [Caption]...[/Caption] sub-tag
+
+    // --- Shape A: explicitly tagged sub-blocks ---
     const captionM = raw.match(/\[Caption\]([\s\S]*?)\[\/Caption\]/i);
-    let caption = '';
     if (captionM) {
-      caption = captionM[1].trim();
-      const bracketedCap = caption.match(/^\[([^\]]+)\]$/);
-      if (bracketedCap) caption = bracketedCap[1].trim();
+      const descM = raw.match(/\[Description\]([\s\S]*?)\[\/Description\]/i);
+      results.push({
+        // Without a [Description] block, fall back to the tag body minus the caption block so
+        // the caption text is never fed to the image generator as something to draw.
+        content: unwrap(descM ? descM[1] : raw.replace(captionM[0], '')),
+        caption: unwrap(captionM[1]),
+      });
+      continue;
     }
-    results.push({ content: raw, caption });
+
+    // --- Shape B: positional segments ---
+    const segments = splitTopLevelBrackets(raw);
+    if (segments.length >= 2) {
+      results.push({ content: segments[0], caption: segments[segments.length - 1] });
+    } else if (segments.length === 1) {
+      results.push({ content: segments[0], caption: '' });
+    } else {
+      // Bare prose with no brackets at all.
+      results.push({ content: raw, caption: '' });
+    }
   }
   return results;
 }

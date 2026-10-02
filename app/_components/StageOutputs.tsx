@@ -7,7 +7,7 @@ import { STAGE_LABELS } from './Stages';
 const MarkdownRenderer = dynamic(() => import('./MarkdownRenderer'), { ssr: false });
 
 export type StageOutputMap = Record<string, any>;
-export type StageLogEntry = { stage: string; prompt: string; input: any; output: any };
+export type StageLogEntry = { stage: string; model?: string | null; prompt: string; input: any; output: any };
 export type StageLogMap = Record<string, StageLogEntry[]>;
 
 const WIDGET_SUB_RE = /^(code-generator|table-generator|table-research|image-enhancer|chart-generator|d2-generator|d2-svg-upload)#/;
@@ -173,6 +173,15 @@ export function StageOutputs({
             <details key={i} className="rounded-lg border border-[var(--border)] bg-[#0a0d14] p-3" open={i === 0}>
               <summary className="cursor-pointer text-xs font-medium text-[var(--text-dim)]">
                 {entry.stage}
+                {/* Which model produced this output — resolved from the live tier config. */}
+                {entry.model && (
+                  <span
+                    className="ml-2 rounded px-1.5 py-0.5 font-mono text-[10px]"
+                    style={{ background: 'var(--panel-2)', border: '1px solid var(--border)', color: 'var(--text-faint)' }}
+                  >
+                    {entry.model}
+                  </span>
+                )}
               </summary>
               <div className="mt-3 space-y-3">
                 <LogSection label="Prompt" body={entry.prompt} />

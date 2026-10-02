@@ -16,11 +16,20 @@ import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
 import { jsonrepair } from 'jsonrepair';
 import { getAbortSignal } from './abortContext';
+import { resolveModel, type ModelTier } from './modelStore';
 
-const OPENAI_DEFAULT = process.env.OPENAI_MODEL_DEFAULT || 'gpt-5.4';
-export const TEXT_GENERATOR_MODEL = process.env.OPENAI_MODEL_TEXTGEN || 'gpt-5.4';
-export const OPENAI_LIGHT = process.env.OPENAI_MODEL_LIGHT || 'gpt-4o';
+// Chat models are chosen per TIER, configured at /models and stored in data/models.json:
+//   'main'   → outline architects and text generators
+//   'normal' → reviewers, rewriters, widget builders, format normalisers
+// A call may still pin an exact `model`, which always wins.
+//
+// Web search is a separate capability on its own endpoint and stays pinned to the environment.
 const OPENAI_SEARCH = process.env.OPENAI_SEARCH_MODEL || 'gpt-5-search-api';
+
+/** Resolve the model for a call: explicit id > tier > 'normal'. */
+function pickModel(opts: { model?: string; tier?: ModelTier }): string {
+  return opts.model || resolveModel(opts.tier || 'normal');
+}
 
 const modelCache = new Map<string, ChatOpenAI>();
 
@@ -47,9 +56,9 @@ function extractText(content: BaseMessage['content']): string {
 
 export async function generateText(
   prompt: string,
-  opts: { model?: string; maxTokens?: number; system?: string; noThinking?: boolean } = {},
+  opts: { model?: string; tier?: ModelTier; maxTokens?: number; system?: string; noThinking?: boolean } = {},
 ): Promise<string> {
-  const model = opts.model || OPENAI_DEFAULT;
+  const model = pickModel(opts);
   const messages: BaseMessage[] = [];
   if (opts.system) messages.push(new SystemMessage(opts.system));
   messages.push(new HumanMessage(prompt));
@@ -60,9 +69,9 @@ export async function generateText(
 export async function generateTextStream(
   prompt: string,
   onChunk: (chunk: string, accumulated: string) => void,
-  opts: { model?: string; maxTokens?: number; system?: string; noThinking?: boolean } = {},
+  opts: { model?: string; tier?: ModelTier; maxTokens?: number; system?: string; noThinking?: boolean } = {},
 ): Promise<string> {
-  const model = opts.model || OPENAI_DEFAULT;
+  const model = pickModel(opts);
   const messages: BaseMessage[] = [];
   if (opts.system) messages.push(new SystemMessage(opts.system));
   messages.push(new HumanMessage(prompt));
@@ -76,8 +85,9 @@ export async function generateTextStream(
   return accumulated;
 }
 
+// Review passes are 'normal' tier: they critique or polish text that a main-tier agent wrote.
 export async function reviewText(prompt: string, maxTokens = 16000, _noThinking = false): Promise<string> {
-  return generateText(prompt, { model: OPENAI_DEFAULT, maxTokens });
+  return generateText(prompt, { tier: 'normal', maxTokens });
 }
 
 export async function reviewTextStream(
@@ -85,7 +95,7 @@ export async function reviewTextStream(
   onChunk: (chunk: string, accumulated: string) => void,
   maxTokens = 16000,
 ): Promise<string> {
-  return generateTextStream(prompt, onChunk, { model: OPENAI_DEFAULT, maxTokens });
+  return generateTextStream(prompt, onChunk, { tier: 'normal', maxTokens });
 }
 
 export async function openaiSearch(prompt: string): Promise<string> {
