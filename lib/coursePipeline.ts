@@ -36,13 +36,13 @@ import {
   makeTempImageBlock,
   createLesson,
   saveLesson,
-  addPageToChapter,
-  publishCourse,
   resolveImageBlocksForLesson,
   lessonUrlForIds,
   extractCollectionIds,
+  fetchTemplateLessonContent,
+  fetchLessonTitle,
 } from './courseEducative';
-import { generateGptImage, slugify } from './imageGen';
+import { generateGptImage, buildCourseImagePrompt, enhanceImageDescription, slugify } from './imageGen';
 import { buildRunJsHtml } from './runJsTemplate';
 import { updateBlog } from './storage';
 import type { StageEvent, Emit } from './pipeline';
@@ -69,6 +69,8 @@ export interface CourseInput {
   templateUrl?: string;
   prevLessonTitle?: string;
   nextLessonTitle?: string;
+  prevLessonUrl?: string;
+  nextLessonUrl?: string;
   blogId?: string;
 }
 
@@ -391,18 +393,71 @@ function stageLog(emit: Emit, name: string, prompt: string, args: any, output: a
 // ---------- Main pipeline ----------
 
 export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): Promise<void> {
-  const { authorId: extractedAuthorId, collectionId: extractedCollectionId } =
-    input.templateUrl ? extractCollectionIds(input.templateUrl) : { authorId: '', collectionId: '' };
-  const authorId = input.authorId || extractedAuthorId || process.env.EDUCATIVE_AUTHOR_ID || '';
-  const collectionId = input.collectionId || extractedCollectionId || '';
+  // authorId/collectionId are the PUBLISH TARGET — must come from explicit input or env.
+  // The templateUrl is only used to fetch template lesson content; its IDs must never
+  // be used as the publish target (the template course is a different collection).
+  const authorId = input.authorId || process.env.EDUCATIVE_AUTHOR_ID || '';
+  const collectionId = input.collectionId || '';
 
   const wordsLength = Number(input.wordsLength) || 2000;
   const domain = input.domain || 'System Design';
   const runId = input.blogId || `course-${Date.now()}`;
 
+  // ── Stage 0: Fetch template lesson content (if templateUrl provided) ────────
+  let templateLessonContent = '';
+  if (input.templateUrl) {
+    emit({ type: 'stage', name: 'template-lesson', status: 'start' });
+
+    const parsedIds = extractCollectionIds(input.templateUrl);
+    stageLog(emit, 'template-lesson', 'extractCollectionIds(templateUrl)', { templateUrl: input.templateUrl }, parsedIds);
+
+    if (!parsedIds.authorId || !parsedIds.collectionId || !parsedIds.pageId) {
+      const msg = `URL did not yield authorId/collectionId/pageId — check URL format. Got: ${JSON.stringify(parsedIds)}`;
+      stageLog(emit, 'template-lesson', 'URL parse check', { templateUrl: input.templateUrl }, msg);
+      emit({ type: 'stage', name: 'template-lesson', status: 'error', message: msg });
+    } else {
+      try {
+        templateLessonContent = await fetchTemplateLessonContent(input.templateUrl);
+        stageLog(emit, 'template-lesson', 'fetchTemplateLessonContent', { templateUrl: input.templateUrl, ...parsedIds }, templateLessonContent);
+        emit({ type: 'data', name: 'template-lesson', payload: templateLessonContent });
+        emit({ type: 'stage', name: 'template-lesson', status: 'done' });
+      } catch (err: any) {
+        stageLog(emit, 'template-lesson', 'fetchTemplateLessonContent', { templateUrl: input.templateUrl }, `FAILED: ${err?.message}`);
+        emit({ type: 'stage', name: 'template-lesson', status: 'error', message: err?.message });
+      }
+    }
+  } else {
+    stageLog(emit, 'template-lesson', 'no templateUrl', {}, 'skipped — no templateUrl provided');
+  }
+
+  // ── Resolve prev/next lesson titles from URLs (if provided) ────────────────
+  // Fetch in parallel — non-fatal; falls back to the text title from the sheet.
+  let resolvedPrevTitle = input.prevLessonTitle || '';
+  let resolvedNextTitle = input.nextLessonTitle || '';
+  const [fetchedPrev, fetchedNext] = await Promise.all([
+    input.prevLessonUrl ? fetchLessonTitle(input.prevLessonUrl).catch(() => '') : Promise.resolve(''),
+    input.nextLessonUrl ? fetchLessonTitle(input.nextLessonUrl).catch(() => '') : Promise.resolve(''),
+  ]);
+  if (fetchedPrev) resolvedPrevTitle = fetchedPrev;
+  if (fetchedNext) resolvedNextTitle = fetchedNext;
+  stageLog(emit, 'template-lesson', 'prev/next lesson resolution', {
+    prevLessonUrl: input.prevLessonUrl,
+    nextLessonUrl: input.nextLessonUrl,
+  }, { resolvedPrevTitle, resolvedNextTitle });
+
   // ── Stage 1: Web research ──────────────────────────────────────────────────
   emit({ type: 'stage', name: 'web-research', status: 'start' });
-  const searchQuery = `${input.chapterTitle} related to the course ${input.courseTitle} implementation concepts best practices examples`;
+  const topicsFromOutline = input.outline
+    ? input.outline.split('\n').map((l) => l.replace(/^[#\-*\d.)\s]+/, '').trim()).filter(Boolean).slice(0, 6).join(', ')
+    : '';
+  const searchQuery = [
+    input.lessonTitle,
+    input.chapterTitle && input.chapterTitle !== input.lessonTitle ? `within ${input.chapterTitle}` : '',
+    input.lessonPurpose ? `Goal: ${input.lessonPurpose}` : '',
+    topicsFromOutline ? `Key topics: ${topicsFromOutline}` : '',
+    `Course: ${input.courseTitle}`,
+    'Include: practical code examples, real-world use cases, common pitfalls, performance trade-offs, and current industry best practices',
+  ].filter(Boolean).join('. ');
   const research = await openaiSearch(searchQuery);
   stageLog(emit, 'web-research', searchQuery, { lessonTitle: input.lessonTitle }, research.slice(0, 500));
   emit({ type: 'data', name: 'web-research', payload: research });
@@ -421,11 +476,12 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     wordsLength,
     userOutline: input.outline || '',
     lessonPurpose: input.lessonPurpose || input.blogSummary || '',
-    nextLessonTitle: input.nextLessonTitle || '',
-    prevLessonTitle: input.prevLessonTitle || '',
+    nextLessonTitle: resolvedNextTitle,
+    prevLessonTitle: resolvedPrevTitle,
     runJsEnabled: Boolean(input.runJsEnabled),
     aiAssessmentEnabled: input.aiAssessmentEnabled !== false,
     referenceContent: research,
+    templateLessonContent,
   };
   const joPrompt = courseOutlineGeneratorPrompt(joArgs);
   const jsonOutlineRaw = await generateText(joPrompt, { tier: 'main', maxTokens: 4000 });
@@ -458,10 +514,11 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     targetAudience: input.targetAudience,
     wordsLength,
     outlineString,
-    prevLessonTitle: input.prevLessonTitle || '',
-    nextLessonTitle: input.nextLessonTitle || '',
+    prevLessonTitle: resolvedPrevTitle,
+    nextLessonTitle: resolvedNextTitle,
     lessonPurpose: input.lessonPurpose || input.blogSummary || '',
     referenceContent: research,
+    templateLessonContent,
   };
   const ccPrompt = courseContentCreatorPrompt(ccArgs);
   let lastStreamAt = 0;
@@ -585,7 +642,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     const outlineWantsRunJs = outlineSections.some((s: any) =>
       (s.sectionType || '').toLowerCase().includes('runjs'),
     );
-    if (!input.runJsEnabled && !rawRunJs.length && !outlineWantsRunJs) return [];
+    if (!input.runJsEnabled) return [];
     emit({ type: 'stage', name: 'widget-runjs', status: 'start' });
     const targets = rawRunJs.length ? rawRunJs : [{ concept: `Interactive visualization for ${input.lessonTitle}` }];
     const blocks = (await Promise.all(targets.map(async (rawRJ) => {
@@ -627,8 +684,9 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     for (let i = 0; i < rawImages.length; i++) {
       const { description, caption } = rawImages[i];
       try {
-        const result = await generateGptImage(`${domain} technical diagram: ${description} (for lesson "${input.lessonTitle}")`, i, imgSubfolder);
-        blocks.push(makeTempImageBlock(result.url, caption || description.slice(0, 80)));
+        const { enhancedOutline, caption: enhancedCaption } = await enhanceImageDescription(description);
+        const result = await generateGptImage(enhancedOutline, i, imgSubfolder, { rawPrompt: buildCourseImagePrompt(enhancedOutline) });
+        blocks.push(makeTempImageBlock(result.url, caption || enhancedCaption || description.slice(0, 80)));
       } catch (e: any) {
         console.warn('[coursePipeline] image widget failed:', e?.message);
         blocks.push(null);
@@ -671,7 +729,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
 
   // AI assessment blocks from summary-elements
   const aiAssessmentBlocks: any[] =
-    input.aiAssessmentEnabled !== false && summaryElements?.ai_assessment
+    !!input.aiAssessmentEnabled && summaryElements?.ai_assessment
       ? [makePromptAiBlock(summaryElements.ai_assessment)].filter(Boolean)
       : [];
 
@@ -735,7 +793,7 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
     if (!pageId) throw new Error('createLesson returned no page_id');
 
     const resolvedBlocks = await resolveImageBlocksForLesson(editorBlocks, authorId, collectionId, pageId);
-    await saveLesson(authorId, collectionId, pageId, { title, blocks: resolvedBlocks });
+    await saveLesson(authorId, collectionId, pageId, { title: title.slice(0, 65), blocks: resolvedBlocks });
     const lessonUrl = lessonUrlForIds(authorId, collectionId, pageId);
 
     emit({ type: 'data', name: 'save-lesson', payload: { pageId, url: lessonUrl } });
@@ -747,23 +805,9 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
       } catch {}
     }
 
-    emit({ type: 'stage', name: 'save-chapter', status: 'start' });
-    try {
-      await addPageToChapter(authorId, collectionId, pageId, input.chapterTitle, title);
-      emit({ type: 'data', name: 'save-chapter', payload: { chapterTitle: input.chapterTitle, pageId } });
-    } catch (e: any) {
-      emit({ type: 'log', name: 'save-chapter', message: `Chapter update failed (non-fatal): ${e?.message}` });
-    }
-    emit({ type: 'stage', name: 'save-chapter', status: 'done' });
-
-    emit({ type: 'stage', name: 'publish', status: 'start' });
-    try {
-      await publishCourse(authorId, collectionId);
-      emit({ type: 'data', name: 'publish', payload: { url: lessonUrl } });
-    } catch (e: any) {
-      emit({ type: 'log', name: 'publish', message: `Publish failed (non-fatal): ${e?.message}` });
-    }
-    emit({ type: 'stage', name: 'publish', status: 'done' });
+    // Adding to CHP (chapter) is intentionally skipped here — use publish-all for that.
+    // Publish is intentionally removed — lesson saves as draft.
+    // Publish manually from the Educative editor when the content is ready.
   } catch (e: any) {
     emit({ type: 'stage', name: 'save-lesson', status: 'error', message: e?.message });
     emit({ type: 'log', name: 'save-lesson', message: `Educative save failed (non-fatal): ${e?.message}` });

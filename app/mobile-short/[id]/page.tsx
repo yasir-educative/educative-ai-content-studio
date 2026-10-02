@@ -1287,11 +1287,14 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
   const [publishError, setPublishError] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Always-current ref so callbacks (image edit, delete) never close over stale cards
+  const shortRef = useRef<MobileShort | null>(null);
 
   async function load() {
     const res = await fetch(`/api/mobile-short/${params.id}`, { cache: 'no-store' });
     if (!res.ok) return;
     const json = await res.json();
+    shortRef.current = json.short;
     setShort(json.short);
     setLive(json.live);
     setLoading(false);
@@ -1309,13 +1312,17 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   }, [live]);
 
-  async function saveCards(cards: MobileCard[]) {
+  async function saveCards(newCards: MobileCard[]) {
+    // Optimistic update — reflect changes in the UI immediately, persist to server in background.
+    // Do NOT call load() after PATCH: the round-trip can return stale data and flicker the UI
+    // back to the old state. The server write completes before the user can trigger publish.
+    shortRef.current = shortRef.current ? { ...shortRef.current, cards: newCards } : shortRef.current;
+    setShort((s) => s ? { ...s, cards: newCards } : s);
     await fetch(`/api/mobile-short/${params.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cards }),
+      body: JSON.stringify({ cards: newCards }),
     });
-    await load();
   }
 
   async function publish() {
@@ -1326,6 +1333,9 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
       const json = await res.json();
       if (!json.ok && json.errors?.length) {
         setPublishError(json.errors[0]?.error || 'Publish failed');
+      }
+      if (json.sheetError) {
+        setPublishError(`Published OK — sheet update failed: ${json.sheetError}`);
       }
       await load();
     } catch (e: any) {
@@ -1399,16 +1409,29 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
             </div>
           )}
           {short.publishedUrl ? (
-            <div>
-              <p className="text-[10px] text-[var(--text-faint)] uppercase tracking-wide mb-0.5">Published URL</p>
-              <a
-                href={short.publishedUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[11px] text-emerald-400 underline break-all hover:text-emerald-300 transition-colors"
+            <div className="space-y-2">
+              <div>
+                <p className="text-[10px] text-[var(--text-faint)] uppercase tracking-wide mb-0.5">Published URL</p>
+                <a
+                  href={short.publishedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] text-emerald-400 underline break-all hover:text-emerald-300 transition-colors"
+                >
+                  {short.publishedUrl}
+                </a>
+              </div>
+              <button
+                onClick={publish}
+                disabled={publishing || cards.length === 0}
+                className="btn-secondary w-full text-xs py-1.5 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5"
               >
-                {short.publishedUrl}
-              </a>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15"/></svg>
+                {publishing ? 'Re-publishing…' : 'Re-publish'}
+              </button>
+              {publishError && (
+                <p className="text-[11px] text-red-400 leading-relaxed break-all">{publishError}</p>
+              )}
             </div>
           ) : (
             short.status !== 'running' && (
@@ -1459,16 +1482,26 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
             {short.status === 'running' && (
               <span className="text-xs text-amber-600 animate-pulse shrink-0 mt-1">Generating…</span>
             )}
-            {short.status === 'published' && short.publishedUrl && (
-              <a
-                href={short.publishedUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="btn-secondary text-xs shrink-0 mt-0.5 inline-flex items-center gap-1.5"
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>
-                View published
-              </a>
+            {short.publishedUrl && (
+              <div className="flex items-center gap-2 shrink-0 mt-0.5">
+                <a
+                  href={short.publishedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>
+                  View published
+                </a>
+                <button
+                  onClick={publish}
+                  disabled={publishing}
+                  className="btn-secondary text-xs inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15"/></svg>
+                  {publishing ? 'Re-publishing…' : 'Re-publish'}
+                </button>
+              </div>
             )}
             {(short.status === 'draft' || short.status === 'failed') && cards.length > 0 && (
               <button
@@ -1486,9 +1519,13 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
               key={short.id}
               cards={cards}
               onEdit={(c) => setEditCard(c)}
-              onDelete={(cardId) => saveCards(cards.filter((c) => c.id !== cardId))}
+              onDelete={(cardId) => {
+                const current = shortRef.current?.cards || [];
+                saveCards(current.filter((c) => c.id !== cardId));
+              }}
               onEditImage={(src, onApply) => openImageEdit(src, (newUrl) => {
-                const updCards = cards.map((k) =>
+                const current = shortRef.current?.cards || [];
+                const updCards = current.map((k) =>
                   k.imageUrl === src ? { ...k, imageUrl: newUrl } : k
                 );
                 saveCards(updCards);
@@ -1508,8 +1545,8 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
         <CardEditorModal
           card={editCard}
           onSave={(updated) => {
-            const updCards = cards.map((k) => (k.id === updated.id ? updated : k));
-            saveCards(updCards);
+            const current = shortRef.current?.cards || [];
+            saveCards(current.map((k) => (k.id === updated.id ? updated : k)));
             setEditCard(null);
           }}
           onClose={() => setEditCard(null)}

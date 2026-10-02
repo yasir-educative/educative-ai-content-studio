@@ -21,24 +21,52 @@ Open [http://localhost:3000](http://localhost:3000) — no login required.
 
 ## Required environment variables
 
-Copy `.env.example` to `.env.local` and fill in:
+Copy `.env.example` to `.env.local` and fill in every value. See `.env.example` for full instructions on how to obtain each one.
 
-| Variable | Description |
-|---|---|
-| `GEMINI_API_KEY` | Google Gemini — drives all text generation and review stages |
-| `OPENAI_API_KEY` | OpenAI — used for web research (`gpt-4o-search-preview`) |
-| `EDUCATIVE_FLASK_AUTH` | Cookie value for Educative CMS publishing (blog/newsletter) |
-| `EDUCATIVE_COURSE_FLASK_AUTH` | Cookie value for course/collection API |
-| `EDUCATIVE_AUTHOR_ID` | Your Educative author ID |
+### AI
 
-Optional model overrides (defaults shown):
+| Variable | Required | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | **Yes** | Drives all text generation, outlines, and web research |
+
+### Google OAuth (sign-in)
+
+| Variable | Required | Description |
+|---|---|---|
+| `NEXTAUTH_SECRET` | **Yes** | Random secret for signing JWT sessions — run `openssl rand -base64 32` |
+| `NEXTAUTH_URL` | **Yes** | Base URL of the app, e.g. `http://localhost:3000` |
+| `GOOGLE_CLIENT_ID` | **Yes** | OAuth 2.0 client ID from Google Cloud Console |
+| `GOOGLE_CLIENT_SECRET` | **Yes** | OAuth 2.0 client secret |
+| `ALLOWED_DOMAIN` | No | Restrict login to one domain, e.g. `educative.io` |
+| `ADMIN_EMAILS` | No | Comma-separated emails that get admin access |
+
+### Educative publishing (Mobile Shorts & Mobile Course)
+
+| Variable | Required | Description |
+|---|---|---|
+| `EDUCATIVE_FLASK_AUTH` | **Yes** | `flask-auth` cookie value from your Educative browser session |
+| `EDUCATIVE_COURSE_FLASK_AUTH` | **Yes** | `flask-auth` cookie for the SD Path / collection API |
+| `EDUCATIVE_AUTHOR_ID` | **Yes** | Your numeric Educative author ID |
+| `NEXT_PUBLIC_EDUCATIVE_AUTHOR_ID` | **Yes** | Same value — exposed to browser for the Mobile Course UI |
+| `EDUCATIVE_TEMPLATE_ID` | No | Template collection ID (defaults to `5002`) |
+| `EDUCATIVE_D2_PATH` | No | Server-side D2 diagram endpoint path |
+
+### Google Sheets (bulk Mobile Shorts write-back)
+
+| Variable | Required | Description |
+|---|---|---|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | No | Full service account JSON as a single-line string |
+
+### Optional model overrides (defaults shown)
 
 ```
-GEMINI_MODEL_DEFAULT=gemini-2.5-flash
-GEMINI_MODEL_REVIEW=gemini-2.5-flash
-GEMINI_MODEL_TEXTGEN=gemini-2.5-pro
-OPENAI_SEARCH_MODEL=gpt-4o-search-preview
+OPENAI_MODEL_DEFAULT=gpt-5.4
+OPENAI_MODEL_TEXTGEN=gpt-5.4
+OPENAI_MODEL_LIGHT=gpt-5.4-mini
+OPENAI_SEARCH_MODEL=gpt-5-search-api
 ```
+
+> **Node.js version:** 20 or later is required.
 
 ## What's inside
 

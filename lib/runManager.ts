@@ -280,6 +280,7 @@ export function startCourseRun(input: CourseInput): RunHandle {
     },
     // Snapshot the tiers now — a later config change must not rewrite this run's history.
     models: (() => { const m = getModelConfig(); return { main: m.mainModel, normal: m.normalModel }; })(),
+    courseInput: { ...input },
     stageOutputs: {},
     stageLogs: {},
   };

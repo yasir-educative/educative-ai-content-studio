@@ -30,7 +30,7 @@ const FILE = path.join(DIR, 'models.json');
 export function defaultConfig(): ModelConfig {
   return {
     mainModel: process.env.OPENAI_MODEL_TEXTGEN || process.env.OPENAI_MODEL_DEFAULT || 'gpt-5.4',
-    normalModel: process.env.OPENAI_MODEL_LIGHT || 'gpt-4o',
+    normalModel: process.env.OPENAI_MODEL_LIGHT || 'gpt-5.4-mini',
   };
 }
 

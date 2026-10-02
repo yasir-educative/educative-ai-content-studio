@@ -3,24 +3,55 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
+import { Agent } from 'undici';
 
 const EDUCATIVE_BASE = 'https://www.educative.io';
 const IMAGES_DIR = path.join(process.cwd(), 'data', 'images');
 // Legacy path used before imageGen was unified — still referenced by older stored records
 const BLOG_IMAGES_DIR = path.join(process.cwd(), 'data', 'blog-images');
 
+// Custom dispatcher: 60s connect timeout (default undici is 10s which is too short
+// for Educative's API under load — causes UND_ERR_CONNECT_TIMEOUT on publish).
+const educativeAgent = new Agent({ connect: { timeout: 60_000 } });
+
+// Resilient fetch: retries up to `retries` times on network errors or 5xx responses.
+async function educativeFetch(
+  url: string,
+  init: RequestInit & { dispatcher?: any } = {},
+  retries = 3,
+): Promise<Response> {
+  const opts: any = { ...init, dispatcher: educativeAgent };
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const res = await fetch(url, opts);
+      if (res.status < 500) return res; // 4xx are caller errors — don't retry
+      lastErr = new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      lastErr = e;
+    }
+    if (attempt < retries - 1) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+  }
+  throw lastErr;
+}
+
 function uid(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}-${Math.random().toString(16).slice(2)}`;
 }
 
-function readEnv(): { flaskAuth: string; authorId: string } {
-  const courseAuth = (process.env.EDUCATIVE_COURSE_FLASK_AUTH || '').trim();
-  const sharedAuth = (process.env.EDUCATIVE_FLASK_AUTH || '').trim();
-  const flaskAuth = courseAuth || sharedAuth;
-  if (!flaskAuth) throw new Error('EDUCATIVE_COURSE_FLASK_AUTH is not set');
-  console.log('[courseEducative] using', courseAuth ? 'EDUCATIVE_COURSE_FLASK_AUTH' : 'EDUCATIVE_FLASK_AUTH (fallback)', `(${flaskAuth.slice(0, 12)}…)`);
+function readEnv(): { flaskAuth: string; courseFlaskAuth: string; authorId: string } {
+  const flaskAuth = (process.env.EDUCATIVE_FLASK_AUTH || '').trim();
+  const courseFlaskAuth = (process.env.EDUCATIVE_COURSE_FLASK_AUTH || '').trim();
+  if (!flaskAuth && !courseFlaskAuth) throw new Error('EDUCATIVE_FLASK_AUTH is not set in .env.local');
   const authorId = (process.env.EDUCATIVE_AUTHOR_ID || '').trim();
-  return { flaskAuth, authorId };
+  return { flaskAuth, courseFlaskAuth, authorId };
+}
+
+// When the aid matches the env's own author (EDUCATIVE_AUTHOR_ID), use EDUCATIVE_COURSE_FLASK_AUTH.
+// Otherwise use EDUCATIVE_FLASK_AUTH (for collections owned by other accounts).
+function pickAuth(aid: string, env: { flaskAuth: string; courseFlaskAuth: string; authorId: string }): string {
+  if (aid && aid === env.authorId && env.courseFlaskAuth) return env.courseFlaskAuth;
+  return env.flaskAuth;
 }
 
 // Extract author ID and collection ID from an Educative editor URL.
@@ -28,14 +59,131 @@ function readEnv(): { flaskAuth: string; authorId: string } {
 //   /editor/author/{authorId}/collection/{collectionId}
 //   /author/{authorId}/collection/{collectionId}/page/{pageId}
 //   /courses/{courseSlug}/lesson/{lessonSlug}  (no IDs — return empty)
-export function extractCollectionIds(url: string): { authorId: string; collectionId: string } {
-  if (!url) return { authorId: '', collectionId: '' };
+export function extractCollectionIds(url: string): { authorId: string; collectionId: string; pageId: string } {
+  if (!url) return { authorId: '', collectionId: '', pageId: '' };
+
+  // Pageeditor URL: /editor/pageeditor/{authorId}/{collectionId}/{pageId}
+  const editorMatch = url.match(/\/pageeditor\/(\d+)\/(\d+)\/(\d+)/);
+  if (editorMatch) {
+    return { authorId: editorMatch[1], collectionId: editorMatch[2], pageId: editorMatch[3] };
+  }
+
+  // Collection editor URL: /editor/collectioneditor/{authorId}/{collectionId}
+  const colEditorMatch2 = url.match(/\/collectioneditor\/(\d+)\/(\d+)/);
+  if (colEditorMatch2) {
+    return { authorId: colEditorMatch2[1], collectionId: colEditorMatch2[2], pageId: '' };
+  }
+
+  // Collection editor URL: /editor/author/{authorId}/collection/{collectionId}
+  const colEditorMatch = url.match(/\/editor\/author\/(\d+)\/collection\/(\d+)/);
+  if (colEditorMatch) {
+    return { authorId: colEditorMatch[1], collectionId: colEditorMatch[2], pageId: '' };
+  }
+
+  // Public collection URL: /collection/{authorId}/{collectionId}  (e.g. educative.io/collection/643.../595...)
+  const publicColMatch = url.match(/\/collection\/(\d+)\/(\d+)/);
+  if (publicColMatch) {
+    return { authorId: publicColMatch[1], collectionId: publicColMatch[2], pageId: '' };
+  }
+
+  // Generic patterns: /author/{id} and /collection/{id} anywhere in the URL
   const authorMatch = url.match(/\/author\/(\d+)/);
   const collectionMatch = url.match(/\/collection\/(\d+)/);
+  const pageMatch = url.match(/\/page\/(\d+)/);
   return {
     authorId: authorMatch?.[1] || '',
     collectionId: collectionMatch?.[1] || '',
+    pageId: pageMatch?.[1] || '',
   };
+}
+
+// Fetch a single template lesson and return its section structure as readable markdown text.
+// Preserves heading hierarchy so the model can use it as "structural inspiration".
+// Throws on HTTP errors or missing IDs so the caller can log the failure.
+export async function fetchTemplateLessonContent(url: string): Promise<string> {
+  const { authorId, collectionId, pageId } = extractCollectionIds(url);
+  if (!authorId || !collectionId || !pageId) {
+    throw new Error(`URL did not yield valid IDs — got authorId="${authorId}" collectionId="${collectionId}" pageId="${pageId}". Expected pageeditor or API URL format.`);
+  }
+  const env = readEnv();
+  const aid = authorId || env.authorId;
+  const apiUrl = `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`;
+  console.log('[fetchTemplateLessonContent] fetching', apiUrl);
+
+  const res = await educativeFetch(apiUrl, { headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` } });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    if (res.status === 401) throw new Error(`Auth failed (401) — refresh EDUCATIVE_COURSE_FLASK_AUTH cookie. Response: ${text.slice(0, 200)}`);
+    throw new Error(`Fetch failed: HTTP ${res.status}. Response: ${text.slice(0, 200)}`);
+  }
+
+  const json: any = await res.json();
+  const body = json?.body || json;
+  const title = body?.page_title || body?.summary?.title || '';
+
+  // The page API can return components in two shapes:
+  //   1. Directly: { components: [...], summary: {...} }   ← pageeditor endpoint
+  //   2. Nested:   { body: { page_content: "<json>", page_title: "..." } }  ← author API
+  let components: any[] = [];
+  if (Array.isArray(body?.components)) {
+    components = body.components;
+  } else {
+    const raw = body?.page_content;
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      components = parsed?.components || [];
+    } catch {}
+  }
+
+  console.log(`[fetchTemplateLessonContent] got title="${title}", components=${components.length}, slateHTML=${components.filter((c: any) => c?.type === 'SlateHTML').length}`);
+
+  // Join all SlateHTML into one HTML string (same as n8n Extract Sections1)
+  const fullHTML = components
+    .filter((c: any) => c?.type === 'SlateHTML')
+    .map((c: any) => c.content?.html || '')
+    .join('\n');
+
+  if (!fullHTML.trim()) {
+    throw new Error(`No SlateHTML content found. Component types: [${[...new Set(components.map((c: any) => c?.type))].join(', ') || 'none'}]`);
+  }
+
+  // Convert HTML to markdown-like text, preserving heading levels
+  const md = fullHTML
+    .replace(/<h1[^>]*>(.*?)<\/h1>/gi, (_, t) => `\n# ${t.replace(/<[^>]+>/g, '').trim()}\n`)
+    .replace(/<h2[^>]*>(.*?)<\/h2>/gi, (_, t) => `\n## ${t.replace(/<[^>]+>/g, '').trim()}\n`)
+    .replace(/<h3[^>]*>(.*?)<\/h3>/gi, (_, t) => `\n### ${t.replace(/<[^>]+>/g, '').trim()}\n`)
+    .replace(/<h4[^>]*>(.*?)<\/h4>/gi, (_, t) => `\n#### ${t.replace(/<[^>]+>/g, '').trim()}\n`)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return title ? `# ${title}\n\n${md}` : md;
+}
+
+// Fetch just the title of a lesson page — lightweight, non-throwing.
+// Used to resolve prev/next lesson URLs from the sheet into displayable titles.
+export async function fetchLessonTitle(url: string): Promise<string> {
+  try {
+    const { authorId, collectionId, pageId } = extractCollectionIds(url);
+    if (!authorId || !collectionId || !pageId) return '';
+    const env = readEnv();
+    const aid = authorId || env.authorId;
+    const res = await educativeFetch(
+      `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`,
+      { headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` } },
+    );
+    if (!res.ok) return '';
+    const json: any = await res.json();
+    const body = json?.body || json;
+    return body?.page_title || body?.summary?.title || '';
+  } catch {
+    return '';
+  }
 }
 
 // --- Lesson creation ---
@@ -49,18 +197,18 @@ export async function createLesson(
   const env = readEnv();
   const aid = authorId || env.authorId;
   if (!aid) throw new Error('authorId is required (set EDUCATIVE_AUTHOR_ID env or pass it explicitly)');
-  const res = await fetch(
+  const res = await educativeFetch(
     `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page?work_type=collection&claim=false&document_type=collection_lesson`,
     {
       method: 'POST',
       headers: {
-        Cookie: `flask-auth=${env.flaskAuth}`,
+        Cookie: `flask-auth=${pickAuth(aid, env)}`,
       },
     },
   );
   if (!res.ok) {
     const text = await res.text();
-    if (res.status === 401) throw new Error(`Educative auth failed (401) — refresh your flask-auth cookie in EDUCATIVE_COURSE_FLASK_AUTH`);
+    if (res.status === 401) throw new Error(`Educative auth failed (401) — refresh flask-auth cookie`);
     throw new Error(`Educative createLesson failed: ${res.status} ${text}`);
   }
   const json: any = await res.json();
@@ -119,10 +267,10 @@ export async function saveMobileCardPage(
     meta_tags_json_string: '{}',
   };
 
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
     method: 'PUT',
     headers: {
-      Cookie: `flask-auth=${env.flaskAuth}`,
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
       'X-Etag': 'overwrite',
       'Content-Type': 'application/json',
     },
@@ -169,10 +317,10 @@ export async function saveLesson(
     meta_tags_json_string: '{}',
   };
 
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
     method: 'PUT',
     headers: {
-      Cookie: `flask-auth=${env.flaskAuth}`,
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
       'X-Etag': 'overwrite',
       'Content-Type': 'application/json',
     },
@@ -185,7 +333,7 @@ export async function saveLesson(
 
 // Fetch the raw collection response body (mirrors n8n "Fetch CHP1" node).
 async function fetchCollectionRaw(aid: string, collectionId: string, flaskAuth: string): Promise<any> {
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
     headers: { Cookie: `flask-auth=${flaskAuth}` },
   });
   if (!res.ok) throw new Error(`Educative fetchCollection failed: ${res.status} ${await res.text()}`);
@@ -265,7 +413,7 @@ function buildChpPutBody(raw: any, updatedCategories: any[]): Record<string, any
     svg_start_offset: details.svg_start_offset != null ? safeStr(details.svg_start_offset) : '0',
     filtered_languages_json_string: safeJson(details.filtered_languages || null, ''),
     is_collection_frontend_collaborative: safeStr(details.is_collection_frontend_collaborative ?? false),
-    meta_tags_json_string: safeJson(details.meta_tags_config ?? details.meta_tags ?? null, ''),
+    meta_tags_json_string: (() => { const v = details.meta_tags_config ?? details.meta_tags; return (!v || (Array.isArray(v) && v.length === 0)) ? '' : safeJson(v, ''); })(),
     landing_page_content: safeJson(details.landing_page_content || [], '[{"type":"SlateHTML","content":{"html":"<p></p>","comp_id":"default"},"hash":0}]'),
     rating_visibility: safeStr(details.rating_visibility ?? true),
     update_last_published_on_homepage: safeStr(details.update_last_published_on_homepage ?? true),
@@ -273,6 +421,8 @@ function buildChpPutBody(raw: any, updatedCategories: any[]): Record<string, any
     collection_template_data: safeJson(details.collection_template_data ?? null, ''),
     enable_collapsible_headings: details.enable_collapsible_headings != null ? safeStr(details.enable_collapsible_headings) : '',
     collection_overview_data: safeJson(details.collection_overview_data ?? null, ''),
+    key_outcomes_json_string: safeJson(details.key_outcomes || [], '[]'),
+    prompt_templates_json_string: safeJson({ prompt_templates: Array.isArray(details.prompt_templates) ? details.prompt_templates : [] }, '{"prompt_templates":[]}'),
   };
 }
 
@@ -289,7 +439,7 @@ export async function addPageToChapter(
   const aid = authorId || env.authorId;
 
   // 1. Fetch CHP
-  const raw = await fetchCollectionRaw(aid, collectionId, env.flaskAuth);
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
 
   // Educative validates page/author/collection IDs as numbers — send them as numbers, not strings.
   const numAid = Number(aid);
@@ -369,10 +519,10 @@ export async function addPageToChapter(
   // 3. Build and send the full CHP PUT body
   const putBody = buildChpPutBody(raw, categories);
 
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
     method: 'PUT',
     headers: {
-      Cookie: `flask-auth=${env.flaskAuth}`,
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
       'X-Etag': 'overwrite',
       'Content-Type': 'application/json',
     },
@@ -405,10 +555,10 @@ export async function createFlashCardShotCollection(
     enable_collaborative_editor: 'false',
     collection_template_type: '',
   };
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/collection`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/collection`, {
     method: 'POST',
     headers: {
-      Cookie: `flask-auth=${env.flaskAuth}`,
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -439,7 +589,7 @@ export async function setCollectionTitle(
   const aid = authorId || env.authorId;
 
   // Fetch current CHP so we preserve categories and all other fields
-  const raw = await fetchCollectionRaw(aid, collectionId, env.flaskAuth);
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
   const categories = pickCategories(raw);
   const putBody = buildChpPutBody(raw, categories);
   // Override title/summary with the provided values
@@ -447,10 +597,10 @@ export async function setCollectionTitle(
   putBody.summary = summary || title;
   putBody.brief_summary = summary || title;
 
-  const res = await fetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
     method: 'PUT',
     headers: {
-      Cookie: `flask-auth=${env.flaskAuth}`,
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
       'X-Etag': 'overwrite',
       'Content-Type': 'application/json',
     },
@@ -462,15 +612,35 @@ export async function setCollectionTitle(
   console.log(`[courseEducative] setCollectionTitle OK — "${title}"`);
 }
 
+// Clear all chapters from a collection's CHP — used before re-publishing a short
+// so existing pages don't duplicate in the table of contents.
+export async function clearCollectionChapters(authorId: string, collectionId: string): Promise<void> {
+  const env = readEnv();
+  const aid = authorId || env.authorId;
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
+  const putBody = buildChpPutBody(raw, []);
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
+    method: 'PUT',
+    headers: {
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
+      'X-Etag': 'overwrite',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(putBody),
+  });
+  if (!res.ok) throw new Error(`Educative clearCollectionChapters failed: ${res.status} ${await res.text()}`);
+  console.log(`[courseEducative] clearCollectionChapters OK — collection ${collectionId}`);
+}
+
 // Publish the collection (course). Mirrors n8n "Publish course" node — no body, no Content-Type.
 export async function publishCourse(authorId: string, collectionId: string): Promise<void> {
   const env = readEnv();
   const aid = authorId || env.authorId;
-  const res = await fetch(
+  const res = await educativeFetch(
     `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/publish?work_type=collection`,
     {
       method: 'POST',
-      headers: { Cookie: `flask-auth=${env.flaskAuth}` },
+      headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` },
     },
   );
   if (!res.ok) {
@@ -495,7 +665,7 @@ async function getLessonImageUploadUrl(
   flaskAuth: string,
 ): Promise<{ uploadUrl: string; imageId: string } | null> {
   try {
-    const res = await fetch(
+    const res = await educativeFetch(
       `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}/image/upload/url?fetch_from_bucket=True`,
       // X-Etag: overwrite + fetch_from_bucket=True matches n8n "Upload image1" exactly
       { headers: { Cookie: `flask-auth=${flaskAuth}`, 'X-Etag': 'overwrite' } },
@@ -533,7 +703,7 @@ export async function uploadLessonImage(
   const aid = authorId || env.authorId;
   try {
     // Step 1: get upload slot — only uploadUrl is required; imageId may arrive in step 2
-    const slot = await getLessonImageUploadUrl(aid, collectionId, pageId, env.flaskAuth);
+    const slot = await getLessonImageUploadUrl(aid, collectionId, pageId, pickAuth(aid, env));
     if (!slot?.uploadUrl) return null;
 
     // Step 2: POST the file as multipart/form-data (field name "file-0" matches n8n)
@@ -549,7 +719,7 @@ export async function uploadLessonImage(
 
     const uploadRes = await fetch(uploadFullUrl, {
       method: 'POST',
-      headers: { Cookie: `flask-auth=${env.flaskAuth}`, 'X-Etag': 'overwrite' },
+      headers: { Cookie: `flask-auth=${pickAuth(aid, env)}`, 'X-Etag': 'overwrite' },
       body: formData,
     });
     if (!uploadRes.ok) {
@@ -1036,9 +1206,9 @@ export async function fetchLessonContent(
   try {
     const env = readEnv();
     const aid = authorId || env.authorId;
-    const res = await fetch(
+    const res = await educativeFetch(
       `${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`,
-      { headers: { Cookie: `flask-auth=${env.flaskAuth}` } },
+      { headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` } },
     );
     if (!res.ok) return '';
     const json: any = await res.json();
@@ -1078,7 +1248,7 @@ export async function fetchCollectionWithContent(
   const env = readEnv();
   const aid = authorId || env.authorId;
 
-  const raw = await fetchCollectionRaw(aid, collectionId, env.flaskAuth);
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
   const details = raw?.instance?.details || raw?.details || {};
   const title = details?.title || `Collection ${collectionId}`;
 
@@ -1132,7 +1302,7 @@ export async function fetchCollectionStructure(
 ): Promise<{ title: string; chapters: CollectionChapterRef[] }> {
   const env = readEnv();
   const aid = authorId || env.authorId;
-  const raw = await fetchCollectionRaw(aid, collectionId, env.flaskAuth);
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
   const details = raw?.instance?.details || raw?.details || {};
   const title = details?.title || `Collection ${collectionId}`;
   const categories = pickCategories(raw);

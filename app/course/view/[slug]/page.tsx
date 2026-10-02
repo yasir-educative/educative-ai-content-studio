@@ -36,10 +36,22 @@ type FullLesson = {
   finalTitle?: string;
   errorMessage?: string;
   request?: { blogTitle?: string; chapterTitle?: string; courseTitle?: string; authorId?: string; collectionId?: string };
+  courseInput?: Record<string, any>;
   status: Status;
   publishedUrl?: string;
   editorBlocks?: any[];
 };
+
+interface RegenState {
+  lessonId: string;
+  lessonTitle: string;
+  chapterTitle: string;
+  courseInput: Record<string, any>;
+  outline: string;
+  lessonPurpose: string;
+  runJsEnabled: boolean;
+  aiAssessmentEnabled: boolean;
+}
 
 interface ImageEditState {
   originalUrl: string;
@@ -661,6 +673,11 @@ export default function CourseViewPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingCourse, setDeletingCourse] = useState(false);
 
+  // Regenerate state
+  const [regenState, setRegenState] = useState<RegenState | null>(null);
+  const [regenLoading, setRegenLoading] = useState(false);
+  const [regenErr, setRegenErr] = useState('');
+
   // Image edit state
   const [imageEdit, setImageEdit] = useState<ImageEditState | null>(null);
 
@@ -793,15 +810,8 @@ export default function CourseViewPage() {
 
   // ── Publish modal helpers ─────────────────────────────────────────────────────
   function openPublishModal() {
-    let aid = '';
-    let cid = '';
-    for (const lesson of Object.values(lessonData)) {
-      if (lesson.request?.authorId) aid = lesson.request.authorId;
-      if (lesson.request?.collectionId) cid = lesson.request.collectionId;
-      if (aid && cid) break;
-    }
-    setPublishAuthorId(aid);
-    setPublishCollectionId(cid);
+    setPublishAuthorId('');
+    setPublishCollectionId('');
     setPublishResults(null);
     setPublishSummary(null);
     setPublishErr('');
@@ -809,7 +819,9 @@ export default function CourseViewPage() {
   }
 
   async function runPublishCourse() {
-    if (!publishCollectionId.trim()) { setPublishErr('Collection ID is required'); return; }
+    const aid = publishAuthorId.trim();
+    const cid = publishCollectionId.trim();
+    if (!cid) { setPublishErr('Collection ID is required'); return; }
     setPublishing(true);
     setPublishErr('');
     setPublishResults(null);
@@ -820,8 +832,8 @@ export default function CourseViewPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           courseTitle,
-          authorId: publishAuthorId.trim() || undefined,
-          collectionId: publishCollectionId.trim(),
+          authorId: aid || undefined,
+          collectionId: cid,
         }),
       });
       const json = await res.json();
@@ -846,6 +858,76 @@ export default function CourseViewPage() {
       if (selectedId === id) setSelectedId(null);
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  async function openRegenModal(lesson: LessonSummary) {
+    // Ensure full lesson data is loaded (need courseInput)
+    let full = lessonData[lesson.id];
+    if (!full) {
+      try {
+        const res = await fetch(`/api/blog/${lesson.id}`);
+        full = await res.json();
+        setLessonData((prev) => ({ ...prev, [lesson.id]: full }));
+      } catch { return; }
+    }
+    const ci = full?.courseInput || {};
+    setRegenErr('');
+    setRegenState({
+      lessonId: lesson.id,
+      lessonTitle: ci.lessonTitle || lesson.blogTitle || '',
+      chapterTitle: ci.chapterTitle || lesson.chapterTitle || '',
+      courseInput: ci,
+      outline: ci.outline || '',
+      lessonPurpose: ci.lessonPurpose || ci.blogSummary || '',
+      runJsEnabled: !!ci.runJsEnabled,
+      aiAssessmentEnabled: !!ci.aiAssessmentEnabled,
+    });
+  }
+
+  async function runRegenerate() {
+    if (!regenState) return;
+    setRegenLoading(true);
+    setRegenErr('');
+    try {
+      const updatedInput = {
+        ...regenState.courseInput,
+        outline: regenState.outline,
+        lessonPurpose: regenState.lessonPurpose,
+        runJsEnabled: regenState.runJsEnabled,
+        aiAssessmentEnabled: regenState.aiAssessmentEnabled,
+      };
+      const res = await fetch('/api/course', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lessons: [updatedInput] }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Regenerate failed');
+      const newId: string = json.runs[0]?.id;
+      if (!newId) throw new Error('No run ID returned');
+      // Delete old lesson
+      await fetch(`/api/history/${regenState.lessonId}`, { method: 'DELETE' });
+      setAllLessons((prev) => {
+        const filtered = prev.filter((l) => l.id !== regenState.lessonId);
+        const newLesson: LessonSummary = {
+          id: newId,
+          createdAt: new Date().toISOString(),
+          status: 'running',
+          runType: 'course',
+          blogTitle: regenState.lessonTitle,
+          chapterTitle: regenState.chapterTitle,
+          courseTitle,
+        };
+        return [...filtered, newLesson];
+      });
+      setLessonData((prev) => { const next = { ...prev }; delete next[regenState.lessonId]; return next; });
+      setRegenState(null);
+      selectLesson(newId);
+    } catch (e: any) {
+      setRegenErr(e?.message || String(e));
+    } finally {
+      setRegenLoading(false);
     }
   }
 
@@ -997,6 +1079,72 @@ export default function CourseViewPage() {
 
   return (
     <>
+      {regenState && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="bg-[var(--panel)] border border-[var(--border)] rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="flex items-center justify-between p-5 border-b border-[var(--border)]">
+              <h2 className="text-lg font-semibold">Regenerate Lesson</h2>
+              <button onClick={() => setRegenState(null)} className="text-[var(--text-dim)] hover:text-white text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-xs text-[var(--text-dim)]">
+                <div><span className="font-medium text-[var(--text-faint)]">Lesson</span><p className="mt-0.5 font-semibold text-[var(--text)]">{regenState.lessonTitle}</p></div>
+                <div><span className="font-medium text-[var(--text-faint)]">Chapter</span><p className="mt-0.5 font-semibold text-[var(--text)]">{regenState.chapterTitle}</p></div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide mb-1.5">Lesson Purpose / Summary</label>
+                <textarea
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--panel-2)] text-sm p-3 resize-none focus:outline-none focus:ring-1 focus:ring-[var(--accent)] min-h-[60px]"
+                  value={regenState.lessonPurpose}
+                  onChange={(e) => setRegenState((s) => s ? { ...s, lessonPurpose: e.target.value } : s)}
+                  placeholder="What should learners get from this lesson?"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide mb-1.5">Outline</label>
+                <textarea
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--panel-2)] text-sm p-3 resize-none focus:outline-none focus:ring-1 focus:ring-[var(--accent)] min-h-[180px] font-mono"
+                  value={regenState.outline}
+                  onChange={(e) => setRegenState((s) => s ? { ...s, outline: e.target.value } : s)}
+                  placeholder="Paste or edit the lesson outline…"
+                />
+              </div>
+              <div className="flex items-center gap-6">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={regenState.runJsEnabled}
+                    onChange={(e) => setRegenState((s) => s ? { ...s, runJsEnabled: e.target.checked } : s)}
+                    className="accent-emerald-500"
+                  />
+                  RunJS widgets
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={regenState.aiAssessmentEnabled}
+                    onChange={(e) => setRegenState((s) => s ? { ...s, aiAssessmentEnabled: e.target.checked } : s)}
+                    className="accent-emerald-500"
+                  />
+                  AI Assessment
+                </label>
+              </div>
+              {regenErr && <p className="text-xs text-red-400">{regenErr}</p>}
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button onClick={() => setRegenState(null)} className="btn-secondary text-sm px-4 py-2">Cancel</button>
+                <button
+                  onClick={runRegenerate}
+                  disabled={regenLoading}
+                  className="btn-primary text-sm px-5 py-2 flex items-center gap-2"
+                >
+                  {regenLoading && <span className="h-3.5 w-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin inline-block" />}
+                  {regenLoading ? 'Regenerating…' : 'Regenerate'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {imageEdit && (
         <ImageEditModal
           state={imageEdit}
@@ -1223,25 +1371,39 @@ export default function CourseViewPage() {
                       </button>
                     )}
                   </div>
-                  {contentView === 'edit' && (
-                    <div className="flex items-center gap-2">
-                      {editErr && <span className="text-xs text-red-300">{editErr}</span>}
+                  <div className="flex items-center gap-2">
+                    {contentView === 'edit' && (
+                      <>
+                        {editErr && <span className="text-xs text-red-300">{editErr}</span>}
+                        <button
+                          className="btn-secondary text-xs py-1 px-3"
+                          onClick={() => { setContentView('blocks'); setEditErr(''); }}
+                          disabled={editSaving}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="btn-primary text-xs py-1 px-3"
+                          onClick={saveEdit}
+                          disabled={editSaving}
+                        >
+                          {editSaving ? 'Saving…' : 'Save'}
+                        </button>
+                      </>
+                    )}
+                    {selectedSummary && (
                       <button
-                        className="btn-secondary text-xs py-1 px-3"
-                        onClick={() => { setContentView('blocks'); setEditErr(''); }}
-                        disabled={editSaving}
+                        className="btn-secondary flex items-center gap-1.5 text-xs py-1 px-3 ring-1 ring-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                        onClick={() => openRegenModal(selectedSummary)}
                       >
-                        Cancel
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <path d="M1 4v6h6M23 20v-6h-6"/>
+                          <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+                        </svg>
+                        Regenerate
                       </button>
-                      <button
-                        className="btn-primary text-xs py-1 px-3"
-                        onClick={saveEdit}
-                        disabled={editSaving}
-                      >
-                        {editSaving ? 'Saving…' : 'Save'}
-                      </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1303,14 +1465,27 @@ export default function CourseViewPage() {
             <div className="px-6 py-5 space-y-4">
               {!publishResults ? (
                 <>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-[var(--text-dim)]">Author ID</label>
-                    <input className="input w-full font-mono text-sm" placeholder="Leave blank to use EDUCATIVE_AUTHOR_ID env" value={publishAuthorId} onChange={(e) => setPublishAuthorId(e.target.value)} disabled={publishing} />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-[var(--text-dim)]">Collection ID <span className="text-red-400">*</span></label>
-                    <input className="input w-full font-mono text-sm" placeholder="e.g. 5862310" value={publishCollectionId} onChange={(e) => setPublishCollectionId(e.target.value)} disabled={publishing} />
-                    <p className="text-[10px] text-[var(--text-faint)]">Found in your Educative editor URL: /author/…/collection/<strong>ID</strong>/…</p>
+                  <div className="flex gap-3">
+                    <div className="space-y-1 flex-1">
+                      <label className="text-xs font-medium text-[var(--text-dim)]">Author ID <span className="text-red-400">*</span></label>
+                      <input
+                        className="input w-full text-sm"
+                        placeholder="e.g. 6436638368727040"
+                        value={publishAuthorId}
+                        onChange={(e) => setPublishAuthorId(e.target.value)}
+                        disabled={publishing}
+                      />
+                    </div>
+                    <div className="space-y-1 flex-1">
+                      <label className="text-xs font-medium text-[var(--text-dim)]">Collection ID <span className="text-red-400">*</span></label>
+                      <input
+                        className="input w-full text-sm"
+                        placeholder="e.g. 5953982300225536"
+                        value={publishCollectionId}
+                        onChange={(e) => setPublishCollectionId(e.target.value)}
+                        disabled={publishing}
+                      />
+                    </div>
                   </div>
                   {publishErr && (
                     <div className="rounded-lg border border-red-500/40 bg-red-500/10 text-red-300 p-3 text-sm">{publishErr}</div>

@@ -4,7 +4,6 @@ import {
   createLesson,
   saveLesson,
   addPageToChapter,
-  publishCourse,
   resolveImageBlocksForLesson,
   lessonUrlForIds,
   makeQuizBlock,
@@ -85,8 +84,6 @@ export async function POST(req: NextRequest) {
   );
 
   const results: object[] = [];
-  // Track the resolved collection_id from createLesson — use it for publishCourse
-  let resolvedCid = collectionId;
 
   for (const lessonSummary of lessonSummaries) {
     const { id } = lessonSummary;
@@ -105,13 +102,13 @@ export async function POST(req: NextRequest) {
       }
 
       const { editorBlocks } = lessonRecord;
-      const title = lessonRecord.finalTitle || lessonRecord.request?.blogTitle || 'Lesson';
+      const rawTitle = lessonRecord.finalTitle || lessonRecord.request?.blogTitle || 'Lesson';
+      const title = rawTitle.slice(0, 65);
       const chapterTitle = lessonRecord.request?.chapterTitle || 'Chapter 1';
 
       // Step 1: Create lesson page — mirrors n8n "Create lesson" node
       const { page_id: pageId, collection_id: cidFromCreate } = await createLesson(aid, collectionId);
       const cid = cidFromCreate || collectionId;
-      resolvedCid = cid;
       steps.push(`created page ${pageId} in collection ${cid}`);
 
       // Step 1b: Rebuild widget blocks from stored stageOutputs so old on-disk records
@@ -139,22 +136,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Step 5: Publish course — mirrors n8n "Publish course" node
-  // Use the resolved collection_id from createLesson (same as n8n uses body.collection_id)
-  let publishError: string | null = null;
-  try {
-    await publishCourse(aid, resolvedCid);
-  } catch (e: any) {
-    publishError = e?.message;
-    console.error('[publish-all] publishCourse failed:', e?.message);
-  }
-
   const summary = {
     published: results.filter((r: any) => r.status === 'published').length,
     failed: results.filter((r: any) => r.status === 'failed').length,
     skipped: results.filter((r: any) => r.status === 'skipped').length,
     total: results.length,
-    publishError,
   };
 
   return NextResponse.json({ results, summary });

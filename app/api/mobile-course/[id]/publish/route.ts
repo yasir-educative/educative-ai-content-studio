@@ -6,6 +6,8 @@ import {
   addPageToChapter,
   uploadLessonImageFromUrl,
   lessonUrlForIds,
+  setCollectionTitle,
+  publishCourse,
 } from '@/lib/courseEducative';
 import type { MobileCard } from '@/lib/mobileCourseStorage';
 
@@ -88,15 +90,19 @@ function buildCardComponents(
   switch (card.type) {
     case 'text': {
       const t = resolveComponentTitle(card, pageTitle, 'Text Card');
+      const body = safeStr(card.text);
+      if (!body) return null; // no content — skip rather than publish blank
       return {
-        components: [makeFlashCard(t, 'text-only', safeStr(card.text), '', 6, 1), makeSlateHTML(true)],
+        components: [makeFlashCard(t, 'text-only', body, '', 6, 1), makeSlateHTML(true)],
         summary: { title: t, titleUpdated: true },
       };
     }
 
     case 'highlightCard': {
       const t = resolveComponentTitle(card, pageTitle, 'Highlight Card');
-      const payload: any = { type: 'highlightCard', title: t, text: safeStr(card.text) };
+      const body = safeStr(card.text);
+      if (!body) return null; // no content — skip rather than publish blank
+      const payload: any = { type: 'highlightCard', title: t, text: body };
       if (card.highlightCardType) payload.highlightCardType = card.highlightCardType;
       return {
         components: [makeFlashCard(t, 'custom', '', JSON.stringify(payload), 3, 1), makeSlateHTML(false)],
@@ -107,6 +113,9 @@ function buildCardComponents(
     case 'comparisonCards': {
       const heading = safeStr(card.heading);
       const t = resolveComponentTitle(card, pageTitle, heading || 'Comparison');
+      const leftDesc = safeStr(card.leftOption?.description);
+      const rightDesc = safeStr(card.rightOption?.description);
+      if (!leftDesc && !rightDesc) return null; // both sides empty — skip rather than publish blank
       const payload = {
         type: 'comparisonCards',
         title: t,
@@ -114,12 +123,12 @@ function buildCardComponents(
         leftOption: {
           label: safeStr(card.leftOption?.label),
           heading: safeStr(card.leftOption?.heading),
-          description: safeStr(card.leftOption?.description),
+          description: leftDesc,
         },
         rightOption: {
           label: safeStr(card.rightOption?.label),
           heading: safeStr(card.rightOption?.heading),
-          description: safeStr(card.rightOption?.description),
+          description: rightDesc,
         },
       };
       return {
@@ -414,10 +423,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
+  if (results.length > 0) {
+    await setCollectionTitle(authorId, targetCollectionId, course.title || 'Mobile Course', course.title || 'Mobile Course');
+    await publishCourse(authorId, targetCollectionId);
+  }
+
+  const publishedUrl = results.length > 0
+    ? `https://www.educative.io/collection/${authorId}/${targetCollectionId}`
+    : undefined;
+
   const updated = await updateMobileCourse(id, {
     chapters: updatedChapters,
     status: results.length > 0 ? 'published' : 'draft',
-    publishedUrl: results[0]?.url,
+    publishedUrl: publishedUrl || results[0]?.url,
     targetCollectionId,
   });
 

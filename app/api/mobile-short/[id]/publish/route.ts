@@ -314,12 +314,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const results: Array<{ cardId: string; cardTitle: string; url: string }> = [];
   const errors: Array<{ cardId: string; cardTitle: string; error: string }> = [];
 
-  // Step 1: Create flash-card-shot collection.
-  // Pass any known authorId as a hint; the canonical author_id always comes back in the response.
+  // Step 1: Create collection on first publish; reuse existing on re-publish.
   const hintAuthorId = short.authorId || process.env.EDUCATIVE_AUTHOR_ID || '';
-  const { collectionId, authorId: resolvedAuthorId } = await createFlashCardShotCollection(hintAuthorId);
+  let collectionId: string;
+  let resolvedAuthorId: string;
+  const isRepublish = !!(short.collectionId);
+  if (isRepublish) {
+    collectionId = short.collectionId!;
+    resolvedAuthorId = hintAuthorId || '10370001';
+  } else {
+    ({ collectionId, authorId: resolvedAuthorId } = await createFlashCardShotCollection(hintAuthorId));
+  }
 
-  // Step 2: Publish each card
+  // Step 2: Publish each card.
+  // Re-publish: if the card already has a pageId, PUT to that existing page (in-place update).
+  //             No createLesson or addPageToChapter needed — the TOC entry stays unchanged.
+  // First publish (or new card added after initial publish): create a new lesson page.
   const updatedCards = [...short.cards];
 
   for (let ki = 0; ki < updatedCards.length; ki++) {
@@ -328,8 +338,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const cardTitle = deriveCardTitle(card) || `Card ${ki + 1}`;
 
     try {
-      const { page_id: pageId, collection_id: cid } = await createLesson(resolvedAuthorId, collectionId);
-      const resolvedCid = cid || collectionId;
+      let pageId: string;
+      let resolvedCid: string;
+
+      if (isRepublish && card.pageId) {
+        // Re-publish: update the existing lesson page in-place
+        pageId = card.pageId;
+        resolvedCid = collectionId;
+      } else {
+        // First publish (or new card): create a fresh lesson page and add to TOC
+        const created = await createLesson(resolvedAuthorId, collectionId);
+        pageId = created.page_id;
+        resolvedCid = created.collection_id || collectionId;
+      }
 
       let built: { components: any[]; summary: any } | null = null;
 
@@ -373,8 +394,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         summary: built.summary,
       });
 
-      // Use topic as the chapter name so all cards group under one section
-      await addPageToChapter(resolvedAuthorId, resolvedCid, pageId, short.topic, cardTitle);
+      // Only add to TOC on first publish (or new card) — existing entries stay on re-publish
+      if (!(isRepublish && card.pageId)) {
+        await addPageToChapter(resolvedAuthorId, resolvedCid, pageId, short.topic, cardTitle);
+      }
 
       const url = lessonUrlForIds(resolvedAuthorId, resolvedCid, pageId);
       card.pageId = pageId;
@@ -392,7 +415,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   // Step 3: Set the collection title (required — Educative rejects publish without title)
-  await setCollectionTitle(resolvedAuthorId, collectionId, short.topic, short.topic);
+  const shortTitle = `${short.topic}*`;
+  await setCollectionTitle(resolvedAuthorId, collectionId, shortTitle, shortTitle);
 
   // Step 4: Publish the collection
   await publishCourse(resolvedAuthorId, collectionId);
@@ -407,14 +431,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     publishedUrl,
   });
 
-  // Step 6: Write-back to Google Sheet (no-op if service account not configured)
+  // Step 6: Write-back to Google Sheet
+  let sheetError: string | null = null;
   if (short.sheetUrl && short.rowIdx !== undefined) {
     try {
       await writeSheetPublishResult(short.sheetUrl, short.rowIdx, publishedUrl);
-    } catch (e) {
-      console.error('[publish] sheet write-back failed', e);
+    } catch (e: any) {
+      sheetError = e?.message || String(e);
+      console.error('[publish] sheet write-back failed:', sheetError);
     }
   }
 
-  return Response.json({ ok: errors.length === 0, published: results.length, errors, results, short: updated });
+  return Response.json({ ok: errors.length === 0, published: results.length, errors, results, short: updated, sheetError });
 }

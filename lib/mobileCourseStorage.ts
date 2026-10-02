@@ -71,6 +71,7 @@ export interface MobileChapter {
   cards: MobileCard[];
   status: 'pending' | 'processing' | 'done' | 'failed';
   errorMessage?: string;
+  regeneratedAt?: string;
 }
 
 export type MobileCourseStatus = 'running' | 'draft' | 'published' | 'failed' | 'cancelled';

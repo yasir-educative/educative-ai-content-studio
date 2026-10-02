@@ -46,6 +46,125 @@ export interface MobileCourseEvent {
 
 export type MobileCourseEmit = (e: MobileCourseEvent) => void;
 
+// ── Raw card normaliser ───────────────────────────────────────────────────────
+// The JSON generator returns snake_case aliases; the UI / MobileCard type uses
+// camelCase names and expanded type strings (e.g. "compare" → "comparisonCards").
+
+const TYPE_ALIAS: Record<string, MobileCardType> = {
+  text:              'text',
+  text_img:          'text_img',
+  img_only:          'img_only',
+  scenario:          'scenarioCard',
+  scenariocard:      'scenarioCard',
+  compare:           'comparisonCards',
+  comparisoncards:   'comparisonCards',
+  recap:             'recapCard',
+  recapcard:         'recapCard',
+  quiz:              'quiz',
+  highlight:         'highlightCard',
+  highlightcard:     'highlightCard',
+  truefalse:         'trueFalseCard',
+  true_false:        'trueFalseCard',
+  truefalsecard:     'trueFalseCard',
+  fillintheblank:    'fillInTheBlank',
+  fill_in_the_blank: 'fillInTheBlank',
+  'text-with-code':  'text-with-code',
+  textwithcode:      'text-with-code',
+  'code-with-output':'code-with-output',
+  codewithoutput:    'code-with-output',
+};
+
+function normalizeType(raw: string): MobileCardType {
+  const key = raw.toLowerCase().replace(/[\s-]/g, '_');
+  const resolved = TYPE_ALIAS[key] || TYPE_ALIAS[raw.toLowerCase()];
+  if (!resolved) console.warn(`[mobileCoursePipeline] unknown card_type "${raw}" — defaulting to "text"`);
+  return resolved || 'text';
+}
+
+function mapRawCard(raw: any, index: number): MobileCard {
+  const type = normalizeType(String(raw.card_type || raw.type || 'text'));
+  const isRecap = type === 'recapCard';
+  const isScenario = type === 'scenarioCard';
+  const isCompare = type === 'comparisonCards';
+
+  // The model wraps scenario/compare content in a content.tabs array:
+  // { label, text } pairs — first two become left/right for compare,
+  // all become sections for scenario.
+  const tabs: Array<{ label: string; text: string }> = Array.isArray(raw.content?.tabs)
+    ? raw.content.tabs
+    : [];
+
+  // scenarioCard: tabs → sections[{heading, content}], scenario_type
+  const sections: Array<{ heading: string; content: string }> = isScenario
+    ? (raw.sections || tabs.map((t: any) => ({ heading: t.label || '', content: t.text || '' })))
+    : raw.sections;
+
+  // comparisonCards: tabs[0] → leftOption, tabs[1] → rightOption
+  const leftOption = isCompare
+    ? (raw.leftOption || raw.left_option || (tabs[0] ? { label: tabs[0].label, heading: '', description: tabs[0].text } : undefined))
+    : (raw.leftOption || raw.left_option);
+  const rightOption = isCompare
+    ? (raw.rightOption || raw.right_option || (tabs[1] ? { label: tabs[1].label, heading: '', description: tabs[1].text } : undefined))
+    : (raw.rightOption || raw.right_option);
+
+  // Plain text content for text/text_img/highlightCard cards.
+  // Guard: AI sometimes returns content as {text: "..."} instead of a plain string.
+  const text = (isRecap || isScenario || isCompare)
+    ? undefined
+    : (
+        typeof raw.content === 'string'
+          ? raw.content
+          : typeof raw.content?.text === 'string' && raw.content.text
+            ? raw.content.text
+            : raw.text || ''
+      );
+
+  // recapCard: content must be [{heading, text}].
+  // Guard: AI sometimes wraps it as {items:[...]} / {content:[...]} or returns a plain string.
+  const recapContent = isRecap
+    ? (() => {
+        if (Array.isArray(raw.content)) return raw.content;
+        if (Array.isArray(raw.content?.items)) return raw.content.items;
+        if (Array.isArray(raw.content?.content)) return raw.content.content;
+        if (Array.isArray(raw.items)) return raw.items;
+        if (typeof raw.content === 'string' && raw.content.trim())
+          return [{ heading: '', text: raw.content.trim() }];
+        return undefined;
+      })()
+    : undefined;
+
+  return {
+    id: raw.id || `card-${index + 1}`,
+    type,
+    card_number: Number(raw.card_number || index + 1),
+    title: raw.title || raw.card_title || '',
+    text,
+    illustration_idea: raw.illustration_idea || '',
+    visible_labels: raw.visible_labels || '',
+    imageUrl: raw.imageUrl || raw.image_url || '',
+    img_context: raw.img_context || '',
+    text_1: raw.text_1 || '',
+    text_2: raw.text_2 || '',
+    language: raw.language || '',
+    code: raw.code || '',
+    output_available: raw.output_available,
+    output: raw.output || '',
+    heading: raw.heading || '',
+    leftOption,
+    rightOption,
+    content: recapContent,
+    question: raw.question || '',
+    options: raw.options,
+    correctAnswer: raw.correctAnswer ?? raw.correct_answer,
+    incorrectMessage: raw.incorrectMessage || raw.incorrect_message || '',
+    explanation: raw.explanation || '',
+    correctOptions: raw.correctOptions || raw.correct_options,
+    sections,
+    scenarioType: raw.scenarioType || raw.scenario_type || raw.content?.scenario_type || '',
+    highlightCardType: raw.highlightCardType || raw.highlight_card_type || '',
+  };
+}
+
 // ── Image prompt builder (exact n8n template) ─────────────────────────────────
 
 function buildCardImagePrompt(card: any): string {
@@ -92,9 +211,56 @@ async function generateCardImage(
   }
 }
 
+// ── TEXT_IMG prose enforcer ───────────────────────────────────────────────────
+
+function hasListViolation(text: string): boolean {
+  return String(text || '')
+    .split('\n')
+    .some((l) => l.trim().startsWith('-') || l.trim().startsWith('>') || l.trim().startsWith('|'));
+}
+
+async function enforceTextImgProse(cards: any[]): Promise<any[]> {
+  const textField = (c: any) => c.content || c.text || '';
+  const violators = cards.filter((c) => c.card_type === 'TEXT_IMG' && hasListViolation(textField(c)));
+  if (violators.length === 0) return cards;
+
+  const prompt = `You are a prose editor fixing TEXT_IMG card content. Each card below has bullet lists or blockquotes that must be removed. Rewrite ONLY the content field of each card as a single prose paragraph of 1-2 sentences (240-280 chars). The prose must state the key insight or consequence — NOT the steps. The diagram already shows the steps. Ask: "What does completing all these steps achieve? Why does it matter?" — write that as prose.
+
+Cards to fix:
+${JSON.stringify(
+  violators.map((c) => ({
+    card_number: c.card_number,
+    current_content: textField(c),
+    illustration_idea: c.illustration_idea,
+  })),
+)}
+
+Rules:
+- Return a JSON array with objects: { "card_number": N, "new_content": "..." }
+- new_content must be a single prose paragraph, 240-280 chars
+- No hyphens at line start, no blockquotes, no tables
+- Describe consequence/insight, not steps
+- Raw JSON only, no markdown fences`;
+
+  try {
+    const raw = await generateText(prompt, { tier: 'normal', maxTokens: 4000, noThinking: true });
+    const parsed = JSON.parse(raw.trim().replace(/^```json\n?|```$/g, ''));
+    const rewrites: Record<number, string> = {};
+    for (const r of (Array.isArray(parsed) ? parsed : [])) {
+      if (r.card_number && r.new_content) rewrites[Number(r.card_number)] = r.new_content;
+    }
+    return cards.map((c) => {
+      const rewritten = c.card_type === 'TEXT_IMG' ? rewrites[Number(c.card_number)] : undefined;
+      return rewritten ? { ...c, content: rewritten } : c;
+    });
+  } catch {
+    return cards;
+  }
+}
+
 // ── Per-chapter processing ────────────────────────────────────────────────────
 
-async function processChapter(
+export async function processChapter(
   courseTitle: string,
   chapterTitle: string,
   lessonTitles: string[],
@@ -145,6 +311,9 @@ async function processChapter(
     return [];
   }
 
+  // Post-process: enforce prose-only content on TEXT_IMG cards before refiner sees them
+  generatedCards = await enforceTextImgProse(generatedCards);
+
   // Stage 3: Card Text Refiner
   emit({ type: 'stage', name: `${chapterId}-text-refiner`, status: 'start' });
   const refinerOut = await generateText(
@@ -175,14 +344,10 @@ async function processChapter(
   }
   emit({ type: 'stage', name: `${chapterId}-json-generator`, status: 'done' });
 
-  // Sort by card_number (JSON Generator assigns these as sequential integers)
-  finalCards = [...finalCards].sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0));
-
-  // Assign stable IDs
-  finalCards = finalCards.map((c: any, i: number) => ({
-    ...c,
-    id: c.id || `card-${i + 1}`,
-  }));
+  // Sort by card_number, then normalize all raw fields to MobileCard shape.
+  finalCards = [...finalCards]
+    .sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0))
+    .map((c: any, i: number) => mapRawCard(c, i));
 
   // Stage 5: Generate images for text_img and img_only cards
   const imageCards = finalCards.filter(

@@ -40,20 +40,29 @@ function parseCsv(raw: string): string[][] {
 
 // --- Column header matching (case-insensitive, flexible) ---
 const COLUMN_ALIASES: Record<string, string[]> = {
+  status:            ['status', 'state', 'progress'],
   courseTitle:       ['course title', 'course name', 'course'],
   courseSummary:     ['course summary', 'course description'],
   domain:            ['domain', 'vertical', 'track', 'category'],
-  chapterTitle:      ['chapter title', 'chapter name', 'chapter'],
+  // "Topic" is the chapter grouping column in the standard sheet template
+  chapterTitle:      ['chapter title', 'chapter name', 'chapter', 'topic'],
   chapterSummary:    ['chapter summary', 'chapter description'],
   lessonTitle:       ['lesson title', 'lesson name', 'lesson', 'title'],
-  outline:           ['outline', 'lesson outline', 'description', 'lesson description', 'summary'],
+  outline:           ['outline', 'description', 'lesson description'],
+  lessonOutline:     ['lesson outline'],
+  lessonPurpose:     ['purpose', 'lesson purpose', 'goal', 'lesson goal'],
   templateLessonUrl: ['template lesson url', 'template url', 'template lesson', 'template', 'template lesson link', 'lesson template url', 'lesson template'],
   targetAudience:    ['audience', 'target audience', 'level', 'difficulty'],
-  wordsLength:       ['word count', 'words', 'word length', 'length', 'words count'],
+  // 'words length' matches the standard sheet column header exactly
+  wordsLength:       ['word count', 'words length', 'words', 'word length', 'length', 'words count'],
   runJsEnabled:      ['runjs', 'run js', 'interactive', 'playground', 'run javascript'],
   aiAssessmentEnabled: ['ai assessment', 'assessment', 'ai', 'prompt ai'],
-  prevLessonTitle:   ['prev lesson', 'previous lesson', 'prev lesson title', 'previous lesson title', 'prev', 'previous'],
-  nextLessonTitle:   ['next lesson', 'next lesson title', 'next'],
+  // URL columns — separate from the plain-text title columns below
+  prevLessonUrl:     ['previous lesson', 'prev lesson url', 'previous lesson url', 'prev lesson link', 'previous lesson link'],
+  nextLessonUrl:     ['next lesson', 'next lesson url', 'next lesson link'],
+  // Plain-text title columns ("Next", "Prev" / "Previous")
+  prevLessonTitle:   ['prev lesson title', 'previous lesson title', 'prev', 'previous'],
+  nextLessonTitle:   ['next lesson title', 'next title', 'next'],
 };
 
 function buildHeaderMap(headers: string[]): Record<string, number> {
@@ -169,6 +178,12 @@ export async function POST(req: NextRequest) {
       const lessonTitle = cell(row, colMap.lessonTitle);
       if (!lessonTitle) continue; // skip rows without a lesson title
 
+      // If a status column exists, only process rows whose status is "in progress"
+      if (colMap.status !== undefined) {
+        const rowStatus = cell(row, colMap.status).toLowerCase().replace(/[-_\s]+/g, ' ').trim();
+        if (rowStatus && rowStatus !== 'in progress') continue;
+      }
+
       const chapterTitle = cell(row, colMap.chapterTitle) || 'Chapter 1';
       const chapterKey = chapterTitle.toLowerCase().trim();
 
@@ -189,14 +204,28 @@ export async function POST(req: NextRequest) {
       const rawRunJs = cell(row, colMap.runJsEnabled);
       const rawAi = cell(row, colMap.aiAssessmentEnabled);
 
+      const targetAudienceVal = cell(row, colMap.targetAudience);
+      const wordsVal = cell(row, colMap.wordsLength);
+
+      const purposeVal = cell(row, colMap.lessonPurpose);
+      const outlineVal = cell(row, colMap.outline);
+      const lessonOutlineVal = cell(row, colMap.lessonOutline);
+      // Combine: purpose first, then "Lesson Outline" column content appended after
+      const combinedOutline = [purposeVal, outlineVal, lessonOutlineVal].filter(Boolean).join('\n');
+
       chapter.lessons.push({
         lessonTitle,
-        outline: cell(row, colMap.outline),
+        outline: combinedOutline,
+        lessonPurpose: purposeVal,
         templateLessonUrl: cell(row, colMap.templateLessonUrl),
-        targetAudience: cell(row, colMap.targetAudience) || 'Intermediate',
-        wordsLength: parseNum(rawWords, 2000),
+        targetAudience: targetAudienceVal || 'Intermediate',
+        wordsLength: parseNum(wordsVal, 2000),
         runJsEnabled: rawRunJs ? parseBool(rawRunJs) : false,
         aiAssessmentEnabled: rawAi ? parseBool(rawAi) : true,
+        // URL columns — to be fetched in the pipeline for lesson title/content
+        prevLessonUrl: cell(row, colMap.prevLessonUrl),
+        nextLessonUrl: cell(row, colMap.nextLessonUrl),
+        // Plain-text title columns (fallback when no URL)
         prevLessonTitle: cell(row, colMap.prevLessonTitle),
         nextLessonTitle: cell(row, colMap.nextLessonTitle),
       });

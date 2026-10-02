@@ -19,6 +19,7 @@ export function courseOutlineGeneratorPrompt(args: {
   runJsEnabled: boolean;
   aiAssessmentEnabled: boolean;
   referenceContent: string;
+  templateLessonContent?: string;
 }): string {
   const prevContext = args.prevLessonTitle
     ? `## Previous Lesson\n${args.prevLessonTitle}`
@@ -26,6 +27,9 @@ export function courseOutlineGeneratorPrompt(args: {
   const nextContext = args.nextLessonTitle
     ? `## Next Lesson\n${args.nextLessonTitle}`
     : '';
+  const templateContext = args.templateLessonContent
+    ? `## Template Lesson\n${args.templateLessonContent}`
+    : 'Not provided';
 
   return `# ROLE
 You are an expert Educative Technical Content Strategist. Your task is to transform a high-level lesson plan provided as input into a granular, production-ready outline for a highly interactive technical lesson.
@@ -65,7 +69,7 @@ ${prevContext}
 ${nextContext}
 
 - \`Template-Lesson\` (use this as a structural inspiration):
-Not provided
+${templateContext}
 
 - \`Lesson plan\`:
 
@@ -74,7 +78,7 @@ Not provided
 ${args.referenceContent}
 
 # Logic for Narrative Continuity
-- If \`Template-Lesson\` is provided, adhere to its structure and headings/sections (based on the current lesson's outline).
+- If \`Template-Lesson\` is provided, treat it as a **strict structural blueprint**. Mirror its exact sequence of section types and heading names in the same order. Only introduce an additional section (e.g. an extra Hint or Image) where the current lesson's content genuinely requires a slot the template does not have — and only after the equivalent template section, never prepended before it or appended at the end unless the template itself ends there.
 
 ## Contextual Scoping:
 - Scenario A (Both \`Next-Lesson\` and \`Previous-Lesson\` Provided): Act as a strategic bridge. Ensure the current lesson logically flows from Previous-Lesson and provides all necessary scaffolding required for \`Next-Lesson\`.
@@ -87,9 +91,9 @@ ${args.referenceContent}
 1a. The first section of the outline must begin with a technical hook that immediately ties a real-world engineering challenge back to the specific topic of the lesson.
 1b. Introduce the topic formally by presenting it as a solution (use proper heading)
 2. **Anti-Consecutive Constraint:** You must never place two interactive sections back-to-back. Every interactive section must be preceded and followed by a \`text\` section.
-3. **The Conclusion Rule:** The final section must be a text-based conclusion or summary.
-   - **Allowed Headings:** "Conclusion", "Summary", "", etc.
-   - **Banned Headings:** "Key takeaways", "Wrap up", "Summary of the chapter", or "In summary".
+3. **The Conclusion Rule:**
+   - **When NO template is provided:** The final section MUST be a text-based conclusion or summary. Allowed headings: "Conclusion", "Summary", etc. Banned: "Key takeaways", "Wrap up", "Summary of the chapter", "In summary".
+   - **When a template IS provided:** The final section MUST mirror whatever the template ends with. Do **NOT** append a conclusion or summary section if the template does not end with one. The template's last section is the lesson's last section.
 4. **Logical Flow:** 4–6 main text sections following a "Problem → Mechanics → Solutions → Conclusion" narrative.
 5. **Heading Constraints:** Strictly **sentence case**. Max 50 characters. No colons or metaphors.
    - Interactive sections must have \`"sectionTitle": "N/A"\`.
@@ -112,6 +116,12 @@ You must strictly adapt your tone, terminology, and depth to the chosen domain/a
 - **Section Outline:** For \`text\` types, provide a concise ; separated section outline. e.g. \`"150-200 words - Introduction to rate limiting;Explain the token bucket algorithm and its role in preventing DDoS attacks;Define key terms like tokens, refill rate, and burst capacity."\`
 
 # Interactivity Types & Blending Rules
+
+**Template Blending Logic:**
+- IF a \`Template-Lesson\` is provided: Treat it as a **strict structural blueprint**, not merely inspiration. Follow its section sequence precisely — mirror each section's type, heading, and relative position. The template defines the skeleton; your job is to fill it with lesson-specific content.
+- **Adding sections:** Only add a section that does not appear in the template when the current lesson's content strictly requires it (e.g. a critical code snippet that has no equivalent slot). Insert it at the most logical inline position — never append extra sections to the end.
+- **Do NOT add** a conclusion, summary, or any closing section if the template does not end with one.
+- **The Master Override:** The constraints in the "Allowed Elements List" below are absolute for element types and counts. If the template uses a disallowed element or exceeds a count limit, follow the list instead and drop the extra element.
 
 **Allowed Elements List & Master Constraints:**
 
@@ -169,6 +179,7 @@ export function courseContentCreatorPrompt(args: {
   nextLessonTitle: string;
   lessonPurpose: string;
   referenceContent: string;
+  templateLessonContent?: string;
 }): string {
   return `# Role
 You are an expert technical content writer with extensive real-world technical experience. Your mission is to produce a high-quality lesson based on the input provided in pure Markdown.
@@ -196,7 +207,29 @@ ${args.outlineString}
 - Latest insights on topic:
 
 ${args.referenceContent}
+${args.templateLessonContent ? `
+---
+# ⚠ TEMPLATE LESSON — MANDATORY STRUCTURAL OVERRIDE
+A template lesson has been provided. **It is the structural law for this lesson. Every rule that follows is subordinate to it.**
 
+**Before writing a single word, do this:**
+1. Read the Template Lesson below.
+2. Identify every main H1 section heading (lines starting with a single \`#\`) in the order they appear.
+3. Those headings are your fixed skeleton — use the **exact same wording, exact same order**.
+4. Fill each section with content specific to this lesson's topic and outline.
+
+**Non-negotiable constraints:**
+- Section headings must **exactly match** the template's H1 headings — same words, same sentence case.
+- Section order must exactly follow the template — do not reorder, merge, or split sections.
+- Do **NOT** add a conclusion, summary, wrap-up, or any closing section if the template does not end with one.
+- The template's final section is the lesson's final section. Full stop.
+- If the outline has an extra section not in the template, drop it silently — the template wins.
+
+**Template Lesson:**
+${args.templateLessonContent}
+
+---
+` : ''}
 # Structural Rules
 - The Hook: Start the lesson immediately with a hook (described in the outline). No lesson title, H1, or H2 is permitted at the very top of the output. If the outline includes a first text section, the hook must serve as its opening content. (Never start with imagine this or that.)
 - Headings: Use H1 (#) for main section titles in sentence case.
@@ -273,7 +306,7 @@ Include 2–4 callouts in the exact format below (max 2–3 lines each), none sh
  -- If \`Previous Lesson summary\` is provided, hook should link to what we discussed and what we are going to discuss in current lesson.
  -- Else, tie the hook to introduce the topic the lesson is about.
 - If the outline includes a first text section, the hook must serve as its opening content.
-- Conclusion: short section with 2–4 sentences summarizing lessons, insights, and final advice in a motivational tone maybe with a transition to the next lesson, or future direction.
+- Conclusion: ${args.templateLessonContent ? 'ONLY write a conclusion if the Template Lesson ends with a conclusion section. If it does not, do not add one — the template\'s last section is the lesson\'s last section.' : 'Short section with 2–4 sentences summarizing lessons, insights, and final advice in a motivational tone, with a transition to the next lesson or future direction.'}
 
 # Important Technical Requirements
 - Strictly follow the outline, summary, domain, target audience, and defined WordLengths.
@@ -287,7 +320,7 @@ When generating content, use the following placeholder formats. **Do not generat
 
 ### 1. Placeholder Formatting Rules
 Use these exact tags and ensure the content inside describes the requirements of the asset:
-* [image][Description][2–3 line description][/Description][Caption][Short caption in sentence case][/Caption][/image]
+* [image][Description][Visual illustration brief — 2–3 sentences describing specific objects, components, relationships, or flows to depict as a clean vector illustration. Match the abstraction level of the section: high-level architecture gets chunky boxes, arrows, and labelled services; detailed design gets specific technical objects (servers, queues, databases, gears) with functional relationships. Never describe text, tables, dashboards, code, UI screenshots, or anything that would require dense labels. No cluttered annotations — keep the visual sparse and conceptual. Example good brief: "Two side-by-side stacks. Left: a monolith block feeding into a single database cylinder. Right: five small service boxes connected by thin arrows to separate database cylinders, with a load-balancer icon at the top." Example bad brief: "A diagram showing how microservices work with annotations explaining each step."][/Description][Caption][Short caption in sentence case][/Caption][/image]
 * [table][Brief description of columns, rows, and specific data points to be included][/table]
 * [code][Brief description of the programming language, logic, and specific function to be demonstrated][/code]
 * [markmap][Description of the central topic and the specific #/## hierarchy levels for the taxonomy][/markmap]
@@ -310,6 +343,12 @@ Use these exact tags and ensure the content inside describes the requirements of
 * Ensure design decisions include trade-offs.
 * Check abstractions are anchored in real systems.
 * Ensure there are at least 1-2 H3 (###) and 1-2 H2 (##) under the main section in the overall content.
+
+## Template lesson compliance
+${args.templateLessonContent
+  ? '- Template was provided — see the TEMPLATE LESSON OVERRIDE block at the top. Its heading names, order, and final section are absolute. Do not contradict that block.'
+  : '- No template provided — follow the outline and structural rules above freely.'
+}
 
 # Output Format
 - The output must begin with the hook—no lesson title or section title at the start.
