@@ -673,7 +673,10 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
   emit({ type: 'stage', name: 'editor-blocks', status: 'done' });
 
   const final = {
-    title: cleanTitle || input.blogTitle,
+    // The title the user typed is authoritative. sanitizeAndFormat() derives `cleanTitle` from
+    // the first <h1> in the article, but section headings are H1 in these prompts — so that is
+    // the first *section* heading, not the article title. Using it silently renamed the post.
+    title: input.blogTitle || cleanTitle,
     persona: input.persona,
     vertical: input.vertical,
     audience: input.targetAudience,
