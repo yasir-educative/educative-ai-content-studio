@@ -363,17 +363,30 @@ figcaption { margin-top: 0.6rem; text-align: center; font-size: 0.8rem; color: v
 }
 .ProseMirror figure.widget-image { margin: 1.5rem 0; text-align: center; }
 .ProseMirror figure.widget-image img { border-radius: 8px; max-width: 100%; }
+/* The caption is editable content, so it needs a visible, clickable slot even when empty. */
 .ProseMirror figure.widget-image figcaption {
   margin-top: 0.5rem;
   font-size: 0.8rem;
   color: var(--text-dim);
   outline: none;
-  min-height: 1.2em;
+  min-height: 1.4em;
+  cursor: text;
 }
-.ProseMirror figure.widget-image figcaption:empty::before {
-  content: attr(data-placeholder);
+/* Placeholder marks the empty node; the text is fixed here because CSS cannot read an
+   attribute from an ancestor. */
+.ProseMirror figure.widget-image.is-empty > figcaption::before {
+  content: 'Add a caption…';
   color: var(--text-faint);
+  pointer-events: none;
 }
+/* Headings: .article-prose uses margin-top 1.6em for the reader view, which is ~3rem above an
+   H1 and reads as a gap while editing. Tighten it here only — the published article keeps the
+   original spacing. */
+.ProseMirror h1, .ProseMirror h2, .ProseMirror h3, .ProseMirror h4 {
+  margin-top: 0.85em;
+  margin-bottom: 0.35em;
+}
+.ProseMirror > *:first-child { margin-top: 0; }
 /* Selected block-level nodes (images, dividers) need a visible selection ring. */
 .ProseMirror .ProseMirror-selectednode {
   outline: 2px solid var(--accent);

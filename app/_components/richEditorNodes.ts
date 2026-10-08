@@ -18,14 +18,18 @@ export const WidgetFigure = Node.create({
   // Must outrank StarterKit's image/paragraph handling of <figure>.
   priority: 1000,
   group: 'block',
-  atom: true,
+  // The caption is real editable content, not an attribute: making it a node view with a
+  // contentEditable child looked right but swallowed clicks and keystrokes, so the caption
+  // could never actually be typed. `inline*` with the <figcaption> as the content DOM lets
+  // ProseMirror manage the cursor natively.
+  content: 'inline*',
   draggable: true,
+  isolating: true,
 
   addAttributes() {
     return {
       src: { default: '' },
       alt: { default: '' },
-      caption: { default: '' },
       order: { default: null },
     };
   },
@@ -34,8 +38,8 @@ export const WidgetFigure = Node.create({
     return [
       {
         tag: 'figure',
-        // Only claim figures that actually wrap an image — table figures are handled by the
-        // table extensions, and claiming them here would swallow the table.
+        // Only claim figures that actually wrap an image — table figures are handled by
+        // WidgetTable, and claiming them here would swallow the table.
         getAttrs: (el) => {
           const node = el as HTMLElement;
           const img = node.querySelector('img');
@@ -43,52 +47,35 @@ export const WidgetFigure = Node.create({
           return {
             src: img.getAttribute('src') || '',
             alt: img.getAttribute('alt') || '',
-            caption: node.querySelector('figcaption')?.textContent?.trim() || '',
             order: node.getAttribute('data-order'),
           };
+        },
+        // Parse only the caption as content; the <img> is carried by the attributes above.
+        contentElement: (el) => {
+          const node = el as HTMLElement;
+          let cap = node.querySelector('figcaption');
+          if (!cap) {
+            // No caption yet — give ProseMirror an empty element so the node has somewhere to
+            // put the cursor instead of pulling the <img> in as content.
+            cap = node.ownerDocument.createElement('figcaption');
+            node.appendChild(cap);
+          }
+          return cap;
         },
       },
     ];
   },
 
   renderHTML({ HTMLAttributes }) {
-    const { src, alt, caption, order } = HTMLAttributes as Record<string, any>;
+    const { src, alt, order } = HTMLAttributes as Record<string, any>;
     const figAttrs: Record<string, any> = { class: 'widget-image' };
     if (order) figAttrs['data-order'] = order;
-    const children: any[] = [
-      ['img', { src, alt: alt || caption || '', style: 'max-width:100%;border-radius:8px;' }],
+    return [
+      'figure',
+      mergeAttributes(figAttrs),
+      ['img', { src, alt: alt || '', style: 'max-width:100%;border-radius:8px;' }],
+      ['figcaption', {}, 0],
     ];
-    if (caption) children.push(['figcaption', {}, caption]);
-    return ['figure', mergeAttributes(figAttrs), ...children];
-  },
-
-  addNodeView() {
-    return ({ node, editor, getPos }) => {
-      const dom = document.createElement('figure');
-      dom.className = 'widget-image';
-      dom.contentEditable = 'false';
-
-      const img = document.createElement('img');
-      img.src = node.attrs.src;
-      img.alt = node.attrs.alt || node.attrs.caption || '';
-      img.style.cssText = 'max-width:100%;border-radius:8px;';
-      dom.appendChild(img);
-
-      // The caption stays editable in place — click it and type.
-      const cap = document.createElement('figcaption');
-      cap.textContent = node.attrs.caption || '';
-      cap.contentEditable = 'true';
-      cap.dataset.placeholder = 'Add a caption…';
-      cap.addEventListener('blur', () => {
-        if (typeof getPos !== 'function') return;
-        const text = cap.textContent?.trim() || '';
-        if (text === node.attrs.caption) return;
-        editor.view.dispatch(editor.view.state.tr.setNodeMarkup(getPos(), undefined, { ...node.attrs, caption: text }));
-      });
-      dom.appendChild(cap);
-
-      return { dom, ignoreMutation: (m) => m.target === cap || cap.contains(m.target as any) };
-    };
   },
 });
 
@@ -219,6 +206,29 @@ export function restoreWidgetCaptions(html: string): string {
     (_full, before, caption, after) => `<figure${before}${after}><figcaption>${caption}</figcaption>`,
   );
   return out;
+}
+
+/**
+ * Copy each image figure's caption into its `alt`.
+ *
+ * renderHTML emits the <img> before the caption content, so it cannot know the caption text.
+ * The publishers read `alt` (WordPress alt_text, dev.to markdown), so an edited caption would
+ * otherwise never reach them. Figures whose alt was deliberately set to something different
+ * are left alone only when the caption is empty.
+ */
+export function syncFigureAltFromCaption(html: string): string {
+  return html.replace(
+    /<figure([^>]*class="[^"]*widget-image[^"]*"[^>]*)>([\s\S]*?)<\/figure>/gi,
+    (full, figAttrs: string, inner: string) => {
+      const caption = (inner.match(/<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i)?.[1] || '')
+        .replace(/<[^>]+>/g, '')
+        .trim();
+      if (!caption) return full;
+      const esc = caption.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const updated = inner.replace(/(<img\b[^>]*?)\salt="[^"]*"/i, '$1').replace(/<img\b/i, `<img alt="${esc}"`);
+      return `<figure${figAttrs}>${updated}</figure>`;
+    },
+  );
 }
 
 /** @deprecated use restoreWidgetCaptions */

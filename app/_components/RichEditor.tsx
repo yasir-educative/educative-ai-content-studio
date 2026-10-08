@@ -15,7 +15,8 @@ import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 // StarterKit v3 already bundles Link — importing it separately duplicates the extension.
 import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
-import { WidgetFigure, WidgetCode, WidgetTable, restoreWidgetCaptions } from './richEditorNodes';
+import { Placeholder } from '@tiptap/extensions';
+import { WidgetFigure, WidgetCode, WidgetTable, restoreWidgetCaptions, syncFigureAltFromCaption } from './richEditorNodes';
 
 const ACCEPT = 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml';
 
@@ -73,7 +74,7 @@ function Toolbar({ editor, blogId, onError }: { editor: Editor; blogId?: string;
     setBusy(true);
     try {
       const url = await uploadImage(file, blogId);
-      editor.chain().focus().insertContent({ type: 'widgetFigure', attrs: { src: url, alt: '', caption: '' } }).run();
+      editor.chain().focus().insertContent({ type: 'widgetFigure', attrs: { src: url, alt: '' } }).run();
     } catch (e: any) {
       onError(e?.message || String(e));
     } finally {
@@ -166,6 +167,12 @@ export function RichEditor({
       WidgetFigure,
       WidgetCode,
       WidgetTable,
+      // Marks empty nodes so the caption slot can show a prompt instead of collapsing to
+      // nothing, which made images look as though they had no caption field at all.
+      Placeholder.configure({
+        includeChildren: true,
+        placeholder: ({ node }) => (node.type.name === 'widgetFigure' ? 'Add a caption…' : ''),
+      }),
     ],
     content: html,
     editorProps: {
@@ -178,7 +185,7 @@ export function RichEditor({
           for (const f of files) {
             try {
               const url = await uploadImage(f, blogId);
-              editorRef.current?.chain().focus().insertContent({ type: 'widgetFigure', attrs: { src: url, alt: '', caption: '' } }).run();
+              editorRef.current?.chain().focus().insertContent({ type: 'widgetFigure', attrs: { src: url, alt: '' } }).run();
             } catch (e: any) { report(e?.message || String(e)); }
           }
         })();
@@ -195,8 +202,8 @@ export function RichEditor({
             try {
               const url = await uploadImage(f, blogId);
               const chain = editorRef.current?.chain().focus();
-              if (pos != null) chain?.insertContentAt(pos, { type: 'widgetFigure', attrs: { src: url, alt: '', caption: '' } }).run();
-              else chain?.insertContent({ type: 'widgetFigure', attrs: { src: url, alt: '', caption: '' } }).run();
+              if (pos != null) chain?.insertContentAt(pos, { type: 'widgetFigure', attrs: { src: url, alt: '' } }).run();
+              else chain?.insertContent({ type: 'widgetFigure', attrs: { src: url, alt: '' } }).run();
             } catch (e: any) { report(e?.message || String(e)); }
           }
         })();
@@ -211,7 +218,7 @@ export function RichEditor({
   useEffect(() => {
     if (!editor || !onReady) return;
     // Captions live in a node attribute, so the code-widget shape is restored on the way out.
-    onReady({ getHTML: () => restoreWidgetCaptions(editor.getHTML()) });
+    onReady({ getHTML: () => syncFigureAltFromCaption(restoreWidgetCaptions(editor.getHTML())) });
   }, [editor, onReady]);
 
   if (!editor) return <div className="card p-8 text-sm" style={{ color: 'var(--text-dim)' }}>Loading editor…</div>;
