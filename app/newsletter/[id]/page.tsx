@@ -11,6 +11,10 @@ import type { StageOutputMap, StageLogMap } from '@/app/_components/StageOutputs
 import { PublishMenu, PublishResults, type PublishChannel, type PublishOutcome } from '@/app/_components/PublishMenu';
 
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
+const RichEditor = dynamic(
+  () => import('@/app/_components/RichEditor').then((m) => ({ default: m.RichEditor })),
+  { ssr: false },
+);
 const StageOutputs = dynamic(
   () => import('@/app/_components/StageOutputs').then((m) => ({ default: m.StageOutputs })),
   { ssr: false },
@@ -169,7 +173,8 @@ export default function NewsletterRunPage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState('');
-  const editRef = useRef<HTMLDivElement>(null);
+  // Set by RichEditor once mounted; getHTML() returns the current document.
+  const editorRef = useRef<{ getHTML: () => string } | null>(null);
 
   const [imageEdit, setImageEdit] = useState<ImageEditState | null>(null);
 
@@ -333,13 +338,10 @@ export default function NewsletterRunPage() {
     setEditing(true);
     setContentView(null);
     setDebugOpen(false);
-    requestAnimationFrame(() => {
-      if (editRef.current) editRef.current.innerHTML = final?.html || '';
-    });
   }
 
   async function saveEdit() {
-    const html = editRef.current?.innerHTML || '';
+    const html = editorRef.current?.getHTML() || '';
     setSaving(true);
     setSaveErr('');
     try {
@@ -552,14 +554,12 @@ export default function NewsletterRunPage() {
 
       {isDone && (
         editing ? (
-          <article className="card p-8">
-            <div
-              ref={editRef}
-              className="article-prose outline-none min-h-[40vh]"
-              contentEditable
-              suppressContentEditableWarning
-            />
-          </article>
+          <RichEditor
+            html={final?.html || ''}
+            blogId={id}
+            onReady={(h) => { editorRef.current = h; }}
+            onError={setSaveErr}
+          />
         ) : contentView ? (
           <div className="card p-6 space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-2">

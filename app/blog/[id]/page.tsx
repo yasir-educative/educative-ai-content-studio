@@ -11,6 +11,10 @@ import { PublishMenu, PublishResults, type PublishChannel, type PublishOutcome }
 import type { StageOutputMap, StageLogMap } from '@/app/_components/StageOutputs';
 
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
+const RichEditor = dynamic(
+  () => import('@/app/_components/RichEditor').then((m) => ({ default: m.RichEditor })),
+  { ssr: false },
+);
 const StageOutputs = dynamic(
   () => import('@/app/_components/StageOutputs').then((m) => ({ default: m.StageOutputs })),
   { ssr: false },
@@ -165,7 +169,8 @@ export default function BlogRunPage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState('');
-  const editRef = useRef<HTMLDivElement>(null);
+  // Set by RichEditor once mounted; getHTML() returns the current document.
+  const editorRef = useRef<{ getHTML: () => string } | null>(null);
 
   // Outline review gate
   const [reviewPopup, setReviewPopup] = useState<{ gate: string; display: string; json: any } | null>(null);
@@ -317,14 +322,10 @@ export default function BlogRunPage() {
     setEditing(true);
     setContentView(null);
     setDebugOpen(false);
-    // Populate the contenteditable div after React renders it
-    requestAnimationFrame(() => {
-      if (editRef.current) editRef.current.innerHTML = final?.html || '';
-    });
   }
 
   async function saveEdit() {
-    const html = editRef.current?.innerHTML || '';
+    const html = editorRef.current?.getHTML() || '';
     setSaving(true);
     setSaveErr('');
     try {
@@ -539,14 +540,12 @@ export default function BlogRunPage() {
       {isDone && (
         editing ? (
           /* ── Edit mode — contenteditable renders the full blog with widgets ── */
-          <article className="card p-8">
-            <div
-              ref={editRef}
-              className="article-prose outline-none min-h-[40vh]"
-              contentEditable
-              suppressContentEditableWarning
-            />
-          </article>
+          <RichEditor
+            html={final?.html || ''}
+            blogId={id}
+            onReady={(h) => { editorRef.current = h; }}
+            onError={setSaveErr}
+          />
         ) : contentView ? (
           /* ── Source panel (HTML or Markdown) ── */
           <div className="card p-6 space-y-4">

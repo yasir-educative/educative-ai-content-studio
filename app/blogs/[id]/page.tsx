@@ -6,6 +6,10 @@ import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { PublishMenu, PublishResults, type PublishChannel, type PublishOutcome } from '@/app/_components/PublishMenu';
 const MarkdownRenderer = dynamic(() => import('@/app/_components/MarkdownRenderer'), { ssr: false });
+const RichEditor = dynamic(
+  () => import('@/app/_components/RichEditor').then((m) => ({ default: m.RichEditor })),
+  { ssr: false },
+);
 const StageOutputs = dynamic(() => import('@/app/_components/StageOutputs').then((m) => m.StageOutputs), { ssr: false });
 
 const STAGE_ORDER = [
@@ -191,7 +195,8 @@ export default function HistoryDetailPage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState('');
-  const editRef = useRef<HTMLDivElement>(null);
+  // Set by RichEditor once mounted; getHTML() returns the current document.
+  const editorRef = useRef<{ getHTML: () => string } | null>(null);
 
   const [imageEdit, setImageEdit] = useState<ImageEditState | null>(null);
 
@@ -257,13 +262,10 @@ export default function HistoryDetailPage() {
     setEditing(true);
     setContentView(null);
     setDebugOpen(false);
-    requestAnimationFrame(() => {
-      if (editRef.current) editRef.current.innerHTML = blog?.html || '';
-    });
   }
 
   async function saveEdit() {
-    const html = editRef.current?.innerHTML || '';
+    const html = editorRef.current?.getHTML() || '';
     setSaving(true);
     setSaveErr('');
     try {
@@ -483,14 +485,12 @@ export default function HistoryDetailPage() {
 
       {/* Main content area — mutually exclusive views */}
       {editing ? (
-        <article className="card p-8">
-          <div
-            ref={editRef}
-            className="article-prose outline-none min-h-[40vh]"
-            contentEditable
-            suppressContentEditableWarning
+        <RichEditor
+            html={blog?.html || ''}
+            blogId={blog?.id}
+            onReady={(h) => { editorRef.current = h; }}
+            onError={setSaveErr}
           />
-        </article>
       ) : contentView ? (
         <div className="card p-6 space-y-4">
           <div className="flex items-center justify-between flex-wrap gap-2">
