@@ -543,6 +543,7 @@ export default function BlogRunPage() {
           <RichEditor
             html={final?.html || ''}
             blogId={id}
+            title={final?.title}
             onReady={(h) => { editorRef.current = h; }}
             onError={setSaveErr}
           />

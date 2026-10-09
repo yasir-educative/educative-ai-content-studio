@@ -12,10 +12,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
+// v3 moved the menus to their own subpath.
+import { BubbleMenu } from '@tiptap/react/menus';
 import StarterKit from '@tiptap/starter-kit';
 // StarterKit v3 already bundles Link — importing it separately duplicates the extension.
 import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 import { Placeholder } from '@tiptap/extensions';
+import { AskAiPanel, type AskAiRequest } from './AskAiPanel';
 import { WidgetFigure, WidgetCode, WidgetTable, restoreWidgetCaptions, syncFigureAltFromCaption } from './richEditorNodes';
 
 const ACCEPT = 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml';
@@ -57,7 +60,7 @@ function Divider() {
   return <span className="mx-1 h-5 w-px shrink-0" style={{ background: 'var(--border)' }} />;
 }
 
-function Toolbar({ editor, blogId, onError }: { editor: Editor; blogId?: string; onError: (m: string) => void }) {
+function Toolbar({ editor, blogId, onError, onAskAi }: { editor: Editor; blogId?: string; onError: (m: string) => void; onAskAi: () => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   // Toolbar state must re-render on every selection/content change, which `useEditor` alone
@@ -92,7 +95,11 @@ function Toolbar({ editor, blogId, onError }: { editor: Editor; blogId?: string;
 
   return (
     <div
-      className="sticky top-0 z-10 flex flex-wrap items-center gap-1 rounded-t-xl border-b px-3 py-2"
+      // `position: sticky` is cancelled by `overflow: hidden` on any ancestor — the card used
+      // to have it, which is why the bar scrolled away.
+      // Offset by the mobile top bar (52px, lg:hidden) so the toolbar does not slide underneath
+      // it; on desktop that bar is gone and the sidebar is fixed to the left, so top-0 is right.
+      className="sticky top-[52px] lg:top-0 z-20 flex flex-wrap items-center gap-1 rounded-t-xl border-b px-3 py-2"
       style={{ background: 'var(--panel)', borderColor: 'var(--border)' }}
     >
       {([1, 2, 3] as const).map((level) => (
@@ -128,6 +135,8 @@ function Toolbar({ editor, blogId, onError }: { editor: Editor; blogId?: string;
         onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void pickImage(f); }}
       />
       <Divider />
+      <Btn title="Rewrite the selected text with AI" disabled={editor.state.selection.empty} onClick={onAskAi}>✦ Ask AI</Btn>
+      <Divider />
       <Btn title="Undo (⌘Z)" disabled={!editor.can().undo()} onClick={() => editor.chain().focus().undo().run()}>↶</Btn>
       <Btn title="Redo (⇧⌘Z)" disabled={!editor.can().redo()} onClick={() => editor.chain().focus().redo().run()}>↷</Btn>
     </div>
@@ -137,16 +146,19 @@ function Toolbar({ editor, blogId, onError }: { editor: Editor; blogId?: string;
 export interface RichEditorHandle { getHTML: () => string }
 
 export function RichEditor({
-  html, blogId, onReady, onError,
+  html, blogId, title, onReady, onError,
 }: {
   html: string;
   blogId?: string;
+  /** Article title — sent with an Ask AI request for context. */
+  title?: string;
   /** Receives a getter for the current HTML — call it when saving. */
   onReady?: (handle: RichEditorHandle) => void;
   onError?: (message: string) => void;
 }) {
   const [dragging, setDragging] = useState(false);
   const [localErr, setLocalErr] = useState('');
+  const [askAi, setAskAi] = useState<AskAiRequest | null>(null);
   const report = useCallback((m: string) => { setLocalErr(m); onError?.(m); }, [onError]);
 
   const editor = useEditor({
@@ -215,6 +227,37 @@ export function RichEditor({
   const editorRef = useRef<Editor | null>(null);
   editorRef.current = editor;
 
+  /** Nearest heading above the selection — tells the model which section it is editing. */
+  const headingAbove = useCallback((ed: Editor, from: number): string => {
+    let heading = '';
+    ed.state.doc.nodesBetween(0, from, (node) => {
+      if (node.type.name === 'heading') heading = node.textContent;
+    });
+    return heading;
+  }, []);
+
+  const openAskAi = useCallback(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    const { from, to } = ed.state.selection;
+    const selection = ed.state.doc.textBetween(from, to, '\n').trim();
+    if (!selection) return;
+    setAskAi({
+      selection,
+      documentText: ed.state.doc.textBetween(0, ed.state.doc.content.size, '\n'),
+      sectionHeading: headingAbove(ed, from),
+      title,
+      blogId,
+    });
+  }, [headingAbove, title, blogId]);
+
+  const replaceSelection = useCallback((text: string) => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    // insertContent on the live selection keeps it a single undo step.
+    ed.chain().focus().insertContent(text).run();
+  }, []);
+
   useEffect(() => {
     if (!editor || !onReady) return;
     // Captions live in a node attribute, so the code-widget shape is restored on the way out.
@@ -225,13 +268,28 @@ export function RichEditor({
 
   return (
     <div
-      className="card overflow-hidden p-0"
+      className="card p-0"
       style={{ borderColor: dragging ? 'var(--accent)' : 'var(--border)' }}
       onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); setDragging(true); } }}
       onDragLeave={() => setDragging(false)}
       onDrop={() => setDragging(false)}
     >
-      <Toolbar editor={editor} blogId={blogId} onError={report} />
+      <Toolbar editor={editor} blogId={blogId} onError={report} onAskAi={openAskAi} />
+      {/* Appears over any non-empty text selection, so a rewrite never needs the top bar. */}
+      <BubbleMenu
+        editor={editor}
+        shouldShow={({ state, from, to }) => from !== to && !!state.doc.textBetween(from, to, ' ').trim()}
+      >
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={openAskAi}
+          className="rounded-lg px-2.5 py-1.5 text-xs font-medium shadow-lg"
+          style={{ background: 'var(--accent)', color: '#fff', border: '1px solid var(--accent)' }}
+        >
+          ✦ Ask AI
+        </button>
+      </BubbleMenu>
       {dragging && (
         <div className="px-6 py-2 text-xs" style={{ color: 'var(--accent)', background: 'var(--accent-soft)' }}>
           Drop to insert the image here
@@ -241,6 +299,9 @@ export function RichEditor({
         <div className="px-6 py-2 text-xs" style={{ color: 'var(--danger-text)' }}>{localErr}</div>
       )}
       <EditorContent editor={editor} />
+      {askAi && (
+        <AskAiPanel request={askAi} onReplace={replaceSelection} onClose={() => setAskAi(null)} />
+      )}
       <div className="border-t px-6 py-2 text-[11px]" style={{ borderColor: 'var(--border)', color: 'var(--text-faint)' }}>
         Markdown shortcuts work as you type — <code># </code> heading, <code>&gt; </code> callout,
         <code> - </code> list, <code>```</code> code, <code>**bold**</code>. Drag or paste an image anywhere.

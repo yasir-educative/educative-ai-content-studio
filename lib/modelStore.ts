@@ -15,11 +15,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import path from 'path';
 
-export type ModelTier = 'main' | 'normal';
+export type ModelTier = 'main' | 'normal' | 'edit';
 
 export interface ModelConfig {
   mainModel: string;
   normalModel: string;
+  /** Used by the editor's "Ask AI" rewrite of a selection. */
+  editModel: string;
   updatedAt?: string;
 }
 
@@ -31,6 +33,8 @@ export function defaultConfig(): ModelConfig {
   return {
     mainModel: process.env.OPENAI_MODEL_TEXTGEN || process.env.OPENAI_MODEL_DEFAULT || 'gpt-5.4',
     normalModel: process.env.OPENAI_MODEL_LIGHT || 'gpt-5.4-mini',
+    // Interactive edits are short and want a fast, focused model.
+    editModel: process.env.OPENAI_MODEL_EDIT || 'gpt-6-luna',
   };
 }
 
@@ -47,6 +51,7 @@ export function getModelConfig(): ModelConfig {
     const config: ModelConfig = {
       mainModel: (parsed.mainModel || '').trim() || d.mainModel,
       normalModel: (parsed.normalModel || '').trim() || d.normalModel,
+      editModel: (parsed.editModel || '').trim() || d.editModel,
       updatedAt: parsed.updatedAt,
     };
     cache = { config, mtimeMs };
@@ -62,6 +67,7 @@ export function saveModelConfig(patch: Partial<ModelConfig>): ModelConfig {
   const next: ModelConfig = {
     mainModel: (patch.mainModel || '').trim() || current.mainModel,
     normalModel: (patch.normalModel || '').trim() || current.normalModel,
+    editModel: (patch.editModel || '').trim() || current.editModel,
     updatedAt: new Date().toISOString(),
   };
   if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true });
@@ -85,5 +91,7 @@ export function resetModelConfig(): ModelConfig {
 
 export function resolveModel(tier: ModelTier): string {
   const c = getModelConfig();
-  return tier === 'main' ? c.mainModel : c.normalModel;
+  if (tier === 'main') return c.mainModel;
+  if (tier === 'edit') return c.editModel;
+  return c.normalModel;
 }

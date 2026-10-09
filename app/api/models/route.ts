@@ -44,8 +44,8 @@ export async function GET() {
 
 export async function PUT(req: NextRequest) {
   try {
-    const { mainModel, normalModel, reset } = await req.json();
-    const config = reset ? resetModelConfig() : saveModelConfig({ mainModel, normalModel });
+    const { mainModel, normalModel, editModel, reset } = await req.json();
+    const config = reset ? resetModelConfig() : saveModelConfig({ mainModel, normalModel, editModel });
     return Response.json({ config });
   } catch (err: any) {
     return Response.json({ error: err?.message || String(err) }, { status: 400 });

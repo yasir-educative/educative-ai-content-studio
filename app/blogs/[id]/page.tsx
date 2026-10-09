@@ -488,6 +488,7 @@ export default function HistoryDetailPage() {
         <RichEditor
             html={blog?.html || ''}
             blogId={blog?.id}
+            title={blog?.finalTitle || blog?.request?.blogTitle}
             onReady={(h) => { editorRef.current = h; }}
             onError={setSaveErr}
           />

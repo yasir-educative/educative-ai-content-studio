@@ -557,6 +557,7 @@ export default function NewsletterRunPage() {
           <RichEditor
             html={final?.html || ''}
             blogId={id}
+            title={final?.title}
             onReady={(h) => { editorRef.current = h; }}
             onError={setSaveErr}
           />

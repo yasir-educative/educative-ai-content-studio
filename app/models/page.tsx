@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react';
 import { Field } from '../_components/Field';
 
-interface ModelConfig { mainModel: string; normalModel: string; updatedAt?: string }
+interface ModelConfig { mainModel: string; normalModel: string; editModel: string; updatedAt?: string }
 
 /** Which agents run on which tier — mirrors the `tier:` tags in the pipeline source. */
 const AGENTS: { tier: 'main' | 'normal'; pipeline: string; agents: string[] }[] = [
@@ -46,6 +46,7 @@ export default function ModelsPage() {
   const [searchModel, setSearchModel] = useState('');
   const [main, setMain] = useState('');
   const [normal, setNormal] = useState('');
+  const [edit, setEdit] = useState('');
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
@@ -60,6 +61,7 @@ export default function ModelsPage() {
     setSearchModel(j.searchModel || '');
     setMain(j.config.mainModel);
     setNormal(j.config.normalModel);
+    setEdit(j.config.editModel);
   }
   useEffect(() => { load(); }, []);
 
@@ -69,7 +71,7 @@ export default function ModelsPage() {
       const res = await fetch('/api/models', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(reset ? { reset: true } : { mainModel: main, normalModel: normal }),
+        body: JSON.stringify(reset ? { reset: true } : { mainModel: main, normalModel: normal, editModel: edit }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || 'Save failed');
@@ -101,7 +103,7 @@ export default function ModelsPage() {
     );
   }
 
-  const dirty = !!config && (main !== config.mainModel || normal !== config.normalModel);
+  const dirty = !!config && (main !== config.mainModel || normal !== config.normalModel || edit !== config.editModel);
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -146,6 +148,12 @@ export default function ModelsPage() {
             </details>
           </div>
 
+          <div className="card p-6 space-y-3">
+            <Field label="Editor “Ask AI” model" hint="Rewrites a highlighted passage in the article editor. Short, interactive calls.">
+              <Picker value={edit} onChange={setEdit} />
+            </Field>
+          </div>
+
           <div className="card p-6">
             <Field label="Web search model" hint="Set by OPENAI_SEARCH_MODEL in the environment — a separate capability, not configurable here.">
               <input className="input" value={searchModel} disabled readOnly />
@@ -164,7 +172,7 @@ export default function ModelsPage() {
             </button>
             {defaults && (
               <span className="text-[11px]" style={{ color: 'var(--text-faint)' }}>
-                defaults: {defaults.mainModel} / {defaults.normalModel}
+                defaults: {defaults.mainModel} / {defaults.normalModel} / {defaults.editModel}
               </span>
             )}
           </div>
