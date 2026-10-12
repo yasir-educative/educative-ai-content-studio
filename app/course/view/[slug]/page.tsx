@@ -669,6 +669,14 @@ export default function CourseViewPage() {
   const [publishSummary, setPublishSummary] = useState<{ published: number; failed: number; skipped: number; total: number } | null>(null);
   const [publishErr, setPublishErr] = useState('');
 
+  // Single-lesson publish modal
+  const [lessonPublishOpen, setLessonPublishOpen] = useState(false);
+  const [lessonPublishAuthorId, setLessonPublishAuthorId] = useState('');
+  const [lessonPublishCollectionId, setLessonPublishCollectionId] = useState('');
+  const [lessonPublishing, setLessonPublishing] = useState(false);
+  const [lessonPublishResult, setLessonPublishResult] = useState<{ url?: string; error?: string } | null>(null);
+  const [lessonPublishErr, setLessonPublishErr] = useState('');
+
   // Delete states
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingCourse, setDeletingCourse] = useState(false);
@@ -844,6 +852,49 @@ export default function CourseViewPage() {
       setPublishErr(e?.message || String(e));
     } finally {
       setPublishing(false);
+    }
+  }
+
+  // ── Single-lesson publish helpers ─────────────────────────────────────────────
+  function openLessonPublish() {
+    setLessonPublishAuthorId(publishAuthorId); // reuse last-used values
+    setLessonPublishCollectionId(publishCollectionId);
+    setLessonPublishResult(null);
+    setLessonPublishErr('');
+    setLessonPublishOpen(true);
+  }
+
+  async function runLessonPublish() {
+    if (!selectedId) return;
+    const aid = lessonPublishAuthorId.trim();
+    const cid = lessonPublishCollectionId.trim();
+    if (!cid) { setLessonPublishErr('Collection ID is required'); return; }
+    setLessonPublishing(true);
+    setLessonPublishErr('');
+    setLessonPublishResult(null);
+    try {
+      const res = await fetch('/api/course/publish-lesson', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lessonId: selectedId, authorId: aid || undefined, collectionId: cid }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Publish failed');
+      // Persist last-used IDs for convenience
+      setPublishAuthorId(aid);
+      setPublishCollectionId(cid);
+      setLessonPublishResult({ url: json.url });
+      // Update local summary so status dot turns green
+      setAllLessons((prev) =>
+        prev.map((l) => l.id === selectedId ? { ...l, status: 'published' as Status, publishedUrl: json.url } : l)
+      );
+      setLessonData((prev) =>
+        prev[selectedId] ? { ...prev, [selectedId]: { ...prev[selectedId], status: 'published', publishedUrl: json.url } } : prev
+      );
+    } catch (e: any) {
+      setLessonPublishErr(e?.message || String(e));
+    } finally {
+      setLessonPublishing(false);
     }
   }
 
@@ -1029,9 +1080,11 @@ export default function CourseViewPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Save failed');
+      // Clear editorBlocks from local state — they're now stale relative to the edited markdown.
+      // User sees the updated markdown immediately; blocks stay on disk for future re-runs.
       setLessonData((prev) => ({
         ...prev,
-        [selectedId]: { ...prev[selectedId], markdown: json.markdown ?? editDraft },
+        [selectedId]: { ...prev[selectedId], markdown: json.markdown ?? editDraft, editorBlocks: [] },
       }));
       setContentView('markdown');
     } catch (e: any) {
@@ -1393,6 +1446,17 @@ export default function CourseViewPage() {
                     )}
                     {selectedSummary && (
                       <button
+                        className="btn-secondary flex items-center gap-1.5 text-xs py-1 px-3"
+                        onClick={openLessonPublish}
+                      >
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                        </svg>
+                        Publish
+                      </button>
+                    )}
+                    {selectedSummary && (
+                      <button
                         className="btn-secondary flex items-center gap-1.5 text-xs py-1 px-3 ring-1 ring-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
                         onClick={() => openRegenModal(selectedSummary)}
                       >
@@ -1546,6 +1610,85 @@ export default function CourseViewPage() {
               {publishResults && (
                 <button className="btn-secondary" onClick={() => { setPublishResults(null); setPublishSummary(null); setPublishErr(''); }}>
                   Publish Again
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Single-lesson publish modal ── */}
+      {lessonPublishOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md flex flex-col rounded-2xl border border-[var(--border)] bg-[var(--bg)] shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
+              <div>
+                <h2 className="text-base font-semibold">Publish Lesson to Educative</h2>
+                <p className="text-xs text-[var(--text-dim)] mt-0.5 line-clamp-1">
+                  {selectedLesson?.finalTitle || selectedLesson?.request?.blogTitle || selectedSummary?.blogTitle || 'Selected lesson'}
+                </p>
+              </div>
+              <button className="text-[var(--text-faint)] hover:text-[var(--text)] transition-colors" onClick={() => { if (!lessonPublishing) setLessonPublishOpen(false); }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4">
+              {!lessonPublishResult ? (
+                <>
+                  <div className="flex gap-3">
+                    <div className="space-y-1 flex-1">
+                      <label className="text-xs font-medium text-[var(--text-dim)]">Author ID</label>
+                      <input
+                        className="input w-full text-sm"
+                        placeholder="e.g. 6436638368727040"
+                        value={lessonPublishAuthorId}
+                        onChange={(e) => setLessonPublishAuthorId(e.target.value)}
+                        disabled={lessonPublishing}
+                      />
+                    </div>
+                    <div className="space-y-1 flex-1">
+                      <label className="text-xs font-medium text-[var(--text-dim)]">Collection ID <span className="text-red-400">*</span></label>
+                      <input
+                        className="input w-full text-sm"
+                        placeholder="e.g. 5953982300225536"
+                        value={lessonPublishCollectionId}
+                        onChange={(e) => setLessonPublishCollectionId(e.target.value)}
+                        disabled={lessonPublishing}
+                      />
+                    </div>
+                  </div>
+                  {lessonPublishErr && (
+                    <div className="rounded-lg border border-red-500/40 bg-red-500/10 text-red-300 p-3 text-sm">{lessonPublishErr}</div>
+                  )}
+                </>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-300">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                    <span className="text-sm font-medium">Lesson published successfully</span>
+                  </div>
+                  {lessonPublishResult.url && (
+                    <a href={lessonPublishResult.url} target="_blank" rel="noreferrer" className="text-xs text-emerald-300 underline block break-all">
+                      {lessonPublishResult.url}
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--border)]">
+              <button className="btn-secondary" onClick={() => setLessonPublishOpen(false)} disabled={lessonPublishing}>
+                {lessonPublishResult ? 'Close' : 'Cancel'}
+              </button>
+              {!lessonPublishResult && (
+                <button
+                  className="btn-primary flex items-center gap-2"
+                  onClick={runLessonPublish}
+                  disabled={lessonPublishing || !lessonPublishCollectionId.trim()}
+                >
+                  {lessonPublishing && <span className="h-3.5 w-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin inline-block" />}
+                  {lessonPublishing ? 'Publishing…' : 'Publish lesson'}
                 </button>
               )}
             </div>
