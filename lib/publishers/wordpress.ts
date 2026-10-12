@@ -32,6 +32,21 @@ function apiBase(c: Channel): string {
   return `${site}/wp-json/wp/v2`;
 }
 
+/**
+ * A WAF/bot-protection screen in front of the REST API. SiteGround's anti-bot answers with a
+ * *successful* status (202) carrying an HTML proof-of-work page instead of the JSON WordPress
+ * would have returned, so `res.ok` is true and the body parses to nothing. Detected here rather
+ * than at the call sites, which would otherwise report it as "the API returned no fields".
+ */
+function challengeDetail(res: Response, text: string): string | null {
+  if (res.headers.get('sg-captcha')) return 'SiteGround anti-bot (sg-captcha) challenge';
+  if (/\/\.well-known\/(sgcaptcha|captcha)\//.test(text)) return 'SiteGround anti-bot (sg-captcha) challenge';
+  if (/cf-mitigated|cf_chl_opt|Just a moment\.\.\./.test(text) || res.headers.get('cf-mitigated')) {
+    return 'Cloudflare bot challenge';
+  }
+  return null;
+}
+
 async function wpFetch(c: Channel, url: string, init: RequestInit): Promise<any> {
   const res = await fetch(url, {
     ...init,
@@ -47,6 +62,22 @@ async function wpFetch(c: Channel, url: string, init: RequestInit): Promise<any>
   if (!res.ok) {
     const detail = json?.message || text.slice(0, 300) || res.statusText;
     throw new Error(`WordPress ${res.status}: ${detail}`);
+  }
+
+  const challenge = challengeDetail(res, text);
+  if (challenge) {
+    throw new Error(
+      `${new URL(url).host} is behind a ${challenge}, so the request never reached WordPress ` +
+        `(HTTP ${res.status}, HTML instead of JSON). The site's security plugin has to allow this ` +
+        `server's IP, or exclude /wp-json/ from its bot protection.`,
+    );
+  }
+  if (json === null) {
+    const ct = res.headers.get('content-type') || 'no content-type';
+    throw new Error(
+      `WordPress ${res.status} returned a non-JSON body (${ct}) — something in front of the REST ` +
+        `API intercepted the request: ${text.slice(0, 200) || '<empty body>'}`,
+    );
   }
   return json;
 }
