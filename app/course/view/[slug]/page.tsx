@@ -689,6 +689,9 @@ export default function CourseViewPage() {
   // Image edit state
   const [imageEdit, setImageEdit] = useState<ImageEditState | null>(null);
 
+  // Track lessons whose markdown was manually edited so we default to 'markdown' view on return
+  const editedLessonsRef = useRef<Set<string>>(new Set());
+
   // ── Initial load ──────────────────────────────────────────────────────────────
   useEffect(() => {
     async function load() {
@@ -1080,12 +1083,11 @@ export default function CourseViewPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Save failed');
-      // Clear editorBlocks from local state — they're now stale relative to the edited markdown.
-      // User sees the updated markdown immediately; blocks stay on disk for future re-runs.
       setLessonData((prev) => ({
         ...prev,
-        [selectedId]: { ...prev[selectedId], markdown: json.markdown ?? editDraft, editorBlocks: [] },
+        [selectedId]: { ...prev[selectedId], markdown: json.markdown ?? editDraft },
       }));
+      editedLessonsRef.current.add(selectedId);
       setContentView('markdown');
     } catch (e: any) {
       setEditErr(e?.message || String(e));
@@ -1107,7 +1109,9 @@ export default function CourseViewPage() {
     if (summary?.status === 'running') {
       setLessonData((prev) => { const next = { ...prev }; delete next[id]; return next; });
     }
-    setContentView('blocks');
+    // If the user manually edited this lesson's markdown, default to markdown view
+    // so they see their edits instead of stale editorBlocks
+    setContentView(editedLessonsRef.current.has(id) ? 'markdown' : 'blocks');
     setEditErr('');
   }
 
