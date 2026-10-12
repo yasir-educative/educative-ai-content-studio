@@ -1403,7 +1403,7 @@ export default function CourseViewPage() {
                 {/* View toggle + edit controls */}
                 <div className="flex items-center justify-between flex-wrap gap-2 pt-2">
                   <div className="flex items-center gap-2">
-                    {selectedLesson.editorBlocks && selectedLesson.editorBlocks.length > 0 && (
+                    {selectedLesson.editorBlocks && selectedLesson.editorBlocks.length > 0 && !editedLessonsRef.current.has(selectedId!) && (
                       <button
                         className={`btn-secondary text-xs py-1 px-3 ${contentView === 'blocks' ? 'ring-1 ring-[var(--accent)]' : ''}`}
                         onClick={() => setContentView('blocks')}
@@ -1483,7 +1483,7 @@ export default function CourseViewPage() {
                   onChange={(e) => setEditDraft(e.target.value)}
                   spellCheck={false}
                 />
-              ) : contentView === 'blocks' && selectedLesson.editorBlocks && selectedLesson.editorBlocks.length > 0 ? (
+              ) : contentView === 'blocks' && selectedLesson.editorBlocks && selectedLesson.editorBlocks.length > 0 && !editedLessonsRef.current.has(selectedId!) ? (
                 <EditorBlocksRenderer blocks={selectedLesson.editorBlocks} onEditImage={openImageEdit} />
               ) : selectedLesson.markdown ? (
                 <MarkdownRenderer className="prose prose-invert prose-sm max-w-none">
