@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBlog, updateBlog } from '@/lib/storage';
 import { getRun } from '@/lib/runManager';
+import { rebuildLessonBlocks } from '@/lib/coursePipeline';
 
 export const runtime = 'nodejs';
 
@@ -27,6 +28,22 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (!Object.keys(patch).length) {
       return NextResponse.json({ error: 'html, markdown, or editorBlocks is required' }, { status: 400 });
     }
+
+    // Course lessons: a markdown edit must regenerate editorBlocks, otherwise the
+    // rendered view keeps showing prose from before the edit. Widgets are carried over.
+    if (typeof markdown === 'string' && !Array.isArray(editorBlocks)) {
+      const existing = await getBlog(id);
+      if (existing?.runType === 'course' && existing.editorBlocks?.length) {
+        try {
+          const rebuilt = rebuildLessonBlocks(markdown, existing.editorBlocks);
+          patch.editorBlocks = rebuilt.editorBlocks;
+          patch.html = rebuilt.html;
+        } catch (e: any) {
+          console.warn('[blog PATCH] block rebuild failed, saving markdown only:', e?.message);
+        }
+      }
+    }
+
     const updated = await updateBlog(id, patch);
     if (!updated) {
       return NextResponse.json({ error: 'Blog not found' }, { status: 404 });

@@ -689,8 +689,6 @@ export default function CourseViewPage() {
   // Image edit state
   const [imageEdit, setImageEdit] = useState<ImageEditState | null>(null);
 
-  // Track lessons whose markdown was manually edited so we default to 'markdown' view on return
-  const editedLessonsRef = useRef<Set<string>>(new Set());
 
   // ── Initial load ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1083,12 +1081,17 @@ export default function CourseViewPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Save failed');
+      // PATCH returns regenerated editorBlocks/html for course lessons
       setLessonData((prev) => ({
         ...prev,
-        [selectedId]: { ...prev[selectedId], markdown: json.markdown ?? editDraft },
+        [selectedId]: {
+          ...prev[selectedId],
+          markdown: json.markdown ?? editDraft,
+          ...(json.editorBlocks ? { editorBlocks: json.editorBlocks } : {}),
+          ...(json.html ? { html: json.html } : {}),
+        },
       }));
-      editedLessonsRef.current.add(selectedId);
-      setContentView('markdown');
+      setContentView(json.editorBlocks ? 'blocks' : 'markdown');
     } catch (e: any) {
       setEditErr(e?.message || String(e));
     } finally {
@@ -1109,9 +1112,7 @@ export default function CourseViewPage() {
     if (summary?.status === 'running') {
       setLessonData((prev) => { const next = { ...prev }; delete next[id]; return next; });
     }
-    // If the user manually edited this lesson's markdown, default to markdown view
-    // so they see their edits instead of stale editorBlocks
-    setContentView(editedLessonsRef.current.has(id) ? 'markdown' : 'blocks');
+    setContentView('blocks');
     setEditErr('');
   }
 
@@ -1484,9 +1485,7 @@ export default function CourseViewPage() {
                   spellCheck={false}
                 />
               ) : contentView === 'blocks' && selectedLesson.editorBlocks && selectedLesson.editorBlocks.length > 0 ? (
-                editedLessonsRef.current.has(selectedId!) && selectedLesson.markdown
-                  ? <MarkdownRenderer className="prose prose-invert prose-sm max-w-none">{selectedLesson.markdown}</MarkdownRenderer>
-                  : <EditorBlocksRenderer blocks={selectedLesson.editorBlocks} onEditImage={openImageEdit} />
+                <EditorBlocksRenderer blocks={selectedLesson.editorBlocks} onEditImage={openImageEdit} />
               ) : selectedLesson.markdown ? (
                 <MarkdownRenderer className="prose prose-invert prose-sm max-w-none">
                   {selectedLesson.markdown}

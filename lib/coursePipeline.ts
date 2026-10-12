@@ -307,6 +307,34 @@ function mergeCourseBlocks(args: {
   return blocks.filter(Boolean);
 }
 
+// Rebuild editor blocks after a manual markdown edit.
+// Prose is re-rendered from the edited markdown; widget blocks (code, images, quiz, …)
+// are reused from the existing blocks in document order, so no LLM calls are needed.
+export function rebuildLessonBlocks(
+  markdown: string,
+  existingBlocks: any[],
+): { editorBlocks: any[]; html: string; title: string } {
+  const byType = (t: string) => (existingBlocks || []).filter((b) => b?.type === t);
+
+  const { protectedMarkdown } = extractAndProtect(markdown);
+  const rendered = markdownToHtml(protectedMarkdown);
+  const { cleanedHtml, title } = sanitizeAndFormat({ html: rendered, rawMarkdown: protectedMarkdown });
+
+  const editorBlocks = mergeCourseBlocks({
+    cleanedHtml,
+    codeBlocks: byType('Code'),
+    tableBlocks: byType('Table'),
+    imageBlocks: byType('Image'),
+    runJsBlocks: byType('RunJS'),
+    hintBlocks: byType('SpoilerEditor'),
+    markmapBlocks: byType('MarkMap'),
+    quizBlocks: byType('Quiz'),
+    aiAssessmentBlocks: byType('PromptAI'),
+  });
+
+  return { editorBlocks, html: cleanedHtml, title };
+}
+
 // Normalize summary-elements output from n8n format to internal widget args.
 function normalizeSummaryElements(raw: any): {
   summary: string;
