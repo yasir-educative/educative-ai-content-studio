@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 
 type MobileCardType =
   | 'text' | 'text_img' | 'img_only' | 'text-with-code' | 'code-with-output'
@@ -1386,12 +1387,19 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function load() {
-    const res = await fetch(`/api/mobile-course/${params.id}`, { cache: 'no-store' });
-    if (!res.ok) return;
-    const json = await res.json();
-    setCourse(json.course);
-    setLive(json.live);
-    setLoading(false);
+    // loading must clear on every path, or a failed fetch leaves the page stuck
+    // on "Loading…" with no navigation out of it.
+    try {
+      const res = await fetch(`/api/mobile-course/${params.id}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const json = await res.json();
+      setCourse(json.course);
+      setLive(json.live);
+    } catch {
+      // leave `course` null so the not-found branch renders
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, []);
@@ -1554,7 +1562,16 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
   }
 
   if (loading) return <div className="card p-6 text-sm text-[var(--text-faint)]">Loading…</div>;
-  if (!course) return <div className="card p-6 text-sm text-red-400">Course not found.</div>;
+  if (!course) {
+    return (
+      <div className="card p-6 space-y-3">
+        <p className="text-sm text-red-400">Course not found.</p>
+        <Link href="/mobile-course" className="text-xs text-[var(--text-faint)] hover:text-[var(--text)] transition-colors">
+          ← All mobile courses
+        </Link>
+      </div>
+    );
+  }
 
   const chapters = course.chapters || [];
   const currentChapter = chapters[activeChapter];
@@ -1565,6 +1582,12 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
       {/* Left sidebar */}
       <aside className="w-64 shrink-0 border-r border-[var(--border)] bg-[var(--card)] flex flex-col sticky top-16 self-start max-h-[calc(100vh-4rem)] overflow-hidden">
         <div className="px-4 pt-4 pb-3 border-b border-[var(--border)]">
+          <Link
+            href="/mobile-course"
+            className="text-xs text-[var(--text-faint)] hover:text-[var(--text)] block mb-2 transition-colors"
+          >
+            ← All mobile courses
+          </Link>
           <span className="pill text-xs mb-2 block w-fit">Mobile Course</span>
           <h1 className="font-semibold text-sm text-[var(--text)] leading-snug line-clamp-2">{course.title}</h1>
           <p className="text-[11px] text-[var(--text-faint)] mt-1">

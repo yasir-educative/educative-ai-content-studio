@@ -121,7 +121,13 @@ const MAIN_NAV = [
     href: '/mobile-course',
     label: 'Mobile',
     icon: <IcMobile />,
-    match: (p: string) => p === '/mobile-course' || p.startsWith('/mobile-course/') || p === '/mobile-short' || p.startsWith('/mobile-short/'),
+    match: (p: string) => p === '/mobile-course' || p.startsWith('/mobile-course/'),
+  },
+  {
+    href: '/mobile-short',
+    label: 'Shorts',
+    icon: <IcMobile />,
+    match: (p: string) => p === '/mobile-short' || p.startsWith('/mobile-short/'),
   },
 ];
 

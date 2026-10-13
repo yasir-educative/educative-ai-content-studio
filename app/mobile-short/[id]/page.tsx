@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 
 type MobileCardType =
   | 'text' | 'text_img' | 'img_only' | 'text-with-code' | 'code-with-output'
@@ -1291,13 +1292,20 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
   const shortRef = useRef<MobileShort | null>(null);
 
   async function load() {
-    const res = await fetch(`/api/mobile-short/${params.id}`, { cache: 'no-store' });
-    if (!res.ok) return;
-    const json = await res.json();
-    shortRef.current = json.short;
-    setShort(json.short);
-    setLive(json.live);
-    setLoading(false);
+    // loading must clear on every path, or a failed fetch leaves the page stuck
+    // on "Loading…" with no navigation out of it.
+    try {
+      const res = await fetch(`/api/mobile-short/${params.id}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const json = await res.json();
+      shortRef.current = json.short;
+      setShort(json.short);
+      setLive(json.live);
+    } catch {
+      // leave `short` null so the not-found branch renders
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, []);
@@ -1372,7 +1380,16 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
   }
 
   if (loading) return <div className="card p-6 text-sm text-[var(--text-faint)]">Loading…</div>;
-  if (!short) return <div className="card p-6 text-sm text-red-400">Short not found.</div>;
+  if (!short) {
+    return (
+      <div className="card p-6 space-y-3">
+        <p className="text-sm text-red-400">Short not found.</p>
+        <Link href="/mobile-short" className="text-xs text-[var(--text-faint)] hover:text-[var(--text)] transition-colors">
+          ← All shorts
+        </Link>
+      </div>
+    );
+  }
 
   const cards = short.cards || [];
 
@@ -1381,6 +1398,12 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
       {/* Left sidebar */}
       <aside className="w-64 shrink-0 border-r border-[var(--border)] bg-[var(--card)] flex flex-col sticky top-16 self-start max-h-[calc(100vh-4rem)] overflow-hidden">
         <div className="px-4 pt-4 pb-3 border-b border-[var(--border)]">
+          <Link
+            href="/mobile-short"
+            className="text-xs text-[var(--text-faint)] hover:text-[var(--text)] block mb-2 transition-colors"
+          >
+            ← All shorts
+          </Link>
           <span className="pill text-xs mb-2 block w-fit">Mobile Short</span>
           <h1 className="font-semibold text-sm text-[var(--text)] leading-snug line-clamp-2">{short.topic}</h1>
           {short.domain && (
