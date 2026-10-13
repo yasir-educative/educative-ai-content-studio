@@ -201,7 +201,13 @@ For every TEXT_IMG card in your output:
 If both checks pass, the card is ready to output.`;
 }
 
-export function shortsJsonGeneratorPrompt({ cardsOutput }: { cardsOutput: string }): string {
+export function shortsJsonGeneratorPrompt({
+  cardsOutput,
+  isHighlightCardNeeded,
+}: {
+  cardsOutput: string;
+  isHighlightCardNeeded?: boolean;
+}): string {
   return `# Context and Goal
 Given some information for individual cards for a mobile app, you are supposed to identify the card types from a given list convert the information into the given JSON formats. The final output must be true JSON and follow the guidelines given below.
 
@@ -331,7 +337,9 @@ Given some information for individual cards for a mobile app, you are supposed t
 
 # Silent check
 - Verify the generated JSON formats of each card with the example output, correct if there are any discrepancies before returning the final results.
-- HIGHLIGHT suppression: If the input contains no HIGHLIGHT card content, do NOT output any highlightCard object. Only include a highlightCard if the input explicitly provides highlightCard content.
+${isHighlightCardNeeded
+  ? `- HIGHLIGHT is ENABLED for this run. The input contains a card whose card_type is HIGHLIGHT. You MUST convert it into a \`highlightCard\` object and include it in the output. Note the input labels this card type "HIGHLIGHT" while the output type string is "highlightCard" — these are the same card. Never drop it.`
+  : `- HIGHLIGHT is DISABLED for this run. Do NOT output any \`highlightCard\` object, even if the input happens to contain a card whose card_type is HIGHLIGHT. Drop that card entirely.`}
 - Character integrity: Do not expand, summarize, or rewrite text from the input. Preserve exact content while converting to JSON format.
 
 # Input to convert

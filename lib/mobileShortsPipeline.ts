@@ -296,7 +296,10 @@ export async function runMobileShortPipeline(
   // Stage 3: JSON Generator — format normalisation, not authoring
   emit({ type: 'stage', name: 'json-generator', status: 'start' });
   const jsonRaw = await generateText(
-    registeredShortsJsonGeneratorPrompt({ cardsOutput: cardsRaw }),
+    registeredShortsJsonGeneratorPrompt({
+      cardsOutput: cardsRaw,
+      isHighlightCardNeeded: input.isHighlightCardNeeded,
+    }),
     { tier: 'normal', maxTokens: 32000 },
   );
   emit({ type: 'data', name: 'json-generator', payload: { jsonRaw } });
