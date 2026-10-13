@@ -87,8 +87,8 @@ The \`content\` field of every TEXT_IMG card must be a **single prose paragraph*
 9. Maintain consistent technical writing: Use a grounded senior-engineer voice. Keep wording precise, professional, and specific. Avoid informal tone, hype, vague claims, mixed styles, and over-general statements such as "AI often," "most answers," or "this usually works." Use scoped language that explains the condition or constraint behind the claim.
 10. Run a final quality check: Before returning the JSON, confirm that required context is covered, the requested card count is followed, visuals teach rather than decorate, scenarios are truly necessary, and language is consistent across all cards.
 11. STRICT CHARACTER LIMIT ENFORCEMENT: Count raw characters in every text field before returning. Include all markdown syntax characters (asterisks, hyphens, backticks, etc.) in the count. Rewrite any field that falls outside its type's exact range — truncate if over the maximum, expand with meaningful depth if under the minimum. These are hard limits, not targets:
-    - TEXT → content: 350–450 chars
-    - TEXT_IMG → content: 240–280 chars
+    - TEXT → content: 350–420 chars
+    - TEXT_IMG → content: 230–260 chars
     - HIGHLIGHT → content: 100–130 chars
     - SCENARIO → each section's content: 100–130 chars (Context/Why), 200–230 chars (The Fix)
 
@@ -133,12 +133,12 @@ All titles and list items must be in sentence case.
 ## Card type specifications
 ### Learn cards
 #### 1. TEXT
-- **Length:** 350-450 chars (aim for 400-450. Use the full range to deliver depth, not padding.)
+- **Length:** 350-420 chars (aim for 380-420. Use the full range to deliver depth, not padding.)
 - **Use:** Definitions, explanations, conceptual summaries.
 - **Style:** Concise, conversational. Every TEXT card must use at least two markdown features (lists, callouts, or tables) to keep content scannable and visually rich. Plain walls of text are not acceptable.
 
 #### 2. TEXT_IMG
-- **Length:** 240-280 chars max (raw characters including markdown syntax)
+- **Length:** 230-260 chars max (raw characters including markdown syntax)
 - **FORMAT — ABSOLUTE: one prose paragraph only. Zero hyphens starting a line. Zero blockquotes. Zero tables.**
   - If you feel the urge to write a bullet list, stop. The diagram shows the steps. The text field must say WHY those steps matter or what goes wrong — not the steps themselves.
   - If your text starts with a bold term followed by a colon and bullets, that is a TEXT card pattern, not a TEXT_IMG pattern. Rewrite as a single flowing sentence.

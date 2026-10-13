@@ -59,9 +59,11 @@ function parseHighlight(val: string): boolean {
   return ['yes', 'true', '1', 'y'].includes(val.toLowerCase().trim());
 }
 
+// 5 is a hard ceiling; a provided count is honored, anything unparseable falls back to 5.
 function parseNumCards(val: string): number {
   const n = parseInt(val.trim(), 10);
-  return n >= 1 && n <= 10 ? n : 5;
+  if (!Number.isFinite(n)) return 5;
+  return Math.min(5, Math.max(1, n));
 }
 
 async function startShortStream(
@@ -237,7 +239,8 @@ export default function NewMobileShortPage() {
         additionalContext: contextCol >= 0 ? (cells[contextCol] ?? '') : '',
         status: statusCol >= 0 ? (cells[statusCol] ?? '') : '',
         numCards: numCardsCol >= 0 && cells[numCardsCol] ? parseNumCards(cells[numCardsCol]) : 5,
-        includeHighlight: highlightCol >= 0 && cells[highlightCol] ? parseHighlight(cells[highlightCol]) : true,
+        // Absent column or blank cell means no highlight card — never default to true.
+        includeHighlight: highlightCol >= 0 ? parseHighlight(cells[highlightCol] || '') : false,
       }));
 
       setSheetRows(rows);

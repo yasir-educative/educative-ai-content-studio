@@ -130,7 +130,7 @@ async function enforceTextImgProse(cards: any[]): Promise<any[]> {
   const violators = cards.filter((c) => c.type === 'text_img' && hasListViolation(c.text || c.content || ''));
   if (violators.length === 0) return cards;
 
-  const prompt = `You are a prose editor fixing TEXT_IMG card content. Each card below has bullet lists or blockquotes, which must be removed. Rewrite ONLY the content/text field of each card as a single prose paragraph of 1-2 sentences (240-280 chars). The prose must state the key insight or consequence — NOT the steps. The diagram already shows the steps. Ask: "What does completing all these steps achieve? Why does it matter?" — write that as prose.
+  const prompt = `You are a prose editor fixing TEXT_IMG card content. Each card below has bullet lists or blockquotes, which must be removed. Rewrite ONLY the content/text field of each card as a single prose paragraph of 1-2 sentences (230-260 chars). The prose must state the key insight or consequence — NOT the steps. The diagram already shows the steps. Ask: "What does completing all these steps achieve? Why does it matter?" — write that as prose.
 
 Cards to fix:
 ${JSON.stringify(
@@ -143,7 +143,7 @@ ${JSON.stringify(
 
 Rules:
 - Return a JSON array with objects: { "card_number": N, "new_text": "..." }
-- new_text must be a single prose paragraph, 240-280 chars
+- new_text must be a single prose paragraph, 230-260 chars
 - No hyphens at line start, no blockquotes, no tables
 - Describe consequence/insight, not steps
 - Raw JSON only, no markdown fences`;
@@ -162,6 +162,98 @@ Rules:
   } catch {
     return cards;
   }
+}
+
+// ── Character limit enforcement ───────────────────────────────────────────────
+// The prompt asks for a tighter band (TEXT 350-420, TEXT_IMG 230-260) than these
+// outer bounds, so normal overshoot still lands inside the real ceiling. Anything
+// that escapes that margin is rewritten here, then hard-trimmed as a last resort.
+const CHAR_LIMITS: Record<string, { min: number; max: number }> = {
+  text: { min: 350, max: 450 },
+  text_img: { min: 230, max: 280 },
+  highlightCard: { min: 100, max: 130 },
+};
+
+function cardText(c: any): string {
+  return String(c?.text ?? c?.content ?? '');
+}
+
+// Cut at the last sentence end that fits; fall back to the last word boundary.
+function trimToMax(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const slice = text.slice(0, max);
+  const lastSentence = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('! '), slice.lastIndexOf('? '));
+  if (lastSentence >= max * 0.6) return slice.slice(0, lastSentence + 1).trim();
+  const lastSpace = slice.lastIndexOf(' ');
+  return (lastSpace > 0 ? slice.slice(0, lastSpace) : slice).trim();
+}
+
+async function enforceCharLimits(cards: any[], emit: MobileShortEmit): Promise<any[]> {
+  const offending = cards.filter((c) => {
+    const lim = CHAR_LIMITS[c.type];
+    if (!lim) return false;
+    const len = cardText(c).length;
+    return len < lim.min || len > lim.max;
+  });
+  if (offending.length === 0) return cards;
+
+  emit({
+    type: 'log',
+    message: `char limits: ${offending.length} card(s) out of range, rewriting`,
+  });
+
+  const prompt = `You are a technical editor enforcing strict character limits on mobile learning cards. Rewrite ONLY the text of each card below so it lands inside its required character range. Preserve the meaning, voice, and any markdown. Do not add new facts.
+
+Cards to fix:
+${JSON.stringify(
+  offending.map((c) => {
+    const lim = CHAR_LIMITS[c.type];
+    const text = cardText(c);
+    return {
+      card_number: c.card_number,
+      card_type: c.type,
+      current_length: text.length,
+      required_min: lim.min,
+      required_max: lim.max,
+      action: text.length > lim.max ? 'SHORTEN' : 'EXPAND with meaningful depth, not padding',
+      current_text: text,
+    };
+  }),
+  null,
+  2,
+)}
+
+Rules:
+- Return a JSON array of objects: { "card_number": N, "new_text": "..." }
+- Count raw characters including markdown syntax. Stay inside required_min..required_max.
+- text_img cards must remain a single prose paragraph with no lists, blockquotes, or tables.
+- highlightCard text must contain no markdown at all.
+- Raw JSON only, no markdown fences.`;
+
+  let rewrites: Record<number, string> = {};
+  try {
+    const raw = await generateText(prompt, { tier: 'normal', maxTokens: 4000 });
+    const parsed = parseJsonLoose<any>(raw);
+    for (const r of (Array.isArray(parsed) ? parsed : [])) {
+      if (r?.card_number && typeof r?.new_text === 'string') {
+        rewrites[Number(r.card_number)] = r.new_text;
+      }
+    }
+  } catch (e: any) {
+    console.warn('[mobileShortsPipeline] char limit rewrite failed:', e?.message);
+  }
+
+  return cards.map((c) => {
+    const lim = CHAR_LIMITS[c.type];
+    if (!lim) return c;
+    const rewritten = rewrites[Number(c.card_number)];
+    let text = typeof rewritten === 'string' && rewritten.trim() ? rewritten : cardText(c);
+    // Hard guarantee on the ceiling; an under-length card is left as-is since
+    // truncation cannot fix it and the content is still usable.
+    if (text.length > lim.max) text = trimToMax(text, lim.max);
+    if (text === cardText(c)) return c;
+    return { ...c, text };
+  });
 }
 
 // ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -226,11 +318,36 @@ export async function runMobileShortPipeline(
 
   // Hard-enforce: remove highlightCards when the toggle is off, regardless of LLM output
   if (!input.isHighlightCardNeeded) {
+    const before = rawCards.length;
     rawCards = rawCards.filter((c: any) => c.type !== 'highlightCard');
+    if (rawCards.length < before) {
+      emit({
+        type: 'log',
+        message: `removed ${before - rawCards.length} highlight card(s) — toggle is off`,
+      });
+    }
   }
+
+  // Hard-enforce the requested card count (5 is the ceiling everywhere).
+  // Runs after the highlight filter so a stripped highlight card cannot leave us short silently.
+  const wanted = Math.min(5, Math.max(1, input.numCards || 5));
+  if (rawCards.length > wanted) {
+    emit({ type: 'log', message: `trimming ${rawCards.length} cards down to requested ${wanted}` });
+    rawCards = rawCards.slice(0, wanted);
+  } else if (rawCards.length < wanted) {
+    emit({
+      type: 'log',
+      message: `warning: model returned ${rawCards.length} cards but ${wanted} were requested`,
+    });
+  }
+  // Renumber so card_number is contiguous after any filtering or trimming
+  rawCards = rawCards.map((c: any, i: number) => ({ ...c, card_number: i + 1 }));
 
   // Post-process: enforce prose-only content on TEXT_IMG cards
   rawCards = await enforceTextImgProse(rawCards);
+
+  // Post-process: enforce character limits on text-bearing cards
+  rawCards = await enforceCharLimits(rawCards, emit);
 
   // Stage 4: Image generation for visual cards
   const imageCards = rawCards.filter(
