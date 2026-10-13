@@ -12,6 +12,7 @@
 
 import type { Channel } from '../channelStore';
 import type { PublishRequest, PublishResult } from './types';
+import { USER_AGENT } from './types';
 import { findUnresolvedImages } from './images';
 import { htmlToMarkdown } from './htmlToMarkdown';
 import { inspectGitHubConfig, testGitHub, type HostedImage } from './github';
@@ -19,7 +20,6 @@ import { hostImagesForChannel, buildImageKey } from './imageHost';
 
 const DEVTO_API = 'https://dev.to/api';
 const DEVTO_ACCEPT = 'application/vnd.forem.api-v1+json';
-const USER_AGENT = 'EducativeContentStudio/1.0';
 /** dev.to allows at most four tags per article. */
 const MAX_TAGS = 4;
 /** `description` doubles as the SEO/preview blurb and is truncated by dev.to past this. */

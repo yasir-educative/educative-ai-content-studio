@@ -11,6 +11,7 @@
 
 import type { Channel } from '../channelStore';
 import type { PublishRequest, PublishResult } from './types';
+import { USER_AGENT } from './types';
 import { collectLocalImages, readImage, rewriteImageSrcs, findUnresolvedImages, type LocalImage } from './images';
 
 export interface WordPressMedia {
@@ -44,13 +45,22 @@ function challengeDetail(res: Response, text: string): string | null {
   if (/cf-mitigated|cf_chl_opt|Just a moment\.\.\./.test(text) || res.headers.get('cf-mitigated')) {
     return 'Cloudflare bot challenge';
   }
+  // Proof-of-work interstitials answer 202 with an HTML page. WordPress itself
+  // never returns 202 for these endpoints (creates are 201, updates 200), so a
+  // 202 that is not JSON is always the security layer, not WordPress.
+  if (res.status === 202 && !/^\s*[[{]/.test(text)) return 'proof-of-work bot challenge (HTTP 202)';
   return null;
 }
 
 async function wpFetch(c: Channel, url: string, init: RequestInit): Promise<any> {
   const res = await fetch(url, {
     ...init,
-    headers: { Authorization: authHeader(c), Accept: 'application/json', ...(init.headers || {}) },
+    headers: {
+      Authorization: authHeader(c),
+      Accept: 'application/json',
+      'User-Agent': USER_AGENT,
+      ...(init.headers || {}),
+    },
   });
   const text = await res.text();
   let json: any = null;
@@ -68,8 +78,9 @@ async function wpFetch(c: Channel, url: string, init: RequestInit): Promise<any>
   if (challenge) {
     throw new Error(
       `${new URL(url).host} is behind a ${challenge}, so the request never reached WordPress ` +
-        `(HTTP ${res.status}, HTML instead of JSON). The site's security plugin has to allow this ` +
-        `server's IP, or exclude /wp-json/ from its bot protection.`,
+        `(HTTP ${res.status}, HTML instead of JSON). Requests are sent as User-Agent ` +
+        `"${USER_AGENT}". Ask the host to allowlist that agent or this server's IP, exclude ` +
+        `/wp-json/ from the bot protection, or set PUBLISHER_USER_AGENT to a string they allow.`,
     );
   }
   if (json === null) {

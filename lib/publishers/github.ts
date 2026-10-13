@@ -1,4 +1,5 @@
 // GitHub Contents API as an image host.
+import { USER_AGENT } from './types';
 //
 // dev.to's public API has no image-upload endpoint — an article may only reference images that
 // are already online. So generated images go into a public GitHub repo first, and the article
@@ -15,7 +16,6 @@ import { readImage } from './images';
 
 const GITHUB_API = 'https://api.github.com';
 const GITHUB_API_VERSION = '2022-11-28';
-const USER_AGENT = 'EducativeContentStudio/1.0';
 
 export interface GitHubHostConfig {
   owner: string;

@@ -2,6 +2,22 @@
 
 import type { Channel } from '../channelStore';
 
+/**
+ * Sent on every outgoing publisher request.
+ *
+ * Node's default User-Agent is the bare string "node", which WAFs and security
+ * plugins treat as a generic bot: SiteGround answers such requests with a
+ * proof-of-work challenge (HTTP 202) that a script cannot solve, so uploads fail.
+ * A descriptive, attributable agent is what lets the security layer tell this
+ * application apart from anonymous automation.
+ *
+ * Override with PUBLISHER_USER_AGENT when a host needs a specific string
+ * allowlisted, so tuning it does not require a code change.
+ */
+export const USER_AGENT =
+  process.env.PUBLISHER_USER_AGENT?.trim() ||
+  'EducativeContentStudio/1.0 (+https://www.educative.io; automated content publisher)';
+
 export interface PublishRequest {
   channel: Channel;
   /** Blog/newsletter title. */
