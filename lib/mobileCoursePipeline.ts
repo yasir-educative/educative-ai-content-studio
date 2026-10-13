@@ -8,6 +8,7 @@ import { generateText, parseJsonLoose } from './ai';
 import { fetchCollectionWithContent, fetchLessonContent, CollectionChapterData } from './courseEducative';
 import { generateGptImage, slugify } from './imageGen';
 import type { MobileCard, MobileCardType, MobileChapter } from './mobileCourseStorage';
+import { normalizeCardType } from './mobileCardTypes';
 import {
   registeredCardPlannerPrompt,
   registeredCardsGeneratorPrompt,
@@ -47,38 +48,11 @@ export interface MobileCourseEvent {
 export type MobileCourseEmit = (e: MobileCourseEvent) => void;
 
 // ── Raw card normaliser ───────────────────────────────────────────────────────
-// The JSON generator returns snake_case aliases; the UI / MobileCard type uses
-// camelCase names and expanded type strings (e.g. "compare" → "comparisonCards").
-
-const TYPE_ALIAS: Record<string, MobileCardType> = {
-  text:              'text',
-  text_img:          'text_img',
-  img_only:          'img_only',
-  scenario:          'scenarioCard',
-  scenariocard:      'scenarioCard',
-  compare:           'comparisonCards',
-  comparisoncards:   'comparisonCards',
-  recap:             'recapCard',
-  recapcard:         'recapCard',
-  quiz:              'quiz',
-  highlight:         'highlightCard',
-  highlightcard:     'highlightCard',
-  truefalse:         'trueFalseCard',
-  true_false:        'trueFalseCard',
-  truefalsecard:     'trueFalseCard',
-  fillintheblank:    'fillInTheBlank',
-  fill_in_the_blank: 'fillInTheBlank',
-  'text-with-code':  'text-with-code',
-  textwithcode:      'text-with-code',
-  'code-with-output':'code-with-output',
-  codewithoutput:    'code-with-output',
-};
+// Spelling variants are folded to canonical names in ./mobileCardTypes, shared
+// with the shorts pipeline.
 
 function normalizeType(raw: string): MobileCardType {
-  const key = raw.toLowerCase().replace(/[\s-]/g, '_');
-  const resolved = TYPE_ALIAS[key] || TYPE_ALIAS[raw.toLowerCase()];
-  if (!resolved) console.warn(`[mobileCoursePipeline] unknown card_type "${raw}" — defaulting to "text"`);
-  return resolved || 'text';
+  return normalizeCardType(raw, 'mobileCoursePipeline');
 }
 
 function mapRawCard(raw: any, index: number): MobileCard {

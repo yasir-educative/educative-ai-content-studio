@@ -10,6 +10,7 @@
 import { openaiSearch, generateText, parseJsonLoose } from './ai';
 import { generateGptImage, slugify } from './imageGen';
 import type { MobileCard } from './mobileCourseStorage';
+import { normalizeCardType, resolveCardType } from './mobileCardTypes';
 import {
   registeredTopicDetailerPrompt,
   registeredShortsCardsGeneratorPrompt,
@@ -84,7 +85,7 @@ async function generateCardImage(card: any, order: number, shortId: string): Pro
 // ── Raw card → MobileCard mapping ────────────────────────────────────────────
 
 function mapRawCard(raw: any, index: number): MobileCard {
-  const type = String(raw.type || 'text') as MobileCard['type'];
+  const type = normalizeCardType(raw.type ?? raw.card_type, 'mobileShortsPipeline');
   const card: MobileCard = {
     id: raw.id || `card-${index + 1}`,
     type,
@@ -318,6 +319,21 @@ export async function runMobileShortPipeline(
   rawCards = rawCards
     .sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0))
     .map((c: any, i: number) => ({ ...c, id: c.id || `card-${i + 1}` }));
+
+  // Fold every card type spelling to its canonical name before anything branches
+  // on it. The stages emit SCREAMING_SNAKE ("HIGHLIGHT", "TEXT_IMG") while the
+  // rest of the pipeline matches canonical names, and that mismatch previously
+  // made the highlight filter miss cards it should have caught.
+  for (const c of rawCards as any[]) {
+    const resolved = resolveCardType(c.type ?? c.card_type);
+    if (resolved && resolved !== c.type) {
+      emit({ type: 'log', message: `normalized card type "${c.type ?? c.card_type}" -> "${resolved}"` });
+      c.type = resolved;
+    } else if (!resolved) {
+      emit({ type: 'log', message: `unrecognized card type "${c.type ?? c.card_type}" — treating as text` });
+      c.type = 'text';
+    }
+  }
 
   // Hard-enforce: remove highlightCards when the toggle is off, regardless of LLM output
   if (!input.isHighlightCardNeeded) {
