@@ -46,6 +46,16 @@ function IcMobile() {
   );
 }
 
+function IcImages() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <circle cx="8.5" cy="8.5" r="1.5"/>
+      <path d="m21 15-5-5L5 21"/>
+    </svg>
+  );
+}
+
 function IcGraph() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -128,6 +138,12 @@ const MAIN_NAV = [
     label: 'Shorts',
     icon: <IcMobile />,
     match: (p: string) => p === '/mobile-short' || p.startsWith('/mobile-short/'),
+  },
+  {
+    href: '/images',
+    label: 'Images',
+    icon: <IcImages />,
+    match: (p: string) => p === '/images' || p.startsWith('/images/'),
   },
 ];
 

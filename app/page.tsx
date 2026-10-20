@@ -68,6 +68,22 @@ const TOOLS = [
     ),
   },
   {
+    href: '/images',
+    listHref: '/images',
+    label: 'Generate Educative Images',
+    description: 'House-style AI illustrations from a short description',
+    accent: '#0ea5e9',
+    accentBg: 'rgba(14,165,233,0.08)',
+    accentBorder: 'rgba(14,165,233,0.2)',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2"/>
+        <circle cx="8.5" cy="8.5" r="1.5"/>
+        <path d="m21 15-5-5L5 21"/>
+      </svg>
+    ),
+  },
+  {
     href: '/mobile-short/new',
     listHref: '/mobile-course?tab=shorts',
     label: 'Mobile Short',
