@@ -26,6 +26,41 @@ export default function EducativeImagesPage() {
   const [showPrompt, setShowPrompt] = useState(false);
   const [zoomed, setZoomed] = useState(false);
 
+  // House style: server-backed so an edit survives reloads and applies to generation.
+  const [style, setStyle] = useState(EDUCATIVE_IMAGE_STYLE);
+  const [isDefault, setIsDefault] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [styleDraft, setStyleDraft] = useState('');
+  const [styleBusy, setStyleBusy] = useState(false);
+  const [styleErr, setStyleErr] = useState('');
+
+  useEffect(() => {
+    fetch('/api/images/style', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (typeof j?.style === 'string') { setStyle(j.style); setIsDefault(!!j.isDefault); } })
+      .catch(() => { /* keep the bundled default */ });
+  }, []);
+
+  async function persistStyle(method: 'PUT' | 'DELETE', body?: object) {
+    setStyleBusy(true);
+    setStyleErr('');
+    try {
+      const res = await fetch('/api/images/style', {
+        method,
+        ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Failed');
+      setStyle(json.style);
+      setIsDefault(!!json.isDefault);
+      setEditing(false);
+    } catch (e: any) {
+      setStyleErr(e?.message || String(e));
+    } finally {
+      setStyleBusy(false);
+    }
+  }
+
   // Close the zoom overlay on Escape.
   useEffect(() => {
     if (!zoomed) return;
@@ -72,25 +107,78 @@ export default function EducativeImagesPage() {
 
       {/* Fixed style block */}
       <div className="card p-5 space-y-2">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
               Mandatory visual style
+              {!isDefault && <span className="ml-2 pill text-[10px] py-0 px-1.5">edited</span>}
             </label>
             <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
-              Fixed — prepended to every request. Not editable.
+              Prepended to every request.{isDefault ? ' Currently the default.' : ' Customized.'}
             </p>
           </div>
-          <button className="btn-secondary text-xs py-1 px-3 shrink-0" onClick={() => setShowPrompt((v) => !v)}>
-            {showPrompt ? 'Hide' : 'Show'}
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {!editing && (
+              <>
+                <button className="btn-secondary text-xs py-1 px-3" onClick={() => setShowPrompt((v) => !v)}>
+                  {showPrompt ? 'Hide' : 'Show'}
+                </button>
+                <button
+                  className="btn-secondary text-xs py-1 px-3"
+                  onClick={() => { setStyleDraft(style); setEditing(true); setShowPrompt(true); setStyleErr(''); }}
+                >
+                  Edit
+                </button>
+                {!isDefault && (
+                  <button
+                    className="btn-secondary text-xs py-1 px-3"
+                    onClick={() => persistStyle('DELETE')}
+                    disabled={styleBusy}
+                    title="Discard the customization and restore the shipped style"
+                  >
+                    {styleBusy ? '…' : 'Set to default'}
+                  </button>
+                )}
+              </>
+            )}
+            {editing && (
+              <>
+                <button
+                  className="btn-secondary text-xs py-1 px-3"
+                  onClick={() => { setEditing(false); setStyleErr(''); }}
+                  disabled={styleBusy}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="btn-secondary text-xs py-1 px-3"
+                  onClick={() => setStyleDraft(EDUCATIVE_IMAGE_STYLE)}
+                  disabled={styleBusy}
+                  title="Load the shipped style into the editor"
+                >
+                  Load default
+                </button>
+                <button
+                  className="btn-primary text-xs py-1 px-3"
+                  onClick={() => persistStyle('PUT', { style: styleDraft })}
+                  disabled={styleBusy || !styleDraft.trim()}
+                >
+                  {styleBusy ? 'Saving…' : 'Save'}
+                </button>
+              </>
+            )}
+          </div>
         </div>
+        {styleErr && <p className="text-xs text-red-400">{styleErr}</p>}
         {showPrompt && (
           <textarea
-            readOnly
-            value={EDUCATIVE_IMAGE_STYLE}
+            readOnly={!editing}
+            value={editing ? styleDraft : style}
+            onChange={(e) => setStyleDraft(e.target.value)}
             spellCheck={false}
-            className="input w-full font-mono text-[11px] leading-relaxed min-h-[260px] opacity-80 cursor-default"
+            className={`input w-full font-mono text-[11px] leading-relaxed min-h-[260px] ${
+              editing ? '' : 'opacity-80 cursor-default'
+            }`}
           />
         )}
       </div>

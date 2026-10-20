@@ -3,12 +3,12 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import {
-  buildEducativeImagePrompt,
   checkSize,
   IMAGE_FORMATS,
   IMAGE_MODELS,
   IMAGE_QUALITIES,
 } from '@/lib/educativeImageStyle';
+import { getImageStyle } from '@/lib/imageStyleStore';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -38,8 +38,9 @@ export async function POST(req: NextRequest) {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) return NextResponse.json({ error: 'OPENAI_API_KEY is not set' }, { status: 500 });
 
-    // The full prompt is the fixed house style followed by the user's instructions.
-    const prompt = buildEducativeImagePrompt(instructions);
+    // House style (saved override, else the shipped default) then the user's instructions.
+    const { style } = getImageStyle();
+    const prompt = `${style}\n\n# Create\n${instructions}`;
 
     const payload: Record<string, any> = {
       model,
