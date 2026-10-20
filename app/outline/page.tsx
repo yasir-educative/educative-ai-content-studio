@@ -1,23 +1,13 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { VerticalSelect } from '@/app/_components/VerticalSelect';
 import dynamic from 'next/dynamic';
 import { Field } from '../_components/Field';
 
 const MarkdownRenderer = dynamic(() => import('../_components/MarkdownRenderer'), { ssr: false });
 import { Stages, StageItem } from '../_components/Stages';
 import { StageOutputs, StageOutputMap } from '../_components/StageOutputs';
-
-const VERTICALS = [
-  'Coding interview patterns',
-  'Projects',
-  'System Design',
-  'Frontend',
-  'Backend',
-  'AI/ML',
-  'DevOps',
-  'Other',
-];
 
 export default function OutlinePage() {
   const [vertical, setVertical] = useState('System Design');
@@ -117,11 +107,7 @@ export default function OutlinePage() {
       <form onSubmit={submit} className="card p-6 space-y-5">
         <div className="grid sm:grid-cols-2 gap-4">
           <Field label="Vertical">
-            <select className="input" value={vertical} onChange={(e) => setVertical(e.target.value)}>
-              {VERTICALS.map((v) => (
-                <option key={v}>{v}</option>
-              ))}
-            </select>
+            <VerticalSelect value={vertical} onChange={setVertical} className="input" />
           </Field>
           <Field label="Target audience">
             <select className="input" value={targetAudience} onChange={(e) => setTargetAudience(e.target.value)}>

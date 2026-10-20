@@ -1,20 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { VerticalSelect } from '@/app/_components/VerticalSelect';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Field } from '../_components/Field';
-
-const VERTICALS = [
-  'Coding interview patterns',
-  'Projects',
-  'System Design',
-  'Frontend',
-  'Backend',
-  'AI/ML',
-  'DevOps',
-  'Other',
-];
 
 function slugify(title: string): string {
   return title
@@ -135,9 +125,7 @@ export default function BlogPage() {
 
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
           <Field label="Vertical">
-            <select className="input" value={vertical} onChange={(e) => setVertical(e.target.value)}>
-              {VERTICALS.map((v) => <option key={v}>{v}</option>)}
-            </select>
+            <VerticalSelect value={vertical} onChange={setVertical} className="input" />
           </Field>
           <Field label="Persona voice">
             <select className="input" value={persona} onChange={(e) => setPersona(e.target.value)}>

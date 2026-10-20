@@ -1,21 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import { VerticalSelect } from '@/app/_components/VerticalSelect';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Field } from '../../_components/Field';
-
-const VERTICALS = [
-  'System Design',
-  'AI/ML',
-  'Cloud',
-  'Coding interview patterns',
-  'Projects',
-  'Frontend',
-  'Backend',
-  'DevOps',
-  'Other',
-];
 
 function slugify(title: string): string {
   return title
@@ -154,9 +143,7 @@ export default function NewNewsletterPage() {
 
         <div className="grid sm:grid-cols-4 gap-4">
           <Field label="Vertical">
-            <select className="input" value={vertical} onChange={(e) => setVertical(e.target.value)}>
-              {VERTICALS.map((v) => <option key={v}>{v}</option>)}
-            </select>
+            <VerticalSelect value={vertical} onChange={setVertical} className="input" />
           </Field>
           <Field label="Audience">
             <select className="input" value={targetAudience} onChange={(e) => setTargetAudience(e.target.value)}>
