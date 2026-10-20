@@ -238,17 +238,19 @@ export default function EducativeImagesPage() {
             onClick={(e) => e.stopPropagation()}
           />
           <div className="absolute top-4 right-4 flex items-center gap-2">
+            {/* Explicit light styling: these sit on the dark overlay, not on a
+                themed surface, so the themed button classes are unreadable here. */}
             <a
               href={result.url}
               download={result.filename}
               onClick={(e) => e.stopPropagation()}
-              className="btn-secondary text-xs py-1.5 px-3"
+              className="text-xs font-medium py-1.5 px-3 rounded-lg bg-white/95 text-slate-900 border border-white/70 hover:bg-white transition-colors shadow-sm"
             >
               Download
             </a>
             <button
-              onClick={() => setZoomed(false)}
-              className="btn-secondary text-xs py-1.5 px-3"
+              onClick={(e) => { e.stopPropagation(); setZoomed(false); }}
+              className="text-xs font-medium py-1.5 px-3 rounded-lg bg-white/15 text-white border border-white/50 hover:bg-white/25 transition-colors backdrop-blur-sm"
               aria-label="Close"
             >
               ✕ Close
