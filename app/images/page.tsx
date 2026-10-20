@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Field } from '../_components/Field';
 import {
@@ -24,6 +24,15 @@ export default function EducativeImagesPage() {
   const [err, setErr] = useState('');
   const [result, setResult] = useState<{ url: string; filename: string; size: string } | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
+
+  // Close the zoom overlay on Escape.
+  useEffect(() => {
+    if (!zoomed) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setZoomed(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoomed]);
 
   const { checks, valid } = useMemo(() => checkSize(width, height), [width, height]);
   const lossless = format === 'png';
@@ -204,11 +213,47 @@ export default function EducativeImagesPage() {
               Download
             </a>
           </div>
+          <button
+            type="button"
+            onClick={() => setZoomed(true)}
+            className="block w-full cursor-zoom-in rounded-xl border border-[var(--border)] bg-white overflow-hidden focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+            title="Click to zoom"
+          >
+            <img src={result.url} alt="Generated" className="w-full block" />
+          </button>
+          <p className="text-[11px] text-[var(--text-faint)]">Click the image to view it full size.</p>
+        </div>
+      )}
+
+      {/* Zoom overlay */}
+      {zoomed && result && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4 cursor-zoom-out"
+          onClick={() => setZoomed(false)}
+        >
           <img
             src={result.url}
-            alt="Generated"
-            className="w-full rounded-xl border border-[var(--border)] bg-white"
+            alt="Generated, full size"
+            className="max-w-full max-h-full object-contain rounded-lg bg-white"
+            onClick={(e) => e.stopPropagation()}
           />
+          <div className="absolute top-4 right-4 flex items-center gap-2">
+            <a
+              href={result.url}
+              download={result.filename}
+              onClick={(e) => e.stopPropagation()}
+              className="btn-secondary text-xs py-1.5 px-3"
+            >
+              Download
+            </a>
+            <button
+              onClick={() => setZoomed(false)}
+              className="btn-secondary text-xs py-1.5 px-3"
+              aria-label="Close"
+            >
+              ✕ Close
+            </button>
+          </div>
         </div>
       )}
     </div>
