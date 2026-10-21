@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   }
   try {
     const sp = new URL(req.url).searchParams;
-    const max = Math.min(100, Math.max(1, Number(sp.get('max')) || 50));
+    const max = Math.min(100, Math.max(1, Number(sp.get('max')) || 20));
     // Explicit board wins, else the configured default, else fall back to JQL.
     const list = (k: string) => (sp.get(k) || '').split(',').map((x) => x.trim()).filter(Boolean);
     const boardId = Number(sp.get('boardId')) || 0;
@@ -21,11 +21,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ issues, total, boardId, jql: c.jql || '' });
     }
     return NextResponse.json(
-      await fetchIssues(c, max, {
-        statuses: list('status'),
-        projectKeys: list('projects'),
-        mine: sp.get('mine') === '1',
-      }),
+      await fetchIssues(
+        c,
+        max,
+        {
+          statuses: list('status'),
+          projectKeys: list('projects'),
+          mine: sp.get('mine') === '1',
+        },
+        sp.get('cursor') || null,
+      ),
     );
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Failed to fetch issues' }, { status: 400 });

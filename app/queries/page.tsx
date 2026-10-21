@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Field } from '../_components/Field';
 
@@ -74,6 +74,13 @@ export default function ContentQueriesPage() {
   const [issues, setIssues] = useState<Issue[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [issuesErr, setIssuesErr] = useState('');
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [total, setTotal] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  // Current filter state, so "load more" repeats the same query without
+  // depending on a stale closure inside the observer.
+  const queryRef = useRef<{ statuses: string[]; mine: boolean; scope: string[] }>({ statuses: [], mine: false, scope: [] });
   const [search, setSearch] = useState('');
 
   const [selected, setSelected] = useState<string | null>(null);
@@ -91,20 +98,62 @@ export default function ContentQueriesPage() {
       .catch(() => setEditing(true));
   }, []);
 
+  const PAGE = 20;
+
+  function buildQs(sel: string[], onlyMine: boolean, projects: string[], cur?: string | null) {
+    const p = new URLSearchParams();
+    p.set('max', String(PAGE));
+    if (sel.length) p.set('status', sel.join(','));
+    if (onlyMine) p.set('mine', '1');
+    if (projects.length) p.set('projects', projects.join(','));
+    if (cur) p.set('cursor', cur);
+    return `?${p}`;
+  }
+
   const loadIssues = useCallback(async (sel: string[], onlyMine = false, projects: string[] = []) => {
-    setLoading(true); setIssuesErr(''); setIssues(null);
+    queryRef.current = { statuses: sel, mine: onlyMine, scope: projects };
+    setLoading(true); setIssuesErr(''); setIssues(null); setCursor(null); setTotal(null);
     try {
-      const p = new URLSearchParams();
-      if (sel.length) p.set('status', sel.join(','));
-      if (onlyMine) p.set('mine', '1');
-      if (projects.length) p.set('projects', projects.join(','));
-      const qs = p.toString() ? `?${p}` : '';
-      const res = await fetch(`/api/jira/issues${qs}`, { cache: 'no-store' });
+      const res = await fetch(`/api/jira/issues${buildQs(sel, onlyMine, projects)}`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Failed to load');
       setIssues(json.issues);
+      setCursor(json.nextCursor ?? null);
+      setTotal(typeof json.total === 'number' ? json.total : null);
     } catch (e: any) { setIssuesErr(e?.message || String(e)); } finally { setLoading(false); }
   }, []);
+
+  const loadMore = useCallback(async () => {
+    if (!cursor || loadingMore || loading) return;
+    setLoadingMore(true);
+    try {
+      const { statuses, mine: m, scope: sc } = queryRef.current;
+      const res = await fetch(`/api/jira/issues${buildQs(statuses, m, sc, cursor)}`, { cache: 'no-store' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Failed to load more');
+      // De-duplicate: a shifting result set can repeat a key across pages.
+      setIssues((prev) => {
+        const seen = new Set((prev || []).map((i) => i.key));
+        return [...(prev || []), ...(json.issues || []).filter((i: Issue) => !seen.has(i.key))];
+      });
+      setCursor(json.nextCursor ?? null);
+    } catch (e: any) {
+      setIssuesErr(e?.message || String(e));
+      setCursor(null); // stop retrying a failing page on every scroll
+    } finally { setLoadingMore(false); }
+  }, [cursor, loadingMore, loading]);
+
+  // Fetch the next page when the end of the list scrolls into view.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !cursor) return;
+    const io = new IntersectionObserver(
+      (entries) => { if (entries[0]?.isIntersecting) loadMore(); },
+      { rootMargin: '200px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [cursor, loadMore]);
 
   const loadProjects = useCallback(async () => {
     setProjLoading(true);
@@ -439,7 +488,7 @@ export default function ContentQueriesPage() {
                 className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${active.length === 0 ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
                 onClick={() => { setActive([]); loadIssues([], mine, scope); }}
               >
-                All{issues && ` (${issues.length})`}
+                All{total !== null ? ` (${total})` : issues ? ` (${issues.length})` : ''}
               </button>
               {statuses.map((s) => {
                 const on = active.includes(s.name);
@@ -462,7 +511,12 @@ export default function ContentQueriesPage() {
             {/* List */}
             <div className="card p-0 overflow-hidden">
               <div className="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between">
-                <span className="text-xs font-semibold">Queries {shown && <span className="text-[var(--text-faint)] font-normal">({shown.length})</span>}</span>
+                <span className="text-xs font-semibold">
+                  Queries{' '}
+                  <span className="text-[var(--text-faint)] font-normal">
+                    {shown ? (total !== null && total > (issues?.length || 0) ? `${shown.length} of ${total}` : `${shown.length}`) : ''}
+                  </span>
+                </span>
                 {active.length > 0 && <span className="text-[10px] text-[var(--text-faint)]">{active.length} filter{active.length > 1 ? 's' : ''}</span>}
               </div>
               <div className="max-h-[calc(100vh-22rem)] overflow-y-auto divide-y divide-[var(--border)]">
@@ -481,6 +535,25 @@ export default function ContentQueriesPage() {
                     </p>
                   </button>
                 ))}
+
+                {/* Scrolling this into view pulls the next page. */}
+                {cursor && !search && (
+                  <div ref={sentinelRef} className="px-3 py-3 text-center">
+                    <span className="text-[11px] text-[var(--text-faint)]">
+                      {loadingMore ? 'Loading more…' : 'Scroll for more'}
+                    </span>
+                  </div>
+                )}
+                {!cursor && (issues?.length || 0) > 0 && !loading && (
+                  <p className="px-3 py-2.5 text-center text-[10px] text-[var(--text-faint)]">
+                    End of results · {issues?.length} loaded
+                  </p>
+                )}
+                {search && cursor && (
+                  <p className="px-3 py-2.5 text-center text-[10px] text-[var(--text-faint)]">
+                    Searching the {issues?.length} loaded. Clear the search to load more.
+                  </p>
+                )}
               </div>
             </div>
 

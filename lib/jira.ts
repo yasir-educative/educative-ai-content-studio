@@ -126,30 +126,87 @@ const FIELDS = 'summary,status,priority,issuetype,reporter,assignee,labels,creat
  * Fetch matching issues. Jira Cloud replaced GET /search with POST /search/jql;
  * older sites still only have /search, so fall back rather than fail.
  */
+export interface IssuePage {
+  issues: JiraIssue[];
+  jql: string;
+  /** Opaque; pass back to get the following page. Null when there are no more. */
+  nextCursor: string | null;
+  /** Approximate match count for the whole query, not just this page. */
+  total: number | null;
+}
+
+/**
+ * One page of issues.
+ *
+ * Jira Cloud's newer POST /search/jql pages with an opaque nextPageToken and
+ * does not report a total; the legacy GET /search pages with a numeric startAt
+ * and does. Both are supported, and the cursor is whichever of the two that
+ * endpoint understands, kept opaque to the caller.
+ */
 export async function fetchIssues(
   c: JiraConfig = getJiraConfig(),
-  maxResults = 50,
+  maxResults = 20,
   filter: QueryFilter = {},
-): Promise<{ issues: JiraIssue[]; jql: string; total: number }> {
+  cursor?: string | null,
+): Promise<IssuePage> {
   if (!isConfigured(c)) throw new Error('Jira is not configured yet');
   const jql = effectiveJql(c, filter);
 
   let data: any;
+  let legacy = false;
   try {
     data = await jiraFetch(c, '/search/jql', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jql, maxResults, fields: FIELDS.split(',') }),
+      body: JSON.stringify({
+        jql,
+        maxResults,
+        fields: FIELDS.split(','),
+        ...(cursor ? { nextPageToken: cursor } : {}),
+      }),
     });
   } catch {
+    legacy = true;
+    const startAt = Number(cursor) || 0;
     data = await jiraFetch(
       c,
-      `/search?jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&fields=${encodeURIComponent(FIELDS)}`,
+      `/search?jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&startAt=${startAt}` +
+        `&fields=${encodeURIComponent(FIELDS)}`,
     );
   }
 
   const issues = (data?.issues || []).map((i: any) => mapIssue(c.siteUrl, i));
-  return { issues, jql, total: Number(data?.total ?? issues.length) };
+
+  let nextCursor: string | null = null;
+  if (legacy) {
+    const startAt = Number(data?.startAt ?? (Number(cursor) || 0));
+    const total = Number(data?.total ?? 0);
+    const seen = startAt + issues.length;
+    if (issues.length > 0 && seen < total) nextCursor = String(seen);
+  } else if (data?.nextPageToken && issues.length > 0) {
+    nextCursor = String(data.nextPageToken);
+  }
+
+  // The new endpoint omits total, so ask for it separately rather than
+  // reporting the page size as if it were the whole result set.
+  let total: number | null = typeof data?.total === 'number' ? data.total : null;
+  if (total === null && !cursor) total = await approximateCount(c, jql);
+
+  return { issues, jql, nextCursor, total };
+}
+
+/** Match count for a JQL query. Returns null when the endpoint is unavailable. */
+export async function approximateCount(c: JiraConfig, jql: string): Promise<number | null> {
+  try {
+    const r = await jiraFetch(c, '/search/approximate-count', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jql }),
+    });
+    return typeof r?.count === 'number' ? r.count : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Boards ───────────────────────────────────────────────────────────────────
