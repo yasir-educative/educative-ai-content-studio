@@ -28,6 +28,7 @@ interface Detail extends Issue {
 }
 interface Transition { id: string; name: string; to: string; toCategory: string }
 interface JUser { accountId: string; displayName: string; email: string; avatar: string }
+interface AsgBoard { key: string; name: string; count: number }
 
 const EMPTY: Cfg = {
   siteUrl: '', email: '', apiToken: '', projectKey: '', jql: '',
@@ -72,6 +73,14 @@ export default function ContentQueriesPage() {
   const [statuses, setStatuses] = useState<Status[]>([]);
   const [active, setActive] = useState<string[]>([]);
   const [mine, setMine] = useState(false);
+  // Who the list is filtered to. null with mine=true means the signed-in user.
+  const [assignee, setAssignee] = useState<JUser | null>(null);
+  const [asgBoards, setAsgBoards] = useState<AsgBoard[]>([]);
+  const [asgLoading, setAsgLoading] = useState(false);
+  const [asgCapped, setAsgCapped] = useState(false);
+  const [asgQuery, setAsgQuery] = useState('');
+  const [asgHits, setAsgHits] = useState<JUser[]>([]);
+  const [pickingAsg, setPickingAsg] = useState(false);
   const [facets, setFacets] = useState<Facet[]>([]);
   const [facetSel, setFacetSel] = useState<Record<string, string>>({});
   // Empty means "the default project"; non-empty searches across those projects.
@@ -87,7 +96,7 @@ export default function ContentQueriesPage() {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   // Current filter state, so "load more" repeats the same query without
   // depending on a stale closure inside the observer.
-  const queryRef = useRef<{ statuses: string[]; mine: boolean; scope: string[]; text: string; facets: Record<string, string> }>({ statuses: [], mine: false, scope: [], text: '', facets: {} });
+  const queryRef = useRef<{ statuses: string[]; mine: boolean; scope: string[]; text: string; facets: Record<string, string>; assigneeId: string }>({ statuses: [], mine: false, scope: [], text: '', facets: {}, assigneeId: '' });
   const [search, setSearch] = useState('');
 
   const [selected, setSelected] = useState<string | null>(null);
@@ -125,11 +134,11 @@ export default function ContentQueriesPage() {
     return Object.entries(f).filter(([, v]) => v).map(([k, v]) => `${k}:${v}`).join(',');
   }
 
-  function buildQs(sel: string[], onlyMine: boolean, projects: string[], text: string, fac: Record<string, string>, cur?: string | null) {
+  function buildQs(sel: string[], onlyMine: boolean, projects: string[], text: string, fac: Record<string, string>, cur?: string | null, asgId = '') {
     const p = new URLSearchParams();
     p.set('max', String(PAGE));
     if (sel.length) p.set('status', sel.join(','));
-    if (onlyMine) p.set('mine', '1');
+    if (asgId) p.set('assignee', asgId); else if (onlyMine) p.set('mine', '1');
     if (projects.length) p.set('projects', projects.join(','));
     if (text.trim()) p.set('text', text.trim());
     const fx = encodeFacets(fac);
@@ -138,11 +147,11 @@ export default function ContentQueriesPage() {
     return `?${p}`;
   }
 
-  const loadIssues = useCallback(async (sel: string[], onlyMine = false, projects: string[] = [], text = '', fac: Record<string, string> = {}) => {
-    queryRef.current = { statuses: sel, mine: onlyMine, scope: projects, text, facets: fac };
+  const loadIssues = useCallback(async (sel: string[], onlyMine = false, projects: string[] = [], text = '', fac: Record<string, string> = {}, asgId = '') => {
+    queryRef.current = { statuses: sel, mine: onlyMine, scope: projects, text, facets: fac, assigneeId: asgId };
     setLoading(true); setIssuesErr(''); setIssues(null); setCursor(null); setTotal(null);
     try {
-      const res = await fetch(`/api/jira/issues${buildQs(sel, onlyMine, projects, text, fac)}`, { cache: 'no-store' });
+      const res = await fetch(`/api/jira/issues${buildQs(sel, onlyMine, projects, text, fac, null, asgId)}`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Failed to load');
       setIssues(json.issues);
@@ -155,8 +164,8 @@ export default function ContentQueriesPage() {
     if (!cursor || loadingMore || loading) return;
     setLoadingMore(true);
     try {
-      const { statuses, mine: m, scope: sc, text: tx, facets: fx } = queryRef.current;
-      const res = await fetch(`/api/jira/issues${buildQs(statuses, m, sc, tx, fx, cursor)}`, { cache: 'no-store' });
+      const { statuses, mine: m, scope: sc, text: tx, facets: fx, assigneeId: aid } = queryRef.current;
+      const res = await fetch(`/api/jira/issues${buildQs(statuses, m, sc, tx, fx, cursor, aid)}`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Failed to load more');
       // De-duplicate: a shifting result set can repeat a key across pages.
@@ -200,7 +209,7 @@ export default function ContentQueriesPage() {
     // rather than fetching everything and narrowing afterwards.
     const saved = cfg.defaultFacets || {};
     setFacetSel(saved);
-    loadIssues([], mine, scope, search, saved);
+    loadIssues([], mine, scope, search, saved, assignee?.accountId || '');
     fetch('/api/jira/facets', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => setFacets(j.facets || []))
@@ -219,7 +228,7 @@ export default function ContentQueriesPage() {
     if (!cfg.configured || !cfg.projectKey) return;
     if (firstSearch.current) { firstSearch.current = false; return; }
     const t = setTimeout(() => {
-      if (searchRef.current === search) loadIssues(active, mine, scope, search, facetSel);
+      if (searchRef.current === search) loadIssues(active, mine, scope, search, facetSel, assignee?.accountId || '');
     }, 450);
     return () => clearTimeout(t);
   }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -301,7 +310,7 @@ export default function ContentQueriesPage() {
   function toggleStatus(name: string) {
     const next = active.includes(name) ? active.filter((s) => s !== name) : [...active, name];
     setActive(next);
-    loadIssues(next, mine, scope, search, facetSel);
+    loadIssues(next, mine, scope, search, facetSel, assignee?.accountId || '');
   }
 
   function pickFacet(cf: string, value: string) {
@@ -309,7 +318,7 @@ export default function ContentQueriesPage() {
     if (value) next[cf] = value; else delete next[cf];
     setFacetSel(next);
     setSelected(null);
-    loadIssues(active, mine, scope, search, next);
+    loadIssues(active, mine, scope, search, next, assignee?.accountId || '');
   }
 
   // Remember the current selection so it applies on the next visit.
@@ -322,11 +331,42 @@ export default function ContentQueriesPage() {
     if (r.ok) setCfg(j);
   }
 
-  function toggleMine() {
-    const next = !mine;
-    setMine(next);
+  // Boards that actually hold this person's work, so switching between them
+  // never lands on an empty list.
+  const loadAsgBoards = useCallback(async (accountId?: string) => {
+    setAsgLoading(true);
+    try {
+      const qs = accountId ? `?accountId=${encodeURIComponent(accountId)}` : '';
+      const r = await fetch(`/api/jira/assignee-boards${qs}`, { cache: 'no-store' });
+      const j = await r.json();
+      setAsgBoards(j.boards || []);
+      setAsgCapped(!!j.capped);
+    } catch { setAsgBoards([]); } finally { setAsgLoading(false); }
+  }, []);
+
+  function applyAssignee(user: JUser | null, on: boolean) {
+    setAssignee(user);
+    setMine(on);
     setSelected(null);
-    loadIssues(active, next, scope, search, facetSel);
+    setScope([]);        // their boards are a different set, so start unscoped
+    setActive([]);
+    setAsgBoards([]);
+    if (on) loadAsgBoards(user?.accountId);
+    loadIssues([], on, [], search, facetSel, user?.accountId || '');
+  }
+
+  function toggleMine() {
+    if (mine) { applyAssignee(null, false); return; }
+    applyAssignee(null, true); // null user = the signed-in account
+  }
+
+  // Jump to one of the assignee's boards: scopes the list and the facets.
+  function pickAsgBoard(key: string) {
+    const next = scope.length === 1 && scope[0] === key ? [] : [key];
+    setScope(next);
+    setSelected(null);
+    setActive([]);
+    loadIssues([], mine, next, search, facetSel, assignee?.accountId || '');
   }
 
   // Clearing the scope while "mine" is on searches every project the user can see.
@@ -348,7 +388,7 @@ export default function ContentQueriesPage() {
   function toggleScope(key: string) {
     const next = scope.includes(key) ? scope.filter((k) => k !== key) : [...scope, key];
     setScope(next);
-    loadIssues(active, mine, next, search, facetSel);
+    loadIssues(active, mine, next, search, facetSel, assignee?.accountId || '');
   }
 
   async function analyze(key: string) {
@@ -386,6 +426,19 @@ export default function ContentQueriesPage() {
       if (r.ok) setSavedAt(j.analysis?.savedAt || new Date().toISOString());
     } finally { setSavingReply(false); }
   }
+
+  useEffect(() => {
+    const q = asgQuery.trim();
+    if (!pickingAsg || q.length < 2) { setAsgHits([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/jira/users?q=${encodeURIComponent(q)}`, { cache: 'no-store' });
+        const j = await r.json();
+        setAsgHits(j.users || []);
+      } catch { setAsgHits([]); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [asgQuery, pickingAsg]);
 
   useEffect(() => {
     const q = userQuery.trim();
@@ -486,7 +539,7 @@ export default function ContentQueriesPage() {
             <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => { setPicking((v) => !v); if (!projects.length) loadProjects(); }}>
               Change project
             </button>
-            <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => loadIssues(active, mine, scope, search, facetSel)} disabled={loading}>
+            <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => loadIssues(active, mine, scope, search, facetSel, assignee?.accountId || '')} disabled={loading}>
               {loading ? 'Loading…' : 'Refresh'}
             </button>
             <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => { setForm(cfg); setEditing((v) => !v); }}>
@@ -567,10 +620,49 @@ export default function ContentQueriesPage() {
               <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] w-12 shrink-0">Scope</span>
               <button
                 onClick={toggleMine}
-                className={`text-xs rounded-lg px-3 py-1.5 border font-medium transition-colors ${mine ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
+                className={`text-xs rounded-lg px-3 py-1.5 border font-medium transition-colors ${mine && !assignee ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
               >
-                {mine ? '✓ ' : ''}Assigned to me
+                {mine && !assignee ? '✓ ' : ''}Assigned to me
               </button>
+
+              <div className="relative">
+                {!pickingAsg ? (
+                  <button
+                    onClick={() => { setPickingAsg(true); setAsgQuery(''); }}
+                    className={`text-xs rounded-lg px-3 py-1.5 border font-medium transition-colors ${assignee ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
+                  >
+                    {assignee ? `✓ @${assignee.displayName}` : 'Assigned to…'}
+                  </button>
+                ) : (
+                  <input
+                    autoFocus
+                    className="input text-xs py-1.5 w-44"
+                    placeholder="Search people…"
+                    value={asgQuery}
+                    onChange={(e) => setAsgQuery(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Escape') { setPickingAsg(false); setAsgQuery(''); } }}
+                    onBlur={() => setTimeout(() => setPickingAsg(false), 160)}
+                  />
+                )}
+                {pickingAsg && asgQuery.trim().length >= 2 && (
+                  <div className="absolute top-full left-0 mt-1 z-20 w-60 rounded-lg border border-[var(--border)] bg-[var(--panel)] shadow-xl max-h-52 overflow-y-auto">
+                    {asgHits.length === 0 && <p className="text-[11px] text-[var(--text-faint)] px-2.5 py-2">No people matched.</p>}
+                    {asgHits.map((u) => (
+                      <button key={u.accountId}
+                        className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-[var(--panel-2)] transition-colors"
+                        onMouseDown={(e) => { e.preventDefault(); setPickingAsg(false); setAsgQuery(''); applyAssignee(u, true); }}>
+                        {u.avatar ? <img src={u.avatar} alt="" className="w-5 h-5 rounded-full shrink-0" /> : <span className="w-5 h-5 rounded-full bg-[var(--panel-2)] shrink-0" />}
+                        <span className="text-xs truncate">{u.displayName}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {assignee && (
+                <button onClick={() => applyAssignee(null, false)} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)]">
+                  clear person
+                </button>
+              )}
               <button
                 onClick={() => { setScoping((v) => !v); if (!projects.length) loadProjects(); }}
                 className="text-xs rounded-lg px-3 py-1.5 border border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)] transition-colors"
@@ -582,7 +674,7 @@ export default function ContentQueriesPage() {
                     : `${scope.length} selected`}
               </button>
               {scope.length > 0 && (
-                <button onClick={() => { setScope([]); loadIssues(active, mine, [], search, facetSel); }} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)]">
+                <button onClick={() => { setScope([]); loadIssues(active, mine, [], search, facetSel, assignee?.accountId || ''); }} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)]">
                   clear
                 </button>
               )}
@@ -590,6 +682,42 @@ export default function ContentQueriesPage() {
                 <span className="text-[11px] text-[var(--text-faint)]">your tickets across every board</span>
               )}
             </div>
+
+            {mine && (
+              <div className="flex items-start gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
+                <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] w-12 shrink-0 pt-1.5">
+                  {assignee ? 'Their boards' : 'My boards'}
+                </span>
+                <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
+                  {asgLoading && <span className="text-[11px] text-[var(--text-faint)] py-1">Finding boards…</span>}
+                  {!asgLoading && asgBoards.length === 0 && (
+                    <span className="text-[11px] text-[var(--text-faint)] py-1">No assigned queries found.</span>
+                  )}
+                  {asgCapped && asgBoards.length > 0 && (
+                    <span className="text-[10px] text-[var(--text-faint)] py-1 w-full">
+                      Counts are from their most recent issues, so they are lower bounds.
+                    </span>
+                  )}
+                  {asgBoards.length > 0 && (
+                    <button
+                      onClick={() => { setScope([]); setActive([]); loadIssues([], mine, [], search, facetSel, assignee?.accountId || ''); }}
+                      className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${scope.length === 0 ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)] font-medium' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
+                    >
+                      All boards
+                    </button>
+                  )}
+                  {asgBoards.map((b) => {
+                    const on = scope.length === 1 && scope[0] === b.key;
+                    return (
+                      <button key={b.key} onClick={() => pickAsgBoard(b.key)} title={b.key}
+                        className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${on ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)] font-medium' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)] hover:border-[var(--text-faint)]'}`}>
+                        {b.name} ({b.count}{asgCapped ? '+' : ''})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {scoping && (
               <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-2">
@@ -654,7 +782,7 @@ export default function ContentQueriesPage() {
               <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
               <button
                 className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${active.length === 0 ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)] font-medium' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
-                onClick={() => { setActive([]); loadIssues([], mine, scope, search, facetSel); }}
+                onClick={() => { setActive([]); loadIssues([], mine, scope, search, facetSel, assignee?.accountId || ''); }}
               >
                 All{total !== null ? ` (${total.toLocaleString()})` : issues ? ` (${issues.length})` : ''}
               </button>
@@ -688,7 +816,7 @@ export default function ContentQueriesPage() {
                   </label>
                 ))}
                 {Object.keys(facetSel).length > 0 && (
-                  <button onClick={() => { setFacetSel({}); loadIssues(active, mine, scope, search, {}); }}
+                  <button onClick={() => { setFacetSel({}); loadIssues(active, mine, scope, search, {}, assignee?.accountId || ''); }}
                     className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)] pb-1.5">
                     clear
                   </button>

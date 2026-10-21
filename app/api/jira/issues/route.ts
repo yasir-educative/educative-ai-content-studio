@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
           statuses: list('status'),
           projectKeys: list('projects'),
           mine: sp.get('mine') === '1',
+          assigneeId: sp.get('assignee') || undefined,
           text: sp.get('text') || '',
           // facets arrive as "11144:Content,12460:Cloud"
           facets: Object.fromEntries(

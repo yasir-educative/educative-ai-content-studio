@@ -79,6 +79,8 @@ export interface QueryFilter {
   statuses?: string[];
   /** Restrict to the signed-in user's assigned issues. */
   mine?: boolean;
+  /** Restrict to a specific person's assigned issues. Wins over `mine`. */
+  assigneeId?: string;
   /** Projects to search. Empty with mine=true means every project. */
   projectKeys?: string[];
   /** Free text, matched server-side across summary, description and comments. */
@@ -121,19 +123,24 @@ export function effectiveJql(c: JiraConfig, f: QueryFilter = {}): string {
 
   const clauses: string[] = [];
   const projects = (f.projectKeys || []).filter(Boolean);
+  const hasAssignee = !!(f.assigneeId || f.mine);
 
   if (projects.length) {
     clauses.push(`project IN (${projects.map(q).join(', ')})`);
+  } else if (hasAssignee) {
+    // Filtering to a person with no board chosen means every board they work
+    // on, so the configured default project must not quietly narrow it.
   } else if (c.jql?.trim()) {
     clauses.push(`(${c.jql.trim().replace(/\s+ORDER\s+BY\s+.*$/i, '')})`);
   } else if (c.projectKey?.trim()) {
     clauses.push(`project = ${q(c.projectKey.trim())}`);
-  } else if (!f.mine) {
+  } else if (!hasAssignee) {
     // Searching every project is only sensible when narrowed to one assignee.
     throw new Error('Set a project key or a JQL query first');
   }
 
-  if (f.mine) clauses.push('assignee = currentUser()');
+  if (f.assigneeId) clauses.push(`assignee = "${escapeJqlString(f.assigneeId)}"`);
+  else if (f.mine) clauses.push('assignee = currentUser()');
   if (f.statuses?.length) clauses.push(`status IN (${f.statuses.map(q).join(', ')})`);
   for (const [cf, value] of Object.entries(f.facets || {})) {
     if (!value || !/^\d+$/.test(cf)) continue;
@@ -682,4 +689,75 @@ export async function searchUsers(c: JiraConfig, query: string, max = 10): Promi
       email: u.emailAddress || '',
       avatar: u.avatarUrls?.['24x24'] || '',
     }));
+}
+
+// ── Boards holding a person's work ───────────────────────────────────────────
+
+export interface AssigneeBoard { key: string; name: string; count: number }
+
+export interface AssigneeBoards {
+  boards: AssigneeBoard[];
+  /** Issues inspected. */
+  sampled: number;
+  /** True when the cap was reached, so counts are lower bounds. */
+  capped: boolean;
+}
+
+/**
+ * Which projects actually hold issues assigned to someone, with counts.
+ *
+ * Jira has no faceting API, and asking for a count per project would be one
+ * request per project across 150 of them. Instead this pages the assignee's
+ * issues asking only for the project field, which is cheap, and tallies. The
+ * cap keeps it bounded; counts beyond it are marked by returning what was seen.
+ */
+export async function fetchAssigneeBoards(
+  c: JiraConfig = getJiraConfig(),
+  assigneeId?: string,
+  cap = 500,
+): Promise<AssigneeBoards> {
+  if (!isConfigured(c)) throw new Error('Jira is not configured yet');
+  const who = assigneeId ? `assignee = "${escapeJqlString(assigneeId)}"` : 'assignee = currentUser()';
+  const jql = `${who} ORDER BY updated DESC`;
+
+  const tally = new Map<string, AssigneeBoard>();
+  let cursor: string | null = null;
+  let seen = 0;
+
+  for (let page = 0; page < 10 && seen < cap; page++) {
+    let data: any;
+    const size = Math.min(100, cap - seen);
+    try {
+      data = await jiraFetch(c, '/search/jql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jql, maxResults: size, fields: ['project'], ...(cursor ? { nextPageToken: cursor } : {}) }),
+      });
+    } catch {
+      data = await jiraFetch(
+        c,
+        `/search?jql=${encodeURIComponent(jql)}&maxResults=${size}&startAt=${seen}&fields=project`,
+      );
+    }
+    const issues: any[] = data?.issues || [];
+    if (!issues.length) break;
+    for (const i of issues) {
+      const pr = i?.fields?.project;
+      const key = pr?.key;
+      if (!key) continue;
+      const row = tally.get(key) || { key, name: pr?.name || key, count: 0 };
+      row.count += 1;
+      tally.set(key, row);
+    }
+    seen += issues.length;
+    cursor = data?.nextPageToken ? String(data.nextPageToken) : null;
+    if (!cursor && !data?.startAt && issues.length < size) break;
+    if (!cursor) cursor = String(seen); // legacy paging
+  }
+
+  return {
+    boards: [...tally.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+    sampled: seen,
+    capped: seen >= cap,
+  };
 }
