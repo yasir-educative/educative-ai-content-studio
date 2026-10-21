@@ -84,10 +84,55 @@ export function extractLessonHtml(page: any): string {
   return out.join('\n\n');
 }
 
+export interface LessonImage {
+  src: string;
+  caption: string;
+}
+
 export interface LessonContent {
   title: string;
   markdown: string;
   url: string;
+  images: LessonImage[];
+}
+
+/** Pull the [image]src\ncaption[/image] placeholders the cleaner emits. */
+export function extractLessonImages(html: string): LessonImage[] {
+  const out: LessonImage[] = [];
+  const re = /\[image\]([^\n\[]+)(?:\n([\s\S]*?))?\[\/image\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const src = (m[1] || '').trim();
+    if (src) out.push({ src, caption: (m[2] || '').trim() });
+  }
+  return out;
+}
+
+/**
+ * Download a lesson image and return it as a data URL. Educative assets sit
+ * behind the same cookie as the page, so they cannot simply be handed to the
+ * model as a link.
+ */
+export async function fetchImageAsDataUrl(src: string, authorId: string): Promise<string | null> {
+  const auth = pickAuth(authorId);
+  if (!auth) return null;
+  try {
+    const res = await fetch(src, {
+      headers: {
+        Cookie: `flask-auth=${auth}`,
+        'User-Agent': 'EducativeContentStudio/1.0 (+https://www.educative.io)',
+      },
+    });
+    if (!res.ok) return null;
+    const type = res.headers.get('content-type') || 'image/png';
+    if (!type.startsWith('image/')) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    // Keep well under the request ceiling; a huge diagram adds nothing legible.
+    if (buf.length > 4_500_000) return null;
+    return `data:${type};base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -145,6 +190,7 @@ export async function fetchLessonMarkdown(
       title: body?.page_title || '',
       markdown: htmlToMarkdown(html).trim(),
       url: `${BASE}/collection/page/${authorId}/${collectionId}/${pageId}`,
+      images: extractLessonImages(html),
     };
   }
   return null;

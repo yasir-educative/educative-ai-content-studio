@@ -5,8 +5,8 @@
 //   2. Draft   — write the reply, with the lesson content when stage 1 asked
 //                for it and the ids are available.
 
-import { generateText, parseJsonLoose } from './ai';
-import { fetchLessonMarkdown } from './educativeLesson';
+import { generateText, generateTextWithImages, parseJsonLoose } from './ai';
+import { fetchImageAsDataUrl, fetchLessonMarkdown } from './educativeLesson';
 import type { JiraIssueDetail } from './jira';
 
 const SIGNOFF = 'Best regards,\nThe Educative Team';
@@ -28,8 +28,10 @@ Read the lesson FIRST when the query:
 
 Be honest: if you cannot verify the claim without reading the lesson, say so.
 
+Also decide whether answering requires LOOKING AT an image. That is true only when the query is about a diagram, figure, screenshot, chart or illustration — its content, labels, accuracy or legibility. A query that merely happens to sit on a lesson containing images is not about the image.
+
 Respond with JSON only, no markdown fences:
-{"needsLesson": true|false, "reason": "one short sentence", "topic": "what the query is really asking"}`;
+{"needsLesson": true|false, "aboutImage": true|false, "reason": "one short sentence", "topic": "what the query is really asking"}`;
 
 const DRAFT_SYSTEM = `You write replies to content queries on behalf of Educative's content team.
 
@@ -49,12 +51,17 @@ Rules for the body:
 - If something genuinely cannot be determined from what you were given, say what is missing rather than guessing.
 - Two to four short paragraphs. No bullet lists unless the answer is genuinely a sequence.
 - Plain professional English. No marketing tone, no filler, no em-dashes.
-- Never invent lesson content, URLs, dates, names, or commitments to ship a fix by a date.`;
+- Never invent lesson content, URLs, dates, names, or commitments to ship a fix by a date.
+- If you were told the lesson is unavailable, still write the best reply the ticket supports, but keep it to what is certainly true and do not assert anything about the lesson's wording.`;
 
 export interface AnalysisResult {
   reply: string;
   usedLesson: boolean;
   needsLesson: boolean;
+  aboutImage: boolean;
+  imagesRead: number;
+  /** True when the reply could not be grounded and a human must check it. */
+  needsManualReview: boolean;
   reason: string;
   lessonTitle?: string;
   lessonUrl?: string;
@@ -88,14 +95,16 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
 
   // ── Stage 1: triage ────────────────────────────────────────────────────────
   let needsLesson = true;
+  let aboutImage = false;
   let reason = '';
   try {
     const raw = await generateText(ticket, { system: TRIAGE_SYSTEM, tier: 'edit', maxTokens: 300 });
-    const parsed = parseJsonLoose<{ needsLesson?: boolean; reason?: string }>(raw);
+    const parsed = parseJsonLoose<{ needsLesson?: boolean; aboutImage?: boolean; reason?: string }>(raw);
     if (parsed && typeof parsed.needsLesson === 'boolean') {
       needsLesson = parsed.needsLesson;
       reason = parsed.reason || '';
     }
+    aboutImage = !!parsed?.aboutImage;
   } catch {
     // Triage is an optimisation. If it fails, try to read the lesson anyway —
     // answering with more context is the safer default.
@@ -120,21 +129,51 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
     }
   }
 
-  // ── Stage 3: draft ─────────────────────────────────────────────────────────
+  // ── Stage 3: images, only when the query is actually about one ────────────
+  const imageUrls: string[] = [];
+  if (aboutImage && lesson?.images.length && authorId) {
+    // Cap it: a lesson can carry a dozen figures and the question is about one
+    // area, so a few is enough context without an unreadable payload.
+    for (const img of lesson.images.slice(0, 4)) {
+      const dataUrl = await fetchImageAsDataUrl(img.src, authorId);
+      if (dataUrl) imageUrls.push(dataUrl);
+    }
+    if (!imageUrls.length) {
+      warning = [warning, 'The query is about an image, but the images could not be downloaded.']
+        .filter(Boolean).join(' ');
+    }
+  }
+
+  // Unanswerable without grounding that we could not get — a human must check.
+  const needsManualReview = needsLesson && !lesson;
+
+  // ── Stage 4: draft ─────────────────────────────────────────────────────────
   const prompt = [
     '# Query',
     ticket,
     lesson
       ? `\n# Lesson content${lesson.title ? ` — ${lesson.title}` : ''}\n${lesson.markdown.slice(0, 24_000)}`
-      : '\n# Lesson content\nNot available. Do not invent what the lesson says; if the answer depends on it, say the lesson needs checking.',
-  ].join('\n');
+      : '\n# Lesson content\nNot available. Do not state what the lesson says.',
+    imageUrls.length
+      ? `\n# Images\n${imageUrls.length} image(s) from the lesson are attached. The query is about them, so judge them directly.${
+          lesson?.images.slice(0, 4).map((i, n) => `\n${n + 1}. ${i.caption || '(no caption)'}`).join('') || ''
+        }`
+      : '',
+  ].filter(Boolean).join('\n');
 
-  const reply = (await generateText(prompt, { system: DRAFT_SYSTEM, tier: 'normal', maxTokens: 1200 })).trim();
+  const reply = (
+    imageUrls.length
+      ? await generateTextWithImages(prompt, imageUrls, { system: DRAFT_SYSTEM, tier: 'normal', maxTokens: 1200 })
+      : await generateText(prompt, { system: DRAFT_SYSTEM, tier: 'normal', maxTokens: 1200 })
+  ).trim();
 
   return {
     reply,
     usedLesson: !!lesson,
     needsLesson,
+    aboutImage,
+    imagesRead: imageUrls.length,
+    needsManualReview,
     reason,
     lessonTitle: lesson?.title,
     lessonUrl: lesson?.url,

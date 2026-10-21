@@ -526,6 +526,11 @@ export default function ContentQueriesPage() {
                             <span className={`text-[10px] rounded px-1.5 py-0.5 border ${analysis.usedLesson ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10' : 'text-[var(--text-faint)] border-[var(--border)]'}`}>
                               {analysis.usedLesson ? 'lesson read' : analysis.needsLesson ? 'lesson unavailable' : 'answered from ticket'}
                             </span>
+                            {analysis.imagesRead > 0 && (
+                              <span className="text-[10px] rounded px-1.5 py-0.5 border text-sky-300 border-sky-500/30 bg-sky-500/10">
+                                {analysis.imagesRead} image{analysis.imagesRead > 1 ? 's' : ''} read
+                              </span>
+                            )}
                             <button
                               className="text-[10px] text-[var(--text-faint)] hover:text-[var(--accent)] ml-auto"
                               onClick={() => navigator.clipboard?.writeText(analysis.reply || '')}
@@ -534,6 +539,15 @@ export default function ContentQueriesPage() {
                             </button>
                           </div>
 
+                          {analysis.needsManualReview && (
+                            <div className="rounded-lg border border-amber-500/50 bg-amber-500/15 px-3 py-2">
+                              <p className="text-xs font-semibold text-amber-200">⚠ Review manually before sending</p>
+                              <p className="text-[11px] text-amber-300/90 mt-0.5">
+                                This query needed the lesson, but it could not be read. The draft below is the best the
+                                ticket alone supports and is not grounded in the content.
+                              </p>
+                            </div>
+                          )}
                           {analysis.reason && (
                             <p className="text-[11px] text-[var(--text-faint)] italic">{analysis.reason}</p>
                           )}

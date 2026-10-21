@@ -74,6 +74,29 @@ export async function generateText(
   return (res as any).output_text ?? '';
 }
 
+/**
+ * Same as generateText but with images attached, for questions that can only be
+ * answered by looking at a diagram. Images are data URLs so private Educative
+ * assets never have to be publicly reachable for the model to read them.
+ */
+export async function generateTextWithImages(
+  prompt: string,
+  imageDataUrls: string[],
+  opts: { model?: string; tier?: ModelTier; maxTokens?: number; system?: string } = {},
+): Promise<string> {
+  const content: any[] = [{ type: 'input_text', text: prompt }];
+  for (const url of imageDataUrls) content.push({ type: 'input_image', image_url: url });
+  const input: any[] = [];
+  if (opts.system) input.push({ role: 'system', content: opts.system });
+  input.push({ role: 'user', content });
+
+  const res = await getClient().responses.create(
+    { model: pickModel(opts), input, max_output_tokens: opts.maxTokens },
+    { signal: getAbortSignal() ?? undefined },
+  );
+  return (res as any).output_text ?? '';
+}
+
 export async function generateTextStream(
   prompt: string,
   onChunk: (chunk: string, accumulated: string) => void,
