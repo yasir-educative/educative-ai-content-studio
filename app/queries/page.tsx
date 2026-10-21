@@ -360,7 +360,11 @@ export default function ContentQueriesPage() {
                 onClick={() => { setScoping((v) => !v); if (!projects.length) loadProjects(); }}
                 className="text-xs rounded-lg px-3 py-1.5 border border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)] transition-colors"
               >
-                Boards: {scope.length === 0 ? (mine ? 'all' : cfg.projectKey) : `${scope.length} selected`}
+                Boards: {scope.length === 0
+                  ? (mine ? 'all' : (projects.find((p) => p.key === cfg.projectKey)?.name || cfg.projectKey))
+                  : scope.length <= 2
+                    ? scope.map((k) => projects.find((p) => p.key === k)?.name || k).join(', ')
+                    : `${scope.length} selected`}
               </button>
               {scope.length > 0 && (
                 <button onClick={() => { setScope([]); loadIssues(active, mine, []); }} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)]">
@@ -376,24 +380,32 @@ export default function ContentQueriesPage() {
               <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-2">
                 <input className="input w-full text-xs" placeholder={`Search ${projects.length || ''} boards…`} value={projQuery} onChange={(e) => setProjQuery(e.target.value)} />
                 {projLoading && <p className="text-[11px] text-[var(--text-faint)]">Loading…</p>}
-                <div className="max-h-48 overflow-y-auto flex flex-wrap gap-1.5">
+                <div className="max-h-56 overflow-y-auto rounded-md border border-[var(--border)] divide-y divide-[var(--border)]">
                   {visibleProjects.map((p) => {
                     const on = scope.includes(p.key);
                     return (
-                      <span key={p.key}
-                        className={`group inline-flex items-center rounded-md border transition-colors ${on ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)]'}`}>
-                        <button onClick={() => toggleScope(p.key)} className="text-[11px] pl-2 pr-1 py-1 hover:text-[var(--text)]" title={p.name}>
-                          {on ? '✓ ' : ''}{p.key}
-                        </button>
-                        <button onClick={() => hide(p.key)} title={`Hide ${p.key} from this list`}
-                          className="text-[11px] pr-1.5 pl-0.5 py-1 text-[var(--text-faint)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity">
+                      <div key={p.key}
+                        className={`group flex items-center gap-2 px-2.5 py-1.5 transition-colors ${on ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--panel)]'}`}>
+                        <input
+                          type="checkbox"
+                          className="accent-emerald-500 shrink-0"
+                          checked={on}
+                          onChange={() => toggleScope(p.key)}
+                          id={`scope-${p.key}`}
+                        />
+                        <label htmlFor={`scope-${p.key}`} className="flex-1 min-w-0 cursor-pointer">
+                          <span className={`text-xs block truncate ${on ? 'text-[var(--accent)]' : 'text-[var(--text)]'}`}>{p.name}</span>
+                        </label>
+                        <code className="text-[10px] text-[var(--text-faint)] shrink-0 font-mono">{p.key}</code>
+                        <button onClick={() => hide(p.key)} title={`Hide ${p.name}`}
+                          className="text-xs text-[var(--text-faint)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity shrink-0 px-0.5">
                           ×
                         </button>
-                      </span>
+                      </div>
                     );
                   })}
                   {visibleProjects.length === 0 && !projLoading && (
-                    <p className="text-[11px] text-[var(--text-faint)]">No boards left. Restore one below.</p>
+                    <p className="text-[11px] text-[var(--text-faint)] px-2.5 py-2">No boards left. Restore one below.</p>
                   )}
                 </div>
 
@@ -407,7 +419,7 @@ export default function ContentQueriesPage() {
                         {hiddenProjects.map((p) => (
                           <button key={p.key} onClick={() => unhide(p.key)} title={`Restore ${p.name}`}
                             className="text-[11px] rounded-md px-2 py-1 border border-dashed border-[var(--border)] text-[var(--text-faint)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors">
-                            + {p.key}
+                            + {p.name} <span className="font-mono opacity-60">{p.key}</span>
                           </button>
                         ))}
                       </div>
