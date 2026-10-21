@@ -22,6 +22,10 @@ export interface JiraConfig {
   projectKey?: string;
   /** Optional JQL override. When set it wins over projectKey. */
   jql?: string;
+  /** The board opened by default on the queries page. */
+  defaultBoardId?: number;
+  /** Other boards kept available to switch to. Always includes the default. */
+  enabledBoardIds?: number[];
   updatedAt?: string;
 }
 
@@ -53,6 +57,8 @@ export function redactJira(c: JiraConfig = getJiraConfig()) {
     apiToken: c.apiToken ? SECRET_SENTINEL : '',
     projectKey: c.projectKey || '',
     jql: c.jql || '',
+    defaultBoardId: c.defaultBoardId ?? null,
+    enabledBoardIds: c.enabledBoardIds ?? [],
     configured: isConfigured(c),
   };
 }
@@ -76,6 +82,16 @@ export async function saveJiraConfig(patch: Partial<JiraConfig>): Promise<JiraCo
     apiToken,
     projectKey: String(patch.projectKey ?? existing.projectKey ?? '').trim(),
     jql: String(patch.jql ?? existing.jql ?? '').trim(),
+    defaultBoardId:
+      patch.defaultBoardId === undefined ? existing.defaultBoardId : Number(patch.defaultBoardId) || undefined,
+    // The default is always selectable, so keep it in the list regardless.
+    enabledBoardIds: (() => {
+      const ids = patch.enabledBoardIds === undefined ? existing.enabledBoardIds ?? [] : patch.enabledBoardIds.map(Number);
+      const def = patch.defaultBoardId === undefined ? existing.defaultBoardId : Number(patch.defaultBoardId) || undefined;
+      const set = new Set(ids.filter(Boolean));
+      if (def) set.add(def);
+      return [...set];
+    })(),
     updatedAt: new Date().toISOString(),
   };
 

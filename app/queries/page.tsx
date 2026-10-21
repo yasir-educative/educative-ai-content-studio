@@ -12,8 +12,12 @@ interface Cfg {
   apiToken: string;
   projectKey: string;
   jql: string;
+  defaultBoardId: number | null;
+  enabledBoardIds: number[];
   configured: boolean;
 }
+
+interface Board { id: number; name: string; type: string; projectKey: string; projectName: string; }
 
 interface Issue {
   key: string; url: string; summary: string; status: string; statusCategory: string;
@@ -21,7 +25,7 @@ interface Issue {
   labels: string[]; created: string; updated: string;
 }
 
-const EMPTY: Cfg = { siteUrl: '', email: '', apiToken: '', projectKey: '', jql: '', configured: false };
+const EMPTY: Cfg = { siteUrl: '', email: '', apiToken: '', projectKey: '', jql: '', defaultBoardId: null, enabledBoardIds: [], configured: false };
 
 function StatusPill({ status, category }: { status: string; category: string }) {
   const cls =
@@ -41,6 +45,13 @@ export default function ContentQueriesPage() {
   const [testOk, setTestOk] = useState<boolean | null>(null);
   const [err, setErr] = useState('');
 
+  const [boards, setBoards] = useState<Board[]>([]);
+  const [boardsLoading, setBoardsLoading] = useState(false);
+  const [boardsErr, setBoardsErr] = useState('');
+  const [boardQuery, setBoardQuery] = useState('');
+  const [picking, setPicking] = useState(false);
+  const [activeBoardId, setActiveBoardId] = useState<number | null>(null);
+
   const [issues, setIssues] = useState<Issue[] | null>(null);
   const [jql, setJql] = useState('');
   const [loading, setLoading] = useState(false);
@@ -53,10 +64,11 @@ export default function ContentQueriesPage() {
       .catch(() => setEditing(true));
   }, []);
 
-  const loadIssues = useCallback(async () => {
+  const loadIssues = useCallback(async (boardId?: number | null) => {
     setLoading(true); setIssuesErr(''); setIssues(null);
     try {
-      const res = await fetch('/api/jira/issues', { cache: 'no-store' });
+      const qs = boardId ? `?boardId=${boardId}` : '';
+      const res = await fetch(`/api/jira/issues${qs}`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Failed to load');
       setIssues(json.issues); setJql(json.jql);
@@ -67,7 +79,32 @@ export default function ContentQueriesPage() {
     }
   }, []);
 
-  useEffect(() => { if (cfg.configured) loadIssues(); }, [cfg.configured, loadIssues]);
+  const loadBoards = useCallback(async () => {
+    setBoardsLoading(true); setBoardsErr('');
+    try {
+      const res = await fetch('/api/jira/boards', { cache: 'no-store' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Failed to load boards');
+      setBoards(json.boards);
+    } catch (e: any) { setBoardsErr(e?.message || String(e)); } finally { setBoardsLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (!cfg.configured) return;
+    const b = cfg.defaultBoardId ?? null;
+    setActiveBoardId(b);
+    if (b) loadIssues(b); else setPicking(true);
+    if (boards.length === 0) loadBoards();
+  }, [cfg.configured, cfg.defaultBoardId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveBoards(defaultBoardId: number | null, enabledBoardIds: number[]) {
+    const res = await fetch('/api/jira', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...cfg, defaultBoardId, enabledBoardIds }),
+    });
+    const json = await res.json();
+    if (res.ok) { setCfg(json); setForm(json); }
+  }
 
   async function save() {
     setSaving(true); setErr(''); setTestMsg(''); setTestOk(null);
@@ -92,6 +129,16 @@ export default function ContentQueriesPage() {
   }
 
   const upd = (p: Partial<Cfg>) => setForm((f) => ({ ...f, ...p }));
+
+  const activeBoard = boards.find((b) => b.id === activeBoardId) || null;
+  // Kept boards float to the top when not searching, so the common ones are one click away.
+  const pinned = boards.filter((b) => cfg.enabledBoardIds.includes(b.id));
+  const q = boardQuery.trim().toLowerCase();
+  const matches = (b: Board) =>
+    b.name.toLowerCase().includes(q) || b.projectKey.toLowerCase().includes(q);
+  const visibleBoards = q
+    ? boards.filter(matches).slice(0, 60)
+    : [...pinned, ...boards.filter((b) => !cfg.enabledBoardIds.includes(b.id))].slice(0, 60);
 
   return (
     <div className="max-w-4xl mx-auto space-y-5">
@@ -189,16 +236,100 @@ export default function ContentQueriesPage() {
       {cfg.configured && (
         <div className="card p-5 space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div>
+            <div className="min-w-0">
               <h2 className="text-sm font-semibold">
                 Queries {issues && <span className="text-[var(--text-faint)] font-normal">({issues.length})</span>}
               </h2>
-              {jql && <p className="text-[11px] text-[var(--text-faint)] font-mono mt-0.5 break-all">{jql}</p>}
+              <p className="text-[11px] text-[var(--text-faint)] mt-0.5 break-all">
+                {activeBoard
+                  ? <>{activeBoard.name} <span className="opacity-60">· {activeBoard.projectKey} · board {activeBoard.id}</span>{activeBoardId === cfg.defaultBoardId && <span className="ml-1.5 pill text-[10px] py-0 px-1.5">default</span>}</>
+                  : jql ? <span className="font-mono">{jql}</span> : 'No board selected'}
+              </p>
             </div>
-            <button className="btn-secondary text-xs py-1 px-3 shrink-0" onClick={loadIssues} disabled={loading}>
-              {loading ? 'Loading…' : 'Refresh'}
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button className="btn-secondary text-xs py-1 px-3" onClick={() => setPicking((v) => !v)}>
+                {picking ? 'Hide boards' : 'Change board'}
+              </button>
+              <button className="btn-secondary text-xs py-1 px-3" onClick={() => loadIssues(activeBoardId)} disabled={loading}>
+                {loading ? 'Loading…' : 'Refresh'}
+              </button>
+            </div>
           </div>
+
+          {/* Board picker */}
+          {picking && (
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  className="input flex-1 text-sm"
+                  placeholder={`Search ${boards.length || ''} boards by name or project key…`}
+                  value={boardQuery}
+                  onChange={(e) => setBoardQuery(e.target.value)}
+                />
+                <button className="btn-secondary text-xs py-1 px-3 shrink-0" onClick={loadBoards} disabled={boardsLoading}>
+                  {boardsLoading ? 'Loading…' : 'Reload'}
+                </button>
+              </div>
+              {boardsErr && <p className="text-xs text-red-400">{boardsErr}</p>}
+              {boardsLoading && boards.length === 0 && <p className="text-xs text-[var(--text-faint)]">Loading boards…</p>}
+
+              {pinned.length > 0 && !boardQuery && (
+                <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] pt-1">Selected</p>
+              )}
+              <div className="max-h-72 overflow-y-auto divide-y divide-[var(--border)] rounded-md">
+                {visibleBoards.map((b) => {
+                  const isDefault = b.id === cfg.defaultBoardId;
+                  const isOn = cfg.enabledBoardIds.includes(b.id);
+                  return (
+                    <div key={b.id} className={`flex items-center gap-2 px-2.5 py-2 ${b.id === activeBoardId ? 'bg-[var(--accent-soft)]' : ''}`}>
+                      <button
+                        className="flex-1 min-w-0 text-left"
+                        onClick={() => { setActiveBoardId(b.id); loadIssues(b.id); }}
+                        title="Open this board"
+                      >
+                        <span className="text-sm text-[var(--text)]">{b.name}</span>
+                        <span className="text-[11px] text-[var(--text-faint)] ml-2">{b.projectKey} · {b.type}</span>
+                      </button>
+                      {isDefault ? (
+                        <span className="pill text-[10px] py-0 px-1.5 shrink-0">default</span>
+                      ) : (
+                        <button
+                          className="text-[10px] text-[var(--text-faint)] hover:text-[var(--accent)] shrink-0 px-1"
+                          onClick={() => saveBoards(b.id, cfg.enabledBoardIds)}
+                          title="Make this the default board"
+                        >
+                          set default
+                        </button>
+                      )}
+                      <label className="flex items-center gap-1 text-[10px] text-[var(--text-faint)] shrink-0 cursor-pointer" title="Keep in the selected list">
+                        <input
+                          type="checkbox"
+                          className="accent-emerald-500"
+                          checked={isOn}
+                          disabled={isDefault}
+                          onChange={(e) =>
+                            saveBoards(
+                              cfg.defaultBoardId,
+                              e.target.checked
+                                ? [...cfg.enabledBoardIds, b.id]
+                                : cfg.enabledBoardIds.filter((x) => x !== b.id),
+                            )
+                          }
+                        />
+                        keep
+                      </label>
+                    </div>
+                  );
+                })}
+                {!boardsLoading && visibleBoards.length === 0 && (
+                  <p className="text-xs text-[var(--text-faint)] px-2.5 py-2">No boards matched.</p>
+                )}
+              </div>
+              <p className="text-[10px] text-[var(--text-faint)]">
+                The default opens automatically. Kept boards stay at the top to switch to; any other board is still one search away.
+              </p>
+            </div>
+          )}
 
           {issuesErr && <div className="rounded-lg border border-red-500/40 bg-red-500/10 text-red-300 p-3 text-sm">{issuesErr}</div>}
           {loading && <p className="text-sm text-[var(--text-faint)]">Fetching from Jira…</p>}

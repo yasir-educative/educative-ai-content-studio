@@ -9,8 +9,14 @@ function authHeader(c: JiraConfig): string {
   return 'Basic ' + Buffer.from(`${c.email}:${c.apiToken}`).toString('base64');
 }
 
-async function jiraFetch(c: JiraConfig, pathAndQuery: string, init: RequestInit = {}): Promise<any> {
-  const url = `${c.siteUrl}/rest/api/3${pathAndQuery}`;
+// Boards live under the Agile API, which is a different base path from the core v3 API.
+async function jiraFetch(
+  c: JiraConfig,
+  pathAndQuery: string,
+  init: RequestInit = {},
+  base = '/rest/api/3',
+): Promise<any> {
+  const url = `${c.siteUrl}${base}${pathAndQuery}`;
   const res = await fetch(url, {
     ...init,
     headers: {
@@ -118,4 +124,56 @@ export async function fetchIssues(
 
   const issues = (data?.issues || []).map((i: any) => mapIssue(c.siteUrl, i));
   return { issues, jql, total: Number(data?.total ?? issues.length) };
+}
+
+// ── Boards ───────────────────────────────────────────────────────────────────
+
+const AGILE = '/rest/agile/1.0';
+
+export interface JiraBoard {
+  id: number;
+  name: string;
+  type: string;
+  projectKey: string;
+  projectName: string;
+}
+
+/**
+ * Every board the account can see. Jira pages this at 50, and a large org has
+ * hundreds, so follow isLast rather than returning a truncated first page.
+ */
+export async function fetchBoards(c: JiraConfig = getJiraConfig()): Promise<JiraBoard[]> {
+  if (!isConfigured(c)) throw new Error('Jira is not configured yet');
+  const out: JiraBoard[] = [];
+  let startAt = 0;
+  for (let page = 0; page < 20; page++) {
+    const data = await jiraFetch(c, `/board?maxResults=50&startAt=${startAt}`, {}, AGILE);
+    for (const b of data?.values || []) {
+      const loc = b?.location || {};
+      out.push({
+        id: Number(b.id),
+        name: b.name || '',
+        type: b.type || '',
+        projectKey: loc.projectKey || '',
+        projectName: loc.projectName || '',
+      });
+    }
+    if (data?.isLast !== false) break;
+    startAt += data?.maxResults || 50;
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+/** Issues on one board. Extra JQL from the config narrows the board's own filter. */
+export async function fetchBoardIssues(
+  c: JiraConfig,
+  boardId: number,
+  maxResults = 50,
+): Promise<{ issues: JiraIssue[]; total: number }> {
+  const params = new URLSearchParams({ maxResults: String(maxResults), fields: FIELDS });
+  if (c.jql?.trim()) params.set('jql', c.jql.trim());
+  const data = await jiraFetch(c, `/board/${boardId}/issue?${params}`, {}, AGILE);
+  const issues = (data?.issues || []).map((i: any) => mapIssue(c.siteUrl, i));
+  return { issues, total: Number(data?.total ?? issues.length) };
 }
