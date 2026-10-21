@@ -18,6 +18,7 @@ interface Cfg {
 }
 
 interface Board { id: number; name: string; type: string; projectKey: string; projectName: string; }
+interface Project { key: string; name: string; type: string; archived: boolean; }
 
 interface Issue {
   key: string; url: string; summary: string; status: string; statusCategory: string;
@@ -45,6 +46,7 @@ export default function ContentQueriesPage() {
   const [testOk, setTestOk] = useState<boolean | null>(null);
   const [err, setErr] = useState('');
 
+  const [projects, setProjects] = useState<Project[]>([]);
   const [boards, setBoards] = useState<Board[]>([]);
   const [boardsLoading, setBoardsLoading] = useState(false);
   const [boardsErr, setBoardsErr] = useState('');
@@ -79,31 +81,29 @@ export default function ContentQueriesPage() {
     }
   }, []);
 
-  const loadBoards = useCallback(async () => {
+  const loadProjects = useCallback(async () => {
     setBoardsLoading(true); setBoardsErr('');
     try {
-      const res = await fetch('/api/jira/boards', { cache: 'no-store' });
+      const res = await fetch('/api/jira/projects', { cache: 'no-store' });
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || 'Failed to load boards');
-      setBoards(json.boards);
+      if (!res.ok) throw new Error(json?.error || 'Failed to load projects');
+      setProjects(json.projects);
     } catch (e: any) { setBoardsErr(e?.message || String(e)); } finally { setBoardsLoading(false); }
   }, []);
 
   useEffect(() => {
     if (!cfg.configured) return;
-    const b = cfg.defaultBoardId ?? null;
-    setActiveBoardId(b);
-    if (b) loadIssues(b); else setPicking(true);
-    if (boards.length === 0) loadBoards();
-  }, [cfg.configured, cfg.defaultBoardId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (cfg.projectKey) loadIssues(); else setPicking(true);
+    if (projects.length === 0) loadProjects();
+  }, [cfg.configured, cfg.projectKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function saveBoards(defaultBoardId: number | null, enabledBoardIds: number[]) {
+  async function setDefaultProject(key: string) {
     const res = await fetch('/api/jira', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...cfg, defaultBoardId, enabledBoardIds }),
+      body: JSON.stringify({ ...cfg, projectKey: key }),
     });
     const json = await res.json();
-    if (res.ok) { setCfg(json); setForm(json); }
+    if (res.ok) { setCfg(json); setForm(json); setPicking(false); }
   }
 
   async function save() {
@@ -130,15 +130,12 @@ export default function ContentQueriesPage() {
 
   const upd = (p: Partial<Cfg>) => setForm((f) => ({ ...f, ...p }));
 
-  const activeBoard = boards.find((b) => b.id === activeBoardId) || null;
-  // Kept boards float to the top when not searching, so the common ones are one click away.
-  const pinned = boards.filter((b) => cfg.enabledBoardIds.includes(b.id));
+  const activeProject = projects.find((p) => p.key === cfg.projectKey) || null;
   const q = boardQuery.trim().toLowerCase();
-  const matches = (b: Board) =>
-    b.name.toLowerCase().includes(q) || b.projectKey.toLowerCase().includes(q);
-  const visibleBoards = q
-    ? boards.filter(matches).slice(0, 60)
-    : [...pinned, ...boards.filter((b) => !cfg.enabledBoardIds.includes(b.id))].slice(0, 60);
+  const visibleProjects = (q
+    ? projects.filter((p) => p.name.toLowerCase().includes(q) || p.key.toLowerCase().includes(q))
+    : [...projects].sort((a, b) => Number(a.key !== cfg.projectKey) - Number(b.key !== cfg.projectKey))
+  ).slice(0, 80);
 
   return (
     <div className="max-w-4xl mx-auto space-y-5">
@@ -241,93 +238,65 @@ export default function ContentQueriesPage() {
                 Queries {issues && <span className="text-[var(--text-faint)] font-normal">({issues.length})</span>}
               </h2>
               <p className="text-[11px] text-[var(--text-faint)] mt-0.5 break-all">
-                {activeBoard
-                  ? <>{activeBoard.name} <span className="opacity-60">· {activeBoard.projectKey} · board {activeBoard.id}</span>{activeBoardId === cfg.defaultBoardId && <span className="ml-1.5 pill text-[10px] py-0 px-1.5">default</span>}</>
-                  : jql ? <span className="font-mono">{jql}</span> : 'No board selected'}
+                {cfg.projectKey
+                  ? <>{activeProject?.name || cfg.projectKey} <span className="opacity-60">· {cfg.projectKey}</span><span className="ml-1.5 pill text-[10px] py-0 px-1.5">default</span></>
+                  : 'No project selected'}
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button className="btn-secondary text-xs py-1 px-3" onClick={() => setPicking((v) => !v)}>
-                {picking ? 'Hide boards' : 'Change board'}
+                {picking ? 'Hide projects' : 'Change project'}
               </button>
-              <button className="btn-secondary text-xs py-1 px-3" onClick={() => loadIssues(activeBoardId)} disabled={loading}>
+              <button className="btn-secondary text-xs py-1 px-3" onClick={() => loadIssues()} disabled={loading}>
                 {loading ? 'Loading…' : 'Refresh'}
               </button>
             </div>
           </div>
 
-          {/* Board picker */}
+          {/* Project picker */}
           {picking && (
             <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-3 space-y-2">
               <div className="flex items-center gap-2">
                 <input
                   className="input flex-1 text-sm"
-                  placeholder={`Search ${boards.length || ''} boards by name or project key…`}
+                  placeholder={`Search ${projects.length || ''} projects by name or key…`}
                   value={boardQuery}
                   onChange={(e) => setBoardQuery(e.target.value)}
                 />
-                <button className="btn-secondary text-xs py-1 px-3 shrink-0" onClick={loadBoards} disabled={boardsLoading}>
+                <button className="btn-secondary text-xs py-1 px-3 shrink-0" onClick={loadProjects} disabled={boardsLoading}>
                   {boardsLoading ? 'Loading…' : 'Reload'}
                 </button>
               </div>
               {boardsErr && <p className="text-xs text-red-400">{boardsErr}</p>}
-              {boardsLoading && boards.length === 0 && <p className="text-xs text-[var(--text-faint)]">Loading boards…</p>}
+              {boardsLoading && projects.length === 0 && <p className="text-xs text-[var(--text-faint)]">Loading projects…</p>}
 
-              {pinned.length > 0 && !boardQuery && (
-                <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] pt-1">Selected</p>
-              )}
               <div className="max-h-72 overflow-y-auto divide-y divide-[var(--border)] rounded-md">
-                {visibleBoards.map((b) => {
-                  const isDefault = b.id === cfg.defaultBoardId;
-                  const isOn = cfg.enabledBoardIds.includes(b.id);
+                {visibleProjects.map((p) => {
+                  const isDefault = p.key === cfg.projectKey;
                   return (
-                    <div key={b.id} className={`flex items-center gap-2 px-2.5 py-2 ${b.id === activeBoardId ? 'bg-[var(--accent-soft)]' : ''}`}>
-                      <button
-                        className="flex-1 min-w-0 text-left"
-                        onClick={() => { setActiveBoardId(b.id); loadIssues(b.id); }}
-                        title="Open this board"
-                      >
-                        <span className="text-sm text-[var(--text)]">{b.name}</span>
-                        <span className="text-[11px] text-[var(--text-faint)] ml-2">{b.projectKey} · {b.type}</span>
-                      </button>
+                    <div key={p.key} className={`flex items-center gap-2 px-2.5 py-2 ${isDefault ? 'bg-[var(--accent-soft)]' : ''}`}>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm text-[var(--text)]">{p.name}</span>
+                        <span className="text-[11px] text-[var(--text-faint)] ml-2">{p.key} · {p.type}</span>
+                      </div>
                       {isDefault ? (
                         <span className="pill text-[10px] py-0 px-1.5 shrink-0">default</span>
                       ) : (
                         <button
                           className="text-[10px] text-[var(--text-faint)] hover:text-[var(--accent)] shrink-0 px-1"
-                          onClick={() => saveBoards(b.id, cfg.enabledBoardIds)}
-                          title="Make this the default board"
+                          onClick={() => setDefaultProject(p.key)}
+                          title="Use this project"
                         >
                           set default
                         </button>
                       )}
-                      <label className="flex items-center gap-1 text-[10px] text-[var(--text-faint)] shrink-0 cursor-pointer" title="Keep in the selected list">
-                        <input
-                          type="checkbox"
-                          className="accent-emerald-500"
-                          checked={isOn}
-                          disabled={isDefault}
-                          onChange={(e) =>
-                            saveBoards(
-                              cfg.defaultBoardId,
-                              e.target.checked
-                                ? [...cfg.enabledBoardIds, b.id]
-                                : cfg.enabledBoardIds.filter((x) => x !== b.id),
-                            )
-                          }
-                        />
-                        keep
-                      </label>
                     </div>
                   );
                 })}
-                {!boardsLoading && visibleBoards.length === 0 && (
-                  <p className="text-xs text-[var(--text-faint)] px-2.5 py-2">No boards matched.</p>
+                {!boardsLoading && visibleProjects.length === 0 && (
+                  <p className="text-xs text-[var(--text-faint)] px-2.5 py-2">No projects matched.</p>
                 )}
               </div>
-              <p className="text-[10px] text-[var(--text-faint)]">
-                The default opens automatically. Kept boards stay at the top to switch to; any other board is still one search away.
-              </p>
             </div>
           )}
 

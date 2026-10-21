@@ -177,3 +177,35 @@ export async function fetchBoardIssues(
   const issues = (data?.issues || []).map((i: any) => mapIssue(c.siteUrl, i));
   return { issues, total: Number(data?.total ?? issues.length) };
 }
+
+// ── Projects ─────────────────────────────────────────────────────────────────
+// Business projects (Jira Work Management) have no agile board, so the board
+// list never shows them. Content queries live in one, hence selection by project.
+
+export interface JiraProject {
+  key: string;
+  name: string;
+  type: string;
+  archived: boolean;
+}
+
+export async function fetchProjects(c: JiraConfig = getJiraConfig()): Promise<JiraProject[]> {
+  if (!isConfigured(c)) throw new Error('Jira is not configured yet');
+  const out: JiraProject[] = [];
+  let startAt = 0;
+  for (let page = 0; page < 20; page++) {
+    const data = await jiraFetch(c, `/project/search?maxResults=100&startAt=${startAt}&status=live`);
+    for (const p of data?.values || []) {
+      out.push({
+        key: p.key || '',
+        name: p.name || '',
+        type: p.projectTypeKey || '',
+        archived: /\[ARCHIVED\]/i.test(p.name || ''),
+      });
+    }
+    if (data?.isLast !== false) break;
+    startAt += data?.maxResults || 100;
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
