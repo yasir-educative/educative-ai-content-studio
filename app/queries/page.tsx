@@ -179,7 +179,15 @@ export default function ContentQueriesPage() {
     if (!cfg.configured) return;
     if (!cfg.projectKey) { setPicking(true); return; }
     setActive([]);
-    loadIssues([], mine, scope, search, facetSel);
+    // Apply the saved facet defaults (e.g. Team = Content) to the first load,
+    // rather than fetching everything and narrowing afterwards.
+    const saved = cfg.defaultFacets || {};
+    setFacetSel(saved);
+    loadIssues([], mine, scope, search, saved);
+    fetch('/api/jira/facets', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => setFacets(j.facets || []))
+      .catch(() => setFacets([]));
     fetch('/api/jira/statuses', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => setStatuses(j.statuses || []))
