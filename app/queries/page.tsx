@@ -109,7 +109,7 @@ export default function ContentQueriesPage() {
   const [userHits, setUserHits] = useState<JUser[]>([]);
   const [userSearching, setUserSearching] = useState(false);
   const [pickingUser, setPickingUser] = useState(false);
-  const [instruction, setInstruction] = useState('respond with the following:');
+  const [instruction, setInstruction] = useState('please respond with the following:');
 
   // ── loaders ────────────────────────────────────────────────────────────────
   useEffect(() => {

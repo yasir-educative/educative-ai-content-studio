@@ -622,7 +622,7 @@ export async function postUpdate(
   if (!args.key) throw new Error('issue key is required');
   if (!args.reply?.trim()) throw new Error('nothing to post');
 
-  const instruction = args.instruction?.trim() || 'respond with the following:';
+  const instruction = args.instruction?.trim() || 'please respond with the following:';
   const lead: any = { type: 'paragraph', content: [] };
   if (args.mentionAccountId) {
     lead.content.push({
