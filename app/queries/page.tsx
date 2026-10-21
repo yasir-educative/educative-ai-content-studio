@@ -24,7 +24,9 @@ interface Ids { authorId?: string; collectionId?: string; pageId?: string; lesso
 interface Detail extends Issue {
   description: string; comments: Comment[]; resolution: string;
   ids: Ids; fields: Array<{ name: string; value: string }>;
+  reporterId?: string; assigneeId?: string;
 }
+interface Transition { id: string; name: string; to: string; toCategory: string }
 
 const EMPTY: Cfg = {
   siteUrl: '', email: '', apiToken: '', projectKey: '', jql: '',
@@ -96,6 +98,12 @@ export default function ContentQueriesPage() {
   const [replyDraft, setReplyDraft] = useState('');
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [savingReply, setSavingReply] = useState(false);
+  const [posting, setPosting] = useState(false);
+  const [postMsg, setPostMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [transitions, setTransitions] = useState<Transition[]>([]);
+  const [transitionId, setTransitionId] = useState('');
+  const [mentionWho, setMentionWho] = useState<'assignee' | 'reporter' | 'none'>('assignee');
+  const [instruction, setInstruction] = useState('respond with the following:');
 
   // ── loaders ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -215,6 +223,18 @@ export default function ContentQueriesPage() {
     if (!selected) { setDetail(null); return; }
     let cancelled = false;
     setDetailLoading(true); setDetail(null); setAnalysis(null); setReplyDraft(''); setSavedAt(null);
+    setPostMsg(null); setTransitions([]); setTransitionId('');
+    // Transitions are per-issue and workflow-specific, so load the real list
+    // rather than assuming a status name exists.
+    fetch(`/api/jira/post-update?key=${encodeURIComponent(selected)}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled || !Array.isArray(j?.transitions)) return;
+        setTransitions(j.transitions);
+        const done = j.transitions.find((t: Transition) => t.toCategory === 'done');
+        if (done) setTransitionId(done.id);
+      })
+      .catch(() => {});
     // A saved reply means this query was already analysed; show it instead of
     // making the user pay for the call again.
     fetch(`/api/jira/analysis?key=${encodeURIComponent(selected)}`, { cache: 'no-store' })
@@ -352,6 +372,39 @@ export default function ContentQueriesPage() {
       const j = await r.json();
       if (r.ok) setSavedAt(j.analysis?.savedAt || new Date().toISOString());
     } finally { setSavingReply(false); }
+  }
+
+  async function postUpdate() {
+    if (!detail || !replyDraft.trim()) return;
+    const mentionId = mentionWho === 'assignee' ? detail.assigneeId : mentionWho === 'reporter' ? detail.reporterId : '';
+    const mentionName = mentionWho === 'assignee' ? detail.assignee : mentionWho === 'reporter' ? detail.reporter : '';
+    const target = transitions.find((t) => t.id === transitionId);
+    const label = target ? ` and moved it to ${target.to}` : '';
+    if (!confirm(`Post this update to ${detail.key}${label}?`)) return;
+
+    setPosting(true); setPostMsg(null);
+    try {
+      const r = await fetch('/api/jira/post-update', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: detail.key, reply: replyDraft, instruction,
+          mentionAccountId: mentionId || undefined, mentionName: mentionName || undefined,
+          transitionId: transitionId || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || 'Post failed');
+      setPostMsg({
+        ok: true,
+        text: j.warning || `Posted to ${detail.key}${j.transitioned && target ? ` and moved to ${target.to}` : ''}.`,
+      });
+      if (j.transitioned && target) {
+        setDetail((d) => (d ? { ...d, status: target.to, statusCategory: target.toCategory } : d));
+        setIssues((prev) => (prev || []).map((i) => i.key === detail.key ? { ...i, status: target.to, statusCategory: target.toCategory } : i));
+      }
+    } catch (e: any) {
+      setPostMsg({ ok: false, text: e?.message || String(e) });
+    } finally { setPosting(false); }
   }
 
   const upd = (p: Partial<Cfg>) => setForm((f) => ({ ...f, ...p }));
@@ -767,7 +820,7 @@ export default function ContentQueriesPage() {
                             className="input w-full text-xs leading-relaxed min-h-[220px] font-sans"
                           />
                           <div className="flex items-center gap-2 flex-wrap">
-                            <button className="btn-primary text-xs py-1.5 px-3" onClick={saveReply} disabled={savingReply || !replyDraft.trim()}>
+                            <button className="btn-secondary text-xs py-1.5 px-3" onClick={saveReply} disabled={savingReply || !replyDraft.trim()}>
                               {savingReply ? 'Saving…' : savedAt ? 'Save changes' : 'Save reply'}
                             </button>
                             {savedAt && (
@@ -780,6 +833,47 @@ export default function ContentQueriesPage() {
                                 onClick={() => setReplyDraft(analysis.reply || '')}>
                                 revert to generated
                               </button>
+                            )}
+                          </div>
+
+                          {/* Post to Jira */}
+                          <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-2">
+                            <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">Post to Jira</p>
+                            <div className="flex items-end gap-2 flex-wrap">
+                              <label className="flex flex-col gap-0.5">
+                                <span className="text-[10px] text-[var(--text-faint)]">Mention</span>
+                                <select className="input text-xs py-1" value={mentionWho} onChange={(e) => setMentionWho(e.target.value as any)}>
+                                  <option value="assignee" disabled={!detail.assigneeId}>
+                                    {detail.assignee ? `@${detail.assignee}` : 'Assignee (none)'}
+                                  </option>
+                                  <option value="reporter" disabled={!detail.reporterId}>
+                                    {detail.reporter ? `@${detail.reporter}` : 'Reporter (none)'}
+                                  </option>
+                                  <option value="none">No mention</option>
+                                </select>
+                              </label>
+                              <label className="flex flex-col gap-0.5 flex-1 min-w-[12rem]">
+                                <span className="text-[10px] text-[var(--text-faint)]">Instruction</span>
+                                <input className="input text-xs py-1" value={instruction} onChange={(e) => setInstruction(e.target.value)} />
+                              </label>
+                              <label className="flex flex-col gap-0.5">
+                                <span className="text-[10px] text-[var(--text-faint)]">Then set status</span>
+                                <select className="input text-xs py-1" value={transitionId} onChange={(e) => setTransitionId(e.target.value)}>
+                                  <option value="">Leave unchanged</option>
+                                  {transitions.map((t) => <option key={t.id} value={t.id}>{t.to}</option>)}
+                                </select>
+                              </label>
+                              <button className="btn-primary text-xs py-1.5 px-3" onClick={postUpdate} disabled={posting || !replyDraft.trim()}>
+                                {posting ? 'Posting…' : 'Post update'}
+                              </button>
+                            </div>
+                            <p className="text-[10px] text-[var(--text-faint)]">
+                              Posts as a comment, led by the mention and instruction, then applies the status change.
+                            </p>
+                            {postMsg && (
+                              <p className={`text-[11px] rounded px-2 py-1.5 border-l-4 ${postMsg.ok ? 'border-emerald-500 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200' : 'border-red-500 bg-red-100 dark:bg-red-950/40 text-red-900 dark:text-red-200'}`}>
+                                {postMsg.ok ? '✓ ' : '✗ '}{postMsg.text}
+                              </p>
                             )}
                           </div>
                         </>

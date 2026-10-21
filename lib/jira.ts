@@ -396,6 +396,9 @@ export function adfToText(node: any, depth = 0): string {
 export interface JiraComment { author: string; created: string; body: string }
 
 export interface JiraIssueDetail extends JiraIssue {
+  /** Account ids, needed to build an @-mention in a comment. */
+  reporterId: string;
+  assigneeId: string;
   description: string;
   comments: JiraComment[];
   resolution: string;
@@ -457,6 +460,8 @@ export async function fetchIssue(c: JiraConfig, key: string): Promise<JiraIssueD
 
   return {
     ...base,
+    reporterId: f.reporter?.accountId || '',
+    assigneeId: f.assignee?.accountId || '',
     description,
     resolution: f.resolution?.name || '',
     comments,
@@ -556,4 +561,93 @@ export async function fetchFacets(c: JiraConfig, projectKey: string): Promise<Ji
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
+}
+
+// ── Posting updates ──────────────────────────────────────────────────────────
+
+export interface JiraTransition { id: string; name: string; to: string; toCategory: string }
+
+export async function fetchTransitions(c: JiraConfig, key: string): Promise<JiraTransition[]> {
+  const d = await jiraFetch(c, `/issue/${encodeURIComponent(key)}/transitions`);
+  return (d?.transitions || []).map((t: any) => ({
+    id: String(t.id),
+    name: t.name || '',
+    to: t?.to?.name || '',
+    toCategory: t?.to?.statusCategory?.key || '',
+  }));
+}
+
+/**
+ * Plain text to ADF. Blank lines separate paragraphs and single newlines become
+ * hard breaks, so the sign-off keeps its own line instead of collapsing.
+ */
+function textToAdf(text: string): any[] {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => {
+      const content: any[] = [];
+      block.split('\n').forEach((line, i) => {
+        if (i > 0) content.push({ type: 'hardBreak' });
+        if (line) content.push({ type: 'text', text: line });
+      });
+      return { type: 'paragraph', content: content.length ? content : [{ type: 'text', text: '' }] };
+    });
+}
+
+export interface PostUpdateArgs {
+  key: string;
+  /** The drafted reply, posted below the instruction line. */
+  reply: string;
+  /** Who to @-mention. Omit for no mention. */
+  mentionAccountId?: string;
+  mentionName?: string;
+  /** Sentence placed after the mention. */
+  instruction?: string;
+  /** Transition to apply after commenting. Omit to leave the status alone. */
+  transitionId?: string;
+}
+
+export async function postUpdate(
+  c: JiraConfig,
+  args: PostUpdateArgs,
+): Promise<{ commented: boolean; transitioned: boolean; status?: string; warning?: string }> {
+  if (!isConfigured(c)) throw new Error('Jira is not configured yet');
+  if (!args.key) throw new Error('issue key is required');
+  if (!args.reply?.trim()) throw new Error('nothing to post');
+
+  const instruction = args.instruction?.trim() || 'respond with the following:';
+  const lead: any = { type: 'paragraph', content: [] };
+  if (args.mentionAccountId) {
+    lead.content.push({
+      type: 'mention',
+      attrs: { id: args.mentionAccountId, text: `@${args.mentionName || 'user'}` },
+    });
+    lead.content.push({ type: 'text', text: ` ${instruction}` });
+  } else {
+    lead.content.push({ type: 'text', text: instruction });
+  }
+
+  await jiraFetch(c, `/issue/${encodeURIComponent(args.key)}/comment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: { type: 'doc', version: 1, content: [lead, ...textToAdf(args.reply)] } }),
+  });
+
+  if (!args.transitionId) return { commented: true, transitioned: false };
+
+  // The comment is the valuable part, so a rejected transition is reported
+  // rather than thrown — it must not look as though nothing was posted.
+  try {
+    await jiraFetch(c, `/issue/${encodeURIComponent(args.key)}/transitions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transition: { id: String(args.transitionId) } }),
+    });
+    return { commented: true, transitioned: true };
+  } catch (e: any) {
+    return { commented: true, transitioned: false, warning: `Comment posted, but the status change failed: ${e?.message || e}` };
+  }
 }
