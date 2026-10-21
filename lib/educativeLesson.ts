@@ -41,8 +41,16 @@ function imagePlaceholder(src: string, caption: unknown): string {
   return `[image]${src}${cap ? `\n${cap}` : ''}[/image]`;
 }
 
-/** Keep SlateHTML, Table, DrawIO images, and Slate-ish widgets nested in Columns. */
-export function extractLessonHtml(page: any): string {
+/**
+ * Keep the components a reader actually reads, in document order.
+ *
+ * Authored lessons vary more than the n8n flow assumed: many are built from
+ * top-level MarkdownEditor components (content.mdHtml, or content.text holding
+ * HTML) rather than SlateHTML, and carry Image components that reference an
+ * image_id instead of a path. Handling only the SlateHTML shape produced an
+ * empty result on those pages, which read downstream as "lesson unavailable".
+ */
+export function extractLessonHtml(page: any, ids?: { authorId: string; collectionId: string; pageId: string }): string {
   const components: any[] = Array.isArray(page?.components) ? page.components : [];
   const out: string[] = [];
 
@@ -56,10 +64,36 @@ export function extractLessonHtml(page: any): string {
     out.push(imagePlaceholder(src, caption));
   };
 
+  // An Image component names an image_id; the servable path needs the lesson ids.
+  const byImageId = (imageId: unknown, caption: unknown) => {
+    const id = String(imageId || '').trim();
+    if (!id || !ids) return;
+    const src = `${BASE}/api/collection/${ids.authorId}/${ids.collectionId}/page/${ids.pageId}/image/${id}`;
+    out.push(imagePlaceholder(src, caption));
+  };
+
   const take = (w: any) => {
     if (!w || typeof w !== 'object') return;
 
     if (w.type === 'SlateHTML' && nonEmpty(w?.content?.html)) return void out.push(w.content.html.trim());
+
+    // Top-level MarkdownEditor: mdHtml is the rendered form, text is the source
+    // and on these pages already contains HTML.
+    if (w.type === 'MarkdownEditor') {
+      const body = nonEmpty(w?.content?.mdHtml) ? w.content.mdHtml : w?.content?.text;
+      if (nonEmpty(body)) out.push(String(body).trim());
+      return;
+    }
+
+    if (w.type === 'Image') {
+      if (nonEmpty(w?.content?.path)) {
+        const src = imgSrc(w.content.path);
+        if (src) out.push(imagePlaceholder(src, w?.content?.caption));
+      } else {
+        byImageId(w?.content?.image_id, w?.content?.caption);
+      }
+      return;
+    }
     if (w.type === 'Table' && Array.isArray(w?.content?.data)) {
       const t = htmlTable(w.content.data);
       if (t) out.push(t);
@@ -69,7 +103,20 @@ export function extractLessonHtml(page: any): string {
 
     if (w.type === 'Columns' && Array.isArray(w?.content?.comps)) {
       for (const c of w.content.comps) {
-        if (c?.type === 'MarkdownEditor' && nonEmpty(c?.content?.mdHtml)) { out.push(c.content.mdHtml.trim()); continue; }
+        if (c?.type === 'MarkdownEditor') {
+          const body = nonEmpty(c?.content?.mdHtml) ? c.content.mdHtml : c?.content?.text;
+          if (nonEmpty(body)) out.push(String(body).trim());
+          continue;
+        }
+        if (c?.type === 'Image') {
+          if (nonEmpty(c?.content?.path)) {
+            const src = imgSrc(c.content.path);
+            if (src) out.push(imagePlaceholder(src, c?.content?.caption));
+          } else {
+            byImageId(c?.content?.image_id, c?.content?.caption);
+          }
+          continue;
+        }
         if (c?.type === 'DrawIOWidget') { drawio(c); continue; }
         if (c?.type === 'SlateHTML' && nonEmpty(c?.content?.html)) { out.push(c.content.html.trim()); continue; }
         if (c?.type === 'Table' && Array.isArray(c?.content?.data)) {
@@ -188,7 +235,7 @@ export async function fetchLessonMarkdown(
     // A published mobile deck and an authored lesson are different shapes, so
     // pick the cleaner that matches rather than running both.
     const lessonUrl = `${BASE}/collection/page/${authorId}/${collectionId}/${pageId}`;
-    const title = body?.page_title || '';
+    const title = body?.page_title || content?.summary?.title || json?.summary?.title || '';
 
     if (isMobileCardPage(content)) {
       const { markdown, images } = extractMobileCards(content);
@@ -196,7 +243,7 @@ export async function fetchLessonMarkdown(
       return { title, markdown, url: lessonUrl, images, kind: 'mobile-cards' };
     }
 
-    const html = extractLessonHtml(content);
+    const html = extractLessonHtml(content, { authorId, collectionId, pageId });
     if (!html) continue;
     return {
       title,
