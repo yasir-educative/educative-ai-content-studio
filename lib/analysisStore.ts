@@ -12,6 +12,7 @@ const FILE = path.join(process.cwd(), 'data', 'jira-analyses.json');
 export interface SavedAnalysis {
   key: string;
   reply: string;
+  category?: 'content' | 'not-content';
   usedLesson: boolean;
   needsManualReview: boolean;
   imagesRead: number;

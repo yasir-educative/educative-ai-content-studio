@@ -11,27 +11,32 @@ import type { JiraIssueDetail } from './jira';
 
 const SIGNOFF = 'Best regards,\nThe Educative Team';
 
-const TRIAGE_SYSTEM = `You triage content queries raised against Educative courses.
+const TRIAGE_SYSTEM = `You triage queries raised against Educative courses.
 
-Decide whether the query can be answered accurately from the ticket text alone, or whether the lesson it refers to must be read first.
+# 1. Category
+"content" — about the material itself: an explanation, example, diagram, code, exercise, quiz, factual accuracy, difficulty, pacing, coverage, typos, or a request for more depth.
 
-Answer WITHOUT the lesson when the query is:
-- a general question about policy, process, access, billing, or the platform
-- a request whose answer does not depend on what the lesson actually says
-- already fully quoted in the ticket, with enough context to judge it
+"not-content" — anything the content team cannot fix by editing a lesson:
+- account, login, profile, email, deletion
+- subscription, billing, refunds, plan access, entitlement, a lesson showing as locked
+- missing or broken platform features: highlighting, notes, bookmarks, progress or "mark as complete", dark mode, search, certificates, streaks
+- app or site bugs: pages not loading, a widget not running, playback, performance
+- mock interviews, cloud labs or assessments failing as a product, rather than their content being wrong
 
-Read the lesson FIRST when the query:
-- claims something in the lesson is wrong, unclear, outdated, or contradictory
-- asks why the content says something, or what it meant
-- refers to specific code, output, diagrams, numbers, or steps in the lesson
-- cannot be judged without seeing the surrounding explanation
+Judge what would actually fix it. "I can see all the course content but it shows a lock icon and I have no highlighting or notes" is not-content: nothing in the lesson text is wrong, the entitlement or the feature is. Mentioning a course by name does not make it content.
 
-Be honest: if you cannot verify the claim without reading the lesson, say so.
+If it is genuinely both, choose the one that must be fixed first, and say so in the reason.
 
-Also decide whether answering requires LOOKING AT an image. That is true only when the query is about a diagram, figure, screenshot, chart or illustration — its content, labels, accuracy or legibility. A query that merely happens to sit on a lesson containing images is not about the image.
+# 2. Lesson needed (content queries only)
+Answer WITHOUT the lesson when the query is general, about policy or process, or already quoted in full.
+Read the lesson FIRST when the query claims something is wrong, unclear, outdated or contradictory, asks why it says something, or points at specific code, output, diagrams, numbers or steps.
+For not-content queries this is always false; the lesson cannot settle them.
+
+# 3. Image
+True only when answering needs LOOKING AT a diagram, figure, screenshot or chart — its content, labels, accuracy or legibility. A query that merely sits on a lesson containing images does not qualify.
 
 Respond with JSON only, no markdown fences:
-{"needsLesson": true|false, "aboutImage": true|false, "reason": "one short sentence", "topic": "what the query is really asking"}`;
+{"category": "content"|"not-content", "needsLesson": true|false, "aboutImage": true|false, "reason": "one short sentence", "topic": "what the query is really asking"}`;
 
 const DRAFT_SYSTEM = `You write replies sent to learners on behalf of Educative's content team.
 
@@ -72,10 +77,20 @@ If they say the content is too complex, too dense, too high level, hard to follo
 Frame these as something that helps today, never as a reason not to fix the content.
 
 # When the query reports an error, bug, or factual mistake
-Do not offer features. Acknowledge the specific problem and say it is being looked into.`;
+Do not offer features. Acknowledge the specific problem and say it is being looked into.
+
+# When the query is NOT about content
+You will be told when the query is an account, subscription, access, or platform-feature matter. Then:
+- Do not treat it as feedback on the writing. Never say the material will be made clearer, and never offer Explain with AI or Mock Interviews.
+- Acknowledge the specific thing they cannot do — the locked lesson, the missing notes, the progress that will not save — in their terms.
+- Say it is being passed to the team that handles it so it can be put right. Do not name an internal team or queue.
+- Where an obvious first check exists and is not condescending, you may offer one (for example confirming which account the subscription sits on). Never list generic troubleshooting steps they have already tried, and never ask them to repeat something the ticket says they did.
+- Do not promise a timeline, a refund, or an entitlement change.`;
 
 export interface AnalysisResult {
   reply: string;
+  /** "content" when the content team can fix it by editing a lesson. */
+  category: 'content' | 'not-content';
   usedLesson: boolean;
   needsLesson: boolean;
   aboutImage: boolean;
@@ -117,14 +132,19 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
   let needsLesson = true;
   let aboutImage = false;
   let reason = '';
+  let category: 'content' | 'not-content' = 'content';
   try {
     const raw = await generateText(ticket, { system: TRIAGE_SYSTEM, tier: 'edit', maxTokens: 300 });
-    const parsed = parseJsonLoose<{ needsLesson?: boolean; aboutImage?: boolean; reason?: string }>(raw);
+    const parsed = parseJsonLoose<{ category?: string; needsLesson?: boolean; aboutImage?: boolean; reason?: string }>(raw);
     if (parsed && typeof parsed.needsLesson === 'boolean') {
       needsLesson = parsed.needsLesson;
       reason = parsed.reason || '';
     }
     aboutImage = !!parsed?.aboutImage;
+    if (parsed?.category === 'not-content') category = 'not-content';
+    // The lesson cannot settle an account or platform problem, so never fetch
+    // it for one — and never flag such a ticket for review over a missing read.
+    if (category === 'not-content') { needsLesson = false; aboutImage = false; }
   } catch {
     // Triage is an optimisation. If it fails, try to read the lesson anyway —
     // answering with more context is the safer default.
@@ -171,6 +191,9 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
   const prompt = [
     '# Query',
     ticket,
+    category === 'not-content'
+      ? '\n# Classification\nNOT CONTENT — this is an account, subscription, access, or platform-feature matter. Follow the not-about-content rules.'
+      : '',
     lesson
       ? `\n# ${lesson.kind === 'mobile-cards' ? 'Lesson content (mobile card deck, one card per section)' : 'Lesson content'}${
           lesson.title ? ` — ${lesson.title}` : ''
@@ -193,6 +216,7 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
 
   return {
     reply,
+    category,
     usedLesson: !!lesson,
     needsLesson,
     aboutImage,

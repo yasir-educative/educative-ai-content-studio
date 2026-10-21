@@ -340,6 +340,7 @@ export default function ContentQueriesPage() {
         body: JSON.stringify({
           key: detail.key,
           reply: replyDraft,
+          category: analysis.category,
           usedLesson: !!analysis.usedLesson,
           needsManualReview: !!analysis.needsManualReview,
           imagesRead: analysis.imagesRead || 0,
@@ -704,11 +705,22 @@ export default function ContentQueriesPage() {
                         <>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">Suggested reply</span>
-                            <span className={`text-[10px] rounded px-1.5 py-0.5 border ${analysis.usedLesson ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10' : 'text-[var(--text-faint)] border-[var(--border)]'}`}>
-                              {analysis.usedLesson ? 'lesson read' : analysis.needsLesson ? 'lesson unavailable' : 'answered from ticket'}
-                            </span>
+                            {analysis.category === 'not-content' ? (
+                              <span className="text-[10px] font-semibold rounded px-1.5 py-0.5 border border-purple-500 bg-purple-100 dark:bg-purple-950/50 text-purple-900 dark:text-purple-200">
+                                Not content
+                              </span>
+                            ) : (
+                              <span className="text-[10px] rounded px-1.5 py-0.5 border border-[var(--border)] text-[var(--text-dim)]">
+                                Content
+                              </span>
+                            )}
+                            {analysis.category !== 'not-content' && (
+                              <span className={`text-[10px] rounded px-1.5 py-0.5 border ${analysis.usedLesson ? 'text-emerald-700 dark:text-emerald-300 border-emerald-500/50 bg-emerald-100 dark:bg-emerald-950/40' : 'text-[var(--text-faint)] border-[var(--border)]'}`}>
+                                {analysis.usedLesson ? 'lesson read' : analysis.needsLesson ? 'lesson unavailable' : 'answered from ticket'}
+                              </span>
+                            )}
                             {analysis.imagesRead > 0 && (
-                              <span className="text-[10px] rounded px-1.5 py-0.5 border text-sky-300 border-sky-500/30 bg-sky-500/10">
+                              <span className="text-[10px] rounded px-1.5 py-0.5 border text-sky-700 dark:text-sky-300 border-sky-500/50 bg-sky-100 dark:bg-sky-950/40">
                                 {analysis.imagesRead} image{analysis.imagesRead > 1 ? 's' : ''} read
                               </span>
                             )}
