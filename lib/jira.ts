@@ -71,10 +71,19 @@ export interface JiraIssue {
   updated: string;
 }
 
-export function effectiveJql(c: JiraConfig): string {
-  if (c.jql?.trim()) return c.jql.trim();
-  if (c.projectKey?.trim()) return `project = "${c.projectKey.trim()}" ORDER BY created DESC`;
-  throw new Error('Set a project key or a JQL query first');
+export function effectiveJql(c: JiraConfig, statuses: string[] = []): string {
+  const clauses: string[] = [];
+  if (c.jql?.trim()) {
+    clauses.push(`(${c.jql.trim().replace(/\s+ORDER\s+BY\s+.*$/i, '')})`);
+  } else if (c.projectKey?.trim()) {
+    clauses.push(`project = "${c.projectKey.trim()}"`);
+  } else {
+    throw new Error('Set a project key or a JQL query first');
+  }
+  if (statuses.length) {
+    clauses.push(`status IN (${statuses.map((x) => `"${x.replace(/"/g, '')}"`).join(', ')})`);
+  }
+  return `${clauses.join(' AND ')} ORDER BY created DESC`;
 }
 
 function mapIssue(site: string, raw: any): JiraIssue {
@@ -104,9 +113,10 @@ const FIELDS = 'summary,status,priority,issuetype,reporter,assignee,labels,creat
 export async function fetchIssues(
   c: JiraConfig = getJiraConfig(),
   maxResults = 50,
+  statuses: string[] = [],
 ): Promise<{ issues: JiraIssue[]; jql: string; total: number }> {
   if (!isConfigured(c)) throw new Error('Jira is not configured yet');
-  const jql = effectiveJql(c);
+  const jql = effectiveJql(c, statuses);
 
   let data: any;
   try {
@@ -208,4 +218,86 @@ export async function fetchProjects(c: JiraConfig = getJiraConfig()): Promise<Ji
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
+}
+
+// ── Statuses (filter facets) ─────────────────────────────────────────────────
+
+export interface JiraStatus { name: string; category: string }
+
+/** Distinct statuses available on a project, used to build the filter chips. */
+export async function fetchProjectStatuses(
+  c: JiraConfig,
+  projectKey: string,
+): Promise<JiraStatus[]> {
+  const data = await jiraFetch(c, `/project/${encodeURIComponent(projectKey)}/statuses`);
+  const seen = new Map<string, JiraStatus>();
+  for (const type of Array.isArray(data) ? data : []) {
+    for (const s of type?.statuses || []) {
+      const name = s?.name || '';
+      if (name && !seen.has(name)) {
+        seen.set(name, { name, category: s?.statusCategory?.key || '' });
+      }
+    }
+  }
+  return [...seen.values()];
+}
+
+// ── Issue detail ─────────────────────────────────────────────────────────────
+
+/** Atlassian Document Format is a nested node tree; flatten it to readable text. */
+export function adfToText(node: any, depth = 0): string {
+  if (!node) return '';
+  if (typeof node === 'string') return node;
+  if (Array.isArray(node)) return node.map((n) => adfToText(n, depth)).join('');
+
+  const kids = () => adfToText(node.content, depth + 1);
+  switch (node.type) {
+    case 'text': return node.text || '';
+    case 'hardBreak': return '\n';
+    case 'paragraph': return kids() + '\n\n';
+    case 'heading': return '#'.repeat(node.attrs?.level || 1) + ' ' + kids() + '\n\n';
+    case 'bulletList':
+    case 'orderedList': return kids();
+    case 'listItem': return '- ' + kids().trim() + '\n';
+    case 'codeBlock': return '```\n' + kids().trim() + '\n```\n\n';
+    case 'blockquote': return '> ' + kids().trim() + '\n\n';
+    case 'rule': return '---\n\n';
+    case 'mediaSingle':
+    case 'mediaGroup': return '[attachment]\n\n';
+    case 'inlineCard': return node.attrs?.url || '';
+    case 'mention': return '@' + (node.attrs?.text || '').replace(/^@/, '');
+    case 'table': return kids() + '\n';
+    case 'tableRow': return kids().trim() + '\n';
+    case 'tableHeader':
+    case 'tableCell': return kids().trim() + ' | ';
+    default: return kids();
+  }
+}
+
+export interface JiraComment { author: string; created: string; body: string }
+
+export interface JiraIssueDetail extends JiraIssue {
+  description: string;
+  comments: JiraComment[];
+  resolution: string;
+}
+
+export async function fetchIssue(c: JiraConfig, key: string): Promise<JiraIssueDetail> {
+  if (!isConfigured(c)) throw new Error('Jira is not configured yet');
+  const data = await jiraFetch(
+    c,
+    `/issue/${encodeURIComponent(key)}?fields=${FIELDS},description,resolution,comment`,
+  );
+  const base = mapIssue(c.siteUrl, data);
+  const f = data?.fields || {};
+  return {
+    ...base,
+    description: adfToText(f.description?.content).trim(),
+    resolution: f.resolution?.name || '',
+    comments: (f.comment?.comments || []).map((cm: any) => ({
+      author: cm?.author?.displayName || '',
+      created: cm?.created || '',
+      body: adfToText(cm?.body?.content).trim(),
+    })),
+  };
 }
