@@ -94,6 +94,8 @@ export interface LessonContent {
   markdown: string;
   url: string;
   images: LessonImage[];
+  /** Which page shape it was read from. */
+  kind: 'lesson' | 'mobile-cards';
 }
 
 /** Pull the [image]src\ncaption[/image] placeholders the cleaner emits. */
@@ -183,15 +185,141 @@ export async function fetchLessonMarkdown(
       try { content = JSON.parse(content); } catch { continue; }
     }
 
+    // A published mobile deck and an authored lesson are different shapes, so
+    // pick the cleaner that matches rather than running both.
+    const lessonUrl = `${BASE}/collection/page/${authorId}/${collectionId}/${pageId}`;
+    const title = body?.page_title || '';
+
+    if (isMobileCardPage(content)) {
+      const { markdown, images } = extractMobileCards(content);
+      if (!markdown) continue;
+      return { title, markdown, url: lessonUrl, images, kind: 'mobile-cards' };
+    }
+
     const html = extractLessonHtml(content);
     if (!html) continue;
-
     return {
-      title: body?.page_title || '',
+      title,
       markdown: htmlToMarkdown(html).trim(),
-      url: `${BASE}/collection/page/${authorId}/${collectionId}/${pageId}`,
+      url: lessonUrl,
       images: extractLessonImages(html),
+      kind: 'lesson',
     };
   }
   return null;
+}
+
+// ── Mobile card lessons ──────────────────────────────────────────────────────
+// A published mobile short/course page is a different shape from an authored
+// lesson: FlashCard components carrying either plain text, an image, or a JSON
+// payload describing a quiz, comparison, scenario and so on. The SlateHTML
+// components interleaved between cards are empty spacers, so the authored-page
+// cleaner would yield a run of blank paragraphs and no content.
+
+export function isMobileCardPage(page: any): boolean {
+  const comps: any[] = Array.isArray(page?.components) ? page.components : [];
+  return comps.some((c) => c?.type === 'FlashCard');
+}
+
+const bullet = (label: string, value: unknown) =>
+  value === undefined || value === null || value === '' ? '' : `- ${label}: ${value}\n`;
+
+/** Render one `custom` card's JSON payload as readable markdown. */
+function renderCustomCard(p: any): string {
+  if (!p || typeof p !== 'object') return '';
+  const title = p.title ? `### ${p.title}\n\n` : '';
+
+  switch (p.type) {
+    case 'highlightCard':
+      return `${title}> ${String(p.text || '').trim()}\n`;
+
+    case 'comparisonCards': {
+      const side = (o: any) =>
+        o ? `**${o.label || o.heading || ''}**${o.heading && o.label ? ` — ${o.heading}` : ''}\n${o.description || ''}\n` : '';
+      return `${title}${p.heading ? `${p.heading}\n\n` : ''}${side(p.leftOption)}\n${side(p.rightOption)}`;
+    }
+
+    case 'quiz': {
+      const opts = (p.options || [])
+        .map((o: any, i: number) => {
+          const text = typeof o === 'string' ? o : o?.text || '';
+          const correct = Number(p.correctAnswer) === (typeof o === 'object' && o?.id !== undefined ? Number(o.id) : i);
+          return `- ${text}${correct ? '  (correct)' : ''}`;
+        })
+        .join('\n');
+      return `${title}**Question:** ${p.question || ''}\n${opts}\n${p.incorrectMessage ? `\nIf wrong: ${p.incorrectMessage}\n` : ''}`;
+    }
+
+    case 'trueFalseCard':
+      return `${title}**Question:** ${p.question || ''}\nAnswer: ${p.correctAnswer}\n${p.explanation ? `${p.explanation}\n` : ''}`;
+
+    case 'fillInTheBlank':
+      return `${title}${p.question || ''}\n${bullet('Options', (p.options || []).join(', '))}${bullet('Correct', (p.correctOptions || []).join(', '))}`;
+
+    case 'recapCard':
+      return `${title}${p.heading ? `${p.heading}\n\n` : ''}${(p.content || [])
+        .map((c: any) => `- **${c?.heading || ''}** ${c?.text || ''}`)
+        .join('\n')}\n`;
+
+    case 'scenarioCard':
+      return `${title}${(p.sections || [])
+        .map((sec: any) => `**${sec?.heading || ''}**\n${sec?.content || ''}\n`)
+        .join('\n')}${p.explanation ? `\n${p.explanation}\n` : ''}`;
+
+    case 'text-with-code':
+      return `${title}${p.text_1 || ''}\n\n\`\`\`${p.language || ''}\n${p.code || ''}\n\`\`\`\n\n${p.text_2 || ''}\n`;
+
+    case 'code-with-output':
+      return `${title}\`\`\`${p.language || ''}\n${p.code || ''}\n\`\`\`\n${p.output ? `\nOutput:\n\`\`\`\n${p.output}\n\`\`\`\n` : ''}`;
+
+    default:
+      // Unknown payload: surface its text rather than dropping the card.
+      return `${title}${String(p.text || p.question || p.heading || '').trim()}\n`;
+  }
+}
+
+/** Markdown and images for a published mobile card page. */
+export function extractMobileCards(page: any): { markdown: string; images: LessonImage[] } {
+  const comps: any[] = Array.isArray(page?.components) ? page.components : [];
+  const out: string[] = [];
+  const images: LessonImage[] = [];
+  let n = 0;
+
+  for (const c of comps) {
+    if (c?.type !== 'FlashCard') continue; // interleaved SlateHTML spacers are empty
+    const content = c.content || {};
+    const kind = content.cardType;
+    n += 1;
+    const heading = content.title ? `### ${content.title}\n\n` : '';
+
+    if (kind === 'image-with-text') {
+      const src = String(content.image_file_download_url || '').trim();
+      const caption = String(content.title || '').trim();
+      if (src) {
+        images.push({ src: src.startsWith('http') ? src : `${BASE}${src.startsWith('/') ? '' : '/'}${src}`, caption });
+      }
+      const body = content.imageOnly ? '' : String(content.text || '').trim();
+      out.push(`${heading}${src ? `[image]${images[images.length - 1]?.src}${caption ? `\n${caption}` : ''}[/image]\n` : ''}${body ? `\n${body}\n` : ''}`);
+      continue;
+    }
+
+    if (kind === 'custom') {
+      let payload: any = null;
+      try {
+        payload = typeof content.customContent === 'string' ? JSON.parse(content.customContent) : content.customContent;
+      } catch {
+        payload = null;
+      }
+      const rendered = renderCustomCard(payload);
+      out.push(rendered || `${heading}${String(content.text || '').trim()}`);
+      continue;
+    }
+
+    // text-only, and anything else carrying a plain text body
+    const body = String(content.text || '').trim();
+    if (heading || body) out.push(`${heading}${body}`);
+  }
+
+  const markdown = out.map((s) => s.trim()).filter(Boolean).join('\n\n---\n\n');
+  return { markdown: markdown ? `${markdown}\n` : '', images };
 }

@@ -172,7 +172,9 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
     '# Query',
     ticket,
     lesson
-      ? `\n# Lesson content${lesson.title ? ` — ${lesson.title}` : ''}\n${lesson.markdown.slice(0, 24_000)}`
+      ? `\n# ${lesson.kind === 'mobile-cards' ? 'Lesson content (mobile card deck, one card per section)' : 'Lesson content'}${
+          lesson.title ? ` — ${lesson.title}` : ''
+        }\n${lesson.markdown.slice(0, 24_000)}`
       // Phrased as an internal instruction, not as something to relay. Saying
       // "not available" here invites the model to repeat that to the learner.
       : '\n# Lesson content\nNot supplied for this draft. Write a reply that stands on its own without quoting or characterising the lesson, and without mentioning that it was not supplied.',
