@@ -26,6 +26,8 @@ export interface JiraConfig {
   defaultBoardId?: number;
   /** Other boards kept available to switch to. Always includes the default. */
   enabledBoardIds?: number[];
+  /** Boards the user hid from the picker. They stay hidden until restored. */
+  hiddenProjectKeys?: string[];
   updatedAt?: string;
 }
 
@@ -59,6 +61,7 @@ export function redactJira(c: JiraConfig = getJiraConfig()) {
     jql: c.jql || '',
     defaultBoardId: c.defaultBoardId ?? null,
     enabledBoardIds: c.enabledBoardIds ?? [],
+    hiddenProjectKeys: c.hiddenProjectKeys ?? [],
     configured: isConfigured(c),
   };
 }
@@ -95,6 +98,10 @@ export async function saveJiraConfig(patch: Partial<JiraConfig>): Promise<JiraCo
       if (def) set.add(def);
       return [...set];
     })(),
+    hiddenProjectKeys:
+      patch.hiddenProjectKeys === undefined
+        ? existing.hiddenProjectKeys ?? []
+        : [...new Set(patch.hiddenProjectKeys.map((k) => String(k).trim()).filter(Boolean))],
     updatedAt: new Date().toISOString(),
   };
 

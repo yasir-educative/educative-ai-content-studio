@@ -8,7 +8,7 @@ const SENTINEL = '__UNCHANGED__';
 
 interface Cfg {
   siteUrl: string; email: string; apiToken: string; projectKey: string; jql: string;
-  defaultBoardId: number | null; enabledBoardIds: number[]; configured: boolean;
+  defaultBoardId: number | null; enabledBoardIds: number[]; hiddenProjectKeys: string[]; configured: boolean;
 }
 interface Project { key: string; name: string; type: string; archived: boolean }
 interface Status { name: string; category: string }
@@ -26,7 +26,7 @@ interface Detail extends Issue {
 
 const EMPTY: Cfg = {
   siteUrl: '', email: '', apiToken: '', projectKey: '', jql: '',
-  defaultBoardId: null, enabledBoardIds: [], configured: false,
+  defaultBoardId: null, enabledBoardIds: [], hiddenProjectKeys: [], configured: false,
 };
 
 // Jira groups every status into one of three categories; colour by category so
@@ -62,6 +62,7 @@ export default function ContentQueriesPage() {
   const [picking, setPicking] = useState(false);
   const [projQuery, setProjQuery] = useState('');
   const [projLoading, setProjLoading] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
 
   const [statuses, setStatuses] = useState<Status[]>([]);
   const [active, setActive] = useState<string[]>([]);
@@ -183,6 +184,21 @@ export default function ContentQueriesPage() {
   }
 
   // Clearing the scope while "mine" is on searches every project the user can see.
+  async function setHidden(keys: string[]) {
+    const r = await fetch('/api/jira', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...cfg, hiddenProjectKeys: keys }),
+    });
+    const j = await r.json();
+    if (r.ok) setCfg(j);
+  }
+  const hide = (key: string) => {
+    setHidden([...cfg.hiddenProjectKeys, key]);
+    // Hiding a board also drops it from the current search scope.
+    if (scope.includes(key)) toggleScope(key);
+  };
+  const unhide = (key: string) => setHidden(cfg.hiddenProjectKeys.filter((k) => k !== key));
+
   function toggleScope(key: string) {
     const next = scope.includes(key) ? scope.filter((k) => k !== key) : [...scope, key];
     setScope(next);
@@ -202,10 +218,27 @@ export default function ContentQueriesPage() {
   const upd = (p: Partial<Cfg>) => setForm((f) => ({ ...f, ...p }));
   const activeProject = projects.find((p) => p.key === cfg.projectKey) || null;
 
+  // Inactive boards and ones the user hid are kept out of the picker. A search
+  // still reaches hidden boards, so nothing becomes unreachable by accident.
+  const hiddenSet = useMemo(() => new Set(cfg.hiddenProjectKeys), [cfg.hiddenProjectKeys]);
+  const relevant = useMemo(
+    () => projects.filter((p) => !p.archived && !hiddenSet.has(p.key)),
+    [projects, hiddenSet],
+  );
+  const hiddenProjects = useMemo(
+    () => projects.filter((p) => hiddenSet.has(p.key)),
+    [projects, hiddenSet],
+  );
   const visibleProjects = useMemo(() => {
     const q = projQuery.trim().toLowerCase();
-    return (q ? projects.filter((p) => p.name.toLowerCase().includes(q) || p.key.toLowerCase().includes(q)) : projects).slice(0, 80);
-  }, [projects, projQuery]);
+    if (q) {
+      return projects
+        .filter((p) => !hiddenSet.has(p.key))
+        .filter((p) => p.name.toLowerCase().includes(q) || p.key.toLowerCase().includes(q))
+        .slice(0, 80);
+    }
+    return relevant.slice(0, 80);
+  }, [projects, projQuery, relevant, hiddenSet]);
 
   // Client-side text search over the fetched page; status filtering is server-side.
   const shown = useMemo(() => {
@@ -297,12 +330,16 @@ export default function ContentQueriesPage() {
           {projLoading && <p className="text-xs text-[var(--text-faint)]">Loading projects…</p>}
           <div className="max-h-64 overflow-y-auto divide-y divide-[var(--border)]">
             {visibleProjects.map((p) => (
-              <button key={p.key} className="w-full flex items-center gap-2 px-2 py-2 text-left hover:bg-[var(--panel-2)] transition-colors"
-                onClick={() => setProject(p.key)}>
-                <span className="text-sm flex-1 min-w-0 truncate">{p.name}</span>
+              <div key={p.key} className="group flex items-center gap-2 px-2 py-2 hover:bg-[var(--panel-2)] transition-colors">
+                <button className="flex-1 min-w-0 text-left" onClick={() => setProject(p.key)}>
+                  <span className="text-sm truncate">{p.name}</span>
+                </button>
                 <span className="text-[11px] text-[var(--text-faint)] shrink-0">{p.key}</span>
-                {p.key === cfg.projectKey && <span className="pill text-[10px] py-0 px-1.5 shrink-0">current</span>}
-              </button>
+                {p.key === cfg.projectKey
+                  ? <span className="pill text-[10px] py-0 px-1.5 shrink-0">current</span>
+                  : <button onClick={() => hide(p.key)} title="Hide this board"
+                      className="text-xs text-[var(--text-faint)] hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 px-1">×</button>}
+              </div>
             ))}
           </div>
         </div>
@@ -343,16 +380,44 @@ export default function ContentQueriesPage() {
                   {visibleProjects.map((p) => {
                     const on = scope.includes(p.key);
                     return (
-                      <button key={p.key} onClick={() => toggleScope(p.key)}
-                        className={`text-[11px] rounded-md px-2 py-1 border transition-colors ${on ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
-                        title={p.name}>
-                        {on ? '✓ ' : ''}{p.key}
-                      </button>
+                      <span key={p.key}
+                        className={`group inline-flex items-center rounded-md border transition-colors ${on ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)]'}`}>
+                        <button onClick={() => toggleScope(p.key)} className="text-[11px] pl-2 pr-1 py-1 hover:text-[var(--text)]" title={p.name}>
+                          {on ? '✓ ' : ''}{p.key}
+                        </button>
+                        <button onClick={() => hide(p.key)} title={`Hide ${p.key} from this list`}
+                          className="text-[11px] pr-1.5 pl-0.5 py-1 text-[var(--text-faint)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity">
+                          ×
+                        </button>
+                      </span>
                     );
                   })}
+                  {visibleProjects.length === 0 && !projLoading && (
+                    <p className="text-[11px] text-[var(--text-faint)]">No boards left. Restore one below.</p>
+                  )}
                 </div>
+
+                {hiddenProjects.length > 0 && (
+                  <div className="pt-1.5 border-t border-[var(--border)] space-y-1.5">
+                    <button onClick={() => setShowHidden((v) => !v)} className="text-[10px] text-[var(--text-faint)] hover:text-[var(--text)]">
+                      {showHidden ? '▾' : '▸'} {hiddenProjects.length} hidden
+                    </button>
+                    {showHidden && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {hiddenProjects.map((p) => (
+                          <button key={p.key} onClick={() => unhide(p.key)} title={`Restore ${p.name}`}
+                            className="text-[11px] rounded-md px-2 py-1 border border-dashed border-[var(--border)] text-[var(--text-faint)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors">
+                            + {p.key}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <p className="text-[10px] text-[var(--text-faint)]">
-                  Pick several to search them together. With none picked, “Assigned to me” covers every board you can see.
+                  Hover a board and press × to hide it for good. Inactive and archived boards are already excluded.
+                  With none picked, “Assigned to me” covers every board you can see.
                 </p>
               </div>
             )}

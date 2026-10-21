@@ -222,11 +222,16 @@ export async function fetchProjects(c: JiraConfig = getJiraConfig()): Promise<Ji
   for (let page = 0; page < 20; page++) {
     const data = await jiraFetch(c, `/project/search?maxResults=100&startAt=${startAt}&status=live`);
     for (const p of data?.values || []) {
+      const name = p.name || '';
+      // status=live already drops Jira-archived projects, but orgs also mark
+      // retired and non-production boards in the name, which the API treats as
+      // perfectly live. Those are noise in a picker, so flag them here.
+      const inactive = /\[\s*(archived|deprecated|old|retired)\s*\]|\[\s*staging\s*\]|\bstaging\b|\bsandbox\b|-\s*test$/i.test(name);
       out.push({
         key: p.key || '',
-        name: p.name || '',
+        name,
         type: p.projectTypeKey || '',
-        archived: /\[ARCHIVED\]/i.test(p.name || ''),
+        archived: inactive,
       });
     }
     if (data?.isLast !== false) break;
