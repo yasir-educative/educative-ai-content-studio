@@ -56,6 +56,15 @@ function IcImages() {
   );
 }
 
+function IcQueries() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      <path d="M12 7v4"/><path d="M12 15h.01"/>
+    </svg>
+  );
+}
+
 function IcGraph() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -138,6 +147,12 @@ const MAIN_NAV = [
     label: 'Shorts',
     icon: <IcMobile />,
     match: (p: string) => p === '/mobile-short' || p.startsWith('/mobile-short/'),
+  },
+  {
+    href: '/queries',
+    label: 'Queries',
+    icon: <IcQueries />,
+    match: (p: string) => p === '/queries' || p.startsWith('/queries/'),
   },
   {
     href: '/images',
