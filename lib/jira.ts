@@ -655,3 +655,31 @@ export async function postUpdate(
     return { commented: true, transitioned: false, warning: `Comment posted, but the status change failed: ${e?.message || e}` };
   }
 }
+
+// ── User search (for @-mentions) ─────────────────────────────────────────────
+
+export interface JiraUser {
+  accountId: string;
+  displayName: string;
+  email: string;
+  avatar: string;
+}
+
+/**
+ * People matching a query, for picking who to mention. App and customer
+ * accounts are filtered out: mentioning an automation does not reach a person.
+ */
+export async function searchUsers(c: JiraConfig, query: string, max = 10): Promise<JiraUser[]> {
+  if (!isConfigured(c)) throw new Error('Jira is not configured yet');
+  const q = query.trim();
+  if (!q) return [];
+  const data = await jiraFetch(c, `/user/search?query=${encodeURIComponent(q)}&maxResults=${max}`);
+  return (Array.isArray(data) ? data : [])
+    .filter((u: any) => u?.accountId && u?.active !== false && u?.accountType !== 'app')
+    .map((u: any) => ({
+      accountId: u.accountId,
+      displayName: u.displayName || '',
+      email: u.emailAddress || '',
+      avatar: u.avatarUrls?.['24x24'] || '',
+    }));
+}

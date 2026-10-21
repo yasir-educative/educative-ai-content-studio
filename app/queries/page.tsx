@@ -27,6 +27,7 @@ interface Detail extends Issue {
   reporterId?: string; assigneeId?: string;
 }
 interface Transition { id: string; name: string; to: string; toCategory: string }
+interface JUser { accountId: string; displayName: string; email: string; avatar: string }
 
 const EMPTY: Cfg = {
   siteUrl: '', email: '', apiToken: '', projectKey: '', jql: '',
@@ -102,7 +103,12 @@ export default function ContentQueriesPage() {
   const [postMsg, setPostMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [transitions, setTransitions] = useState<Transition[]>([]);
   const [transitionId, setTransitionId] = useState('');
-  const [mentionWho, setMentionWho] = useState<'assignee' | 'reporter' | 'none'>('assignee');
+  // Chosen person to mention. Seeded from the assignee, replaceable by search.
+  const [mention, setMention] = useState<JUser | null>(null);
+  const [userQuery, setUserQuery] = useState('');
+  const [userHits, setUserHits] = useState<JUser[]>([]);
+  const [userSearching, setUserSearching] = useState(false);
+  const [pickingUser, setPickingUser] = useState(false);
   const [instruction, setInstruction] = useState('respond with the following:');
 
   // ── loaders ────────────────────────────────────────────────────────────────
@@ -224,6 +230,7 @@ export default function ContentQueriesPage() {
     let cancelled = false;
     setDetailLoading(true); setDetail(null); setAnalysis(null); setReplyDraft(''); setSavedAt(null);
     setPostMsg(null); setTransitions([]); setTransitionId('');
+    setMention(null); setUserQuery(''); setUserHits([]); setPickingUser(false);
     // Transitions are per-issue and workflow-specific, so load the real list
     // rather than assuming a status name exists.
     fetch(`/api/jira/post-update?key=${encodeURIComponent(selected)}`, { cache: 'no-store' })
@@ -248,7 +255,13 @@ export default function ContentQueriesPage() {
       .catch(() => {});
     fetch(`/api/jira/issue/${encodeURIComponent(selected)}`, { cache: 'no-store' })
       .then((r) => r.json())
-      .then((j) => { if (!cancelled && !j.error) setDetail(j); })
+      .then((j) => {
+        if (cancelled || j.error) return;
+        setDetail(j);
+        // Default to the assignee; reporters on these tickets are often bots.
+        if (j.assigneeId) setMention({ accountId: j.assigneeId, displayName: j.assignee, email: '', avatar: '' });
+        else if (j.reporterId) setMention({ accountId: j.reporterId, displayName: j.reporter, email: '', avatar: '' });
+      })
       .catch(() => {})
       .finally(() => { if (!cancelled) setDetailLoading(false); });
     return () => { cancelled = true; };
@@ -374,10 +387,24 @@ export default function ContentQueriesPage() {
     } finally { setSavingReply(false); }
   }
 
+  useEffect(() => {
+    const q = userQuery.trim();
+    if (!pickingUser || q.length < 2) { setUserHits([]); return; }
+    setUserSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/jira/users?q=${encodeURIComponent(q)}`, { cache: 'no-store' });
+        const j = await r.json();
+        setUserHits(j.users || []);
+      } catch { setUserHits([]); } finally { setUserSearching(false); }
+    }, 300);
+    return () => { clearTimeout(t); setUserSearching(false); };
+  }, [userQuery, pickingUser]);
+
   async function postUpdate() {
     if (!detail || !replyDraft.trim()) return;
-    const mentionId = mentionWho === 'assignee' ? detail.assigneeId : mentionWho === 'reporter' ? detail.reporterId : '';
-    const mentionName = mentionWho === 'assignee' ? detail.assignee : mentionWho === 'reporter' ? detail.reporter : '';
+    const mentionId = mention?.accountId || '';
+    const mentionName = mention?.displayName || '';
     const target = transitions.find((t) => t.id === transitionId);
     const label = target ? ` and moved it to ${target.to}` : '';
     if (!confirm(`Post this update to ${detail.key}${label}?`)) return;
@@ -840,18 +867,58 @@ export default function ContentQueriesPage() {
                           <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-2">
                             <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">Post to Jira</p>
                             <div className="flex items-end gap-2 flex-wrap">
-                              <label className="flex flex-col gap-0.5">
+                              <div className="flex flex-col gap-0.5 relative">
                                 <span className="text-[10px] text-[var(--text-faint)]">Mention</span>
-                                <select className="input text-xs py-1" value={mentionWho} onChange={(e) => setMentionWho(e.target.value as any)}>
-                                  <option value="assignee" disabled={!detail.assigneeId}>
-                                    {detail.assignee ? `@${detail.assignee}` : 'Assignee (none)'}
-                                  </option>
-                                  <option value="reporter" disabled={!detail.reporterId}>
-                                    {detail.reporter ? `@${detail.reporter}` : 'Reporter (none)'}
-                                  </option>
-                                  <option value="none">No mention</option>
-                                </select>
-                              </label>
+                                {!pickingUser ? (
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      className="input text-xs py-1 text-left min-w-[10rem] hover:border-[var(--accent)] transition-colors"
+                                      onClick={() => { setPickingUser(true); setUserQuery(''); }}
+                                      title="Search for someone to mention"
+                                    >
+                                      {mention ? `@${mention.displayName}` : 'No mention'}
+                                    </button>
+                                    {mention && (
+                                      <button className="text-[10px] text-[var(--text-faint)] hover:text-red-400 px-1"
+                                        onClick={() => setMention(null)} title="Remove mention">×</button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <input
+                                    autoFocus
+                                    className="input text-xs py-1 min-w-[10rem]"
+                                    placeholder="Search people…"
+                                    value={userQuery}
+                                    onChange={(e) => setUserQuery(e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === 'Escape') { setPickingUser(false); setUserQuery(''); } }}
+                                    onBlur={() => setTimeout(() => setPickingUser(false), 160)}
+                                  />
+                                )}
+
+                                {pickingUser && (userQuery.trim().length >= 2 || userSearching) && (
+                                  <div className="absolute top-full left-0 mt-1 z-20 w-64 rounded-lg border border-[var(--border)] bg-[var(--panel)] shadow-xl max-h-56 overflow-y-auto">
+                                    {userSearching && <p className="text-[11px] text-[var(--text-faint)] px-2.5 py-2">Searching…</p>}
+                                    {!userSearching && userHits.length === 0 && (
+                                      <p className="text-[11px] text-[var(--text-faint)] px-2.5 py-2">No people matched.</p>
+                                    )}
+                                    {userHits.map((u) => (
+                                      <button
+                                        key={u.accountId}
+                                        className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-[var(--panel-2)] transition-colors"
+                                        onMouseDown={(e) => { e.preventDefault(); setMention(u); setPickingUser(false); setUserQuery(''); }}
+                                      >
+                                        {u.avatar
+                                          ? <img src={u.avatar} alt="" className="w-5 h-5 rounded-full shrink-0" />
+                                          : <span className="w-5 h-5 rounded-full bg-[var(--panel-2)] shrink-0" />}
+                                        <span className="min-w-0 flex-1">
+                                          <span className="text-xs block truncate">{u.displayName}</span>
+                                          {u.email && <span className="text-[10px] text-[var(--text-faint)] block truncate">{u.email}</span>}
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                               <label className="flex flex-col gap-0.5 flex-1 min-w-[12rem]">
                                 <span className="text-[10px] text-[var(--text-faint)]">Instruction</span>
                                 <input className="input text-xs py-1" value={instruction} onChange={(e) => setInstruction(e.target.value)} />
