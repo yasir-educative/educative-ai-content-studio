@@ -484,6 +484,7 @@ export default function ContentQueriesPage() {
         <>
           <div className="card p-3 space-y-2.5">
             <div className="flex items-center gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
+              <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] w-12 shrink-0">Scope</span>
               <button
                 onClick={toggleMine}
                 className={`text-xs rounded-lg px-3 py-1.5 border font-medium transition-colors ${mine ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
@@ -568,27 +569,31 @@ export default function ContentQueriesPage() {
               </div>
             )}
 
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-start gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
+              <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] w-12 shrink-0 pt-1.5">Status</span>
+              <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
               <button
-                className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${active.length === 0 ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
+                className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${active.length === 0 ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)] font-medium' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
                 onClick={() => { setActive([]); loadIssues([], mine, scope, search, facetSel); }}
               >
-                All{total !== null ? ` (${total})` : issues ? ` (${issues.length})` : ''}
+                All{total !== null ? ` (${total.toLocaleString()})` : issues ? ` (${issues.length})` : ''}
               </button>
               {statuses.map((s) => {
                 const on = active.includes(s.name);
                 const n = counts.get(s.name);
                 return (
                   <button key={s.name} onClick={() => toggleStatus(s.name)}
-                    className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${on ? categoryClasses(s.category) + ' ring-1 ring-current' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}>
+                    className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${on ? categoryClasses(s.category) + ' ring-1 ring-current font-medium' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)] hover:border-[var(--text-faint)]'}`}>
                     {s.name}{n ? ` (${n})` : ''}
                   </button>
                 );
               })}
               {statuses.length === 0 && <span className="text-xs text-[var(--text-faint)]">No status filters available</span>}
+              </div>
             </div>
             {facets.length > 0 && (
               <div className="flex items-end gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
+                <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] w-12 shrink-0 pb-1.5">Fields</span>
                 {facets.map((f) => (
                   <label key={f.cf} className="flex flex-col gap-0.5">
                     <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">{f.name}</span>
