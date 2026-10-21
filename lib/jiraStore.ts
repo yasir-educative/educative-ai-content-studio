@@ -69,12 +69,15 @@ export async function saveJiraConfig(patch: Partial<JiraConfig>): Promise<JiraCo
   if (siteUrl && !/^https?:\/\//i.test(siteUrl)) {
     throw new Error('Site URL must start with http:// or https://');
   }
-  // The sentinel means the form never saw the real token — keep what is stored.
-  const incomingToken = patch.apiToken;
+  // Keep the stored token unless a real replacement arrives. The sentinel means
+  // the form never saw it; blank means the field was simply left alone. Treating
+  // blank as a new value used to wipe a working token on any unrelated save, so
+  // clearing credentials is DELETE only, never a side effect of an edit.
+  const incoming = patch.apiToken;
   const apiToken =
-    incomingToken === undefined || incomingToken === SECRET_SENTINEL
+    incoming === undefined || incoming === SECRET_SENTINEL || String(incoming).trim() === ''
       ? existing.apiToken
-      : String(incomingToken).trim();
+      : String(incoming).trim();
 
   const next: JiraConfig = {
     siteUrl,

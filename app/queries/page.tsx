@@ -201,7 +201,6 @@ export default function ContentQueriesPage() {
                   placeholder={cfg.apiToken === SENTINEL ? 'unchanged — leave as is' : 'paste token'}
                   value={form.apiToken === SENTINEL ? '' : form.apiToken}
                   onChange={(e) => upd({ apiToken: e.target.value })}
-                  onFocus={() => { if (form.apiToken === SENTINEL) upd({ apiToken: '' }); }}
                 />
               </Field>
               <Field label="Project key">
