@@ -41,6 +41,10 @@ async function jiraFetch(
     if (res.status === 404) throw new Error(`Jira endpoint not found (404). Check the site URL. ${detail}`);
     throw new Error(`Jira ${res.status}: ${detail}`);
   }
+  // An empty body on a successful response is normal, not a failure: a
+  // transition answers 204 No Content. Only a response that carries a body
+  // which is not JSON indicates something intercepted the request.
+  if (!text.trim()) return null;
   if (json === null) throw new Error('Jira returned a non-JSON body — check the site URL points at a Jira Cloud site');
   return json;
 }
