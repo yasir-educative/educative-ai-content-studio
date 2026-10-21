@@ -93,6 +93,9 @@ export default function ContentQueriesPage() {
 
   const [analysis, setAnalysis] = useState<any>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [replyDraft, setReplyDraft] = useState('');
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [savingReply, setSavingReply] = useState(false);
 
   // ── loaders ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -211,7 +214,18 @@ export default function ContentQueriesPage() {
   useEffect(() => {
     if (!selected) { setDetail(null); return; }
     let cancelled = false;
-    setDetailLoading(true); setDetail(null); setAnalysis(null);
+    setDetailLoading(true); setDetail(null); setAnalysis(null); setReplyDraft(''); setSavedAt(null);
+    // A saved reply means this query was already analysed; show it instead of
+    // making the user pay for the call again.
+    fetch(`/api/jira/analysis?key=${encodeURIComponent(selected)}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled || !j?.analysis) return;
+        setAnalysis(j.analysis);
+        setReplyDraft(j.analysis.reply || '');
+        setSavedAt(j.analysis.savedAt || null);
+      })
+      .catch(() => {});
     fetch(`/api/jira/issue/${encodeURIComponent(selected)}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { if (!cancelled && !j.error) setDetail(j); })
@@ -310,8 +324,33 @@ export default function ContentQueriesPage() {
       const r = await fetch('/api/jira/analyze', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
       });
-      setAnalysis(await r.json());
+      const j = await r.json();
+      setAnalysis(j);
+      setReplyDraft(j.reply || '');
+      setSavedAt(null);
     } catch (e: any) { setAnalysis({ error: e?.message || String(e) }); } finally { setAnalyzing(false); }
+  }
+
+  async function saveReply() {
+    if (!analysis || !detail) return;
+    setSavingReply(true);
+    try {
+      const r = await fetch('/api/jira/analysis', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: detail.key,
+          reply: replyDraft,
+          usedLesson: !!analysis.usedLesson,
+          needsManualReview: !!analysis.needsManualReview,
+          imagesRead: analysis.imagesRead || 0,
+          reason: analysis.reason, lessonTitle: analysis.lessonTitle,
+          lessonUrl: analysis.lessonUrl, warning: analysis.warning,
+          edited: replyDraft !== (analysis.reply || ''),
+        }),
+      });
+      const j = await r.json();
+      if (r.ok) setSavedAt(j.analysis?.savedAt || new Date().toISOString());
+    } finally { setSavingReply(false); }
   }
 
   const upd = (p: Partial<Cfg>) => setForm((f) => ({ ...f, ...p }));
@@ -653,14 +692,14 @@ export default function ContentQueriesPage() {
                     )}
                     <button className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5" onClick={() => analyze(detail.key)} disabled={analyzing}>
                       {analyzing && <span className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin inline-block" />}
-                      {analyzing ? 'Analyzing…' : '✦ AI analysis'}
+                      {analyzing ? 'Analyzing…' : analysis && !analysis.error ? '✦ Re-analyze' : '✦ AI analysis'}
                     </button>
                   </div>
 
                   {analysis && (
                     <div className="px-4 py-3 border-b border-[var(--border)] space-y-2">
                       {analysis.error ? (
-                        <div className="rounded-lg border border-red-500/30 bg-red-500/10 text-red-300 p-3 text-xs">{analysis.error}</div>
+                        <div className="rounded-lg border-l-4 border-red-500 bg-red-100 dark:bg-red-950/40 text-red-900 dark:text-red-200 p-3 text-xs">{analysis.error}</div>
                       ) : (
                         <>
                           <div className="flex items-center gap-2 flex-wrap">
@@ -682,19 +721,19 @@ export default function ContentQueriesPage() {
                           </div>
 
                           {analysis.needsManualReview && (
-                            <div className="rounded-lg border border-amber-500/50 bg-amber-500/15 px-3 py-2">
-                              <p className="text-xs font-semibold text-amber-200">⚠ Review manually before sending</p>
-                              <p className="text-[11px] text-amber-300/90 mt-0.5">
-                                This query needed the lesson, but it could not be read. The draft below is the best the
-                                ticket alone supports and is not grounded in the content.
+                            <div className="rounded-lg border-l-4 border-amber-500 bg-amber-100 dark:bg-amber-950/40 px-3 py-2">
+                              <p className="text-xs font-semibold text-amber-900 dark:text-amber-200">⚠ Review manually before sending</p>
+                              <p className="text-[11px] text-amber-800 dark:text-amber-300/90 mt-0.5">
+                                The lesson could not be read, so this draft is not grounded in the content. Check it
+                                before sending. (Internal note — the reply itself does not mention this.)
                               </p>
                             </div>
                           )}
                           {analysis.reason && (
-                            <p className="text-[11px] text-[var(--text-faint)] italic">{analysis.reason}</p>
+                            <p className="text-[11px] text-[var(--text-dim)] italic">{analysis.reason}</p>
                           )}
                           {analysis.warning && (
-                            <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1.5">
+                            <p className="text-[11px] text-amber-900 dark:text-amber-200 bg-amber-100 dark:bg-amber-950/40 border-l-4 border-amber-500 rounded px-2 py-1.5">
                               {analysis.warning}
                             </p>
                           )}
@@ -705,11 +744,27 @@ export default function ContentQueriesPage() {
                           )}
 
                           <textarea
-                            readOnly
-                            value={analysis.reply || ''}
+                            value={replyDraft}
+                            onChange={(e) => setReplyDraft(e.target.value)}
                             spellCheck={false}
                             className="input w-full text-xs leading-relaxed min-h-[220px] font-sans"
                           />
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button className="btn-primary text-xs py-1.5 px-3" onClick={saveReply} disabled={savingReply || !replyDraft.trim()}>
+                              {savingReply ? 'Saving…' : savedAt ? 'Save changes' : 'Save reply'}
+                            </button>
+                            {savedAt && (
+                              <span className="text-[10px] text-emerald-700 dark:text-emerald-300">
+                                saved {new Date(savedAt).toLocaleString()}
+                              </span>
+                            )}
+                            {replyDraft !== (analysis.reply || '') && (
+                              <button className="text-[10px] text-[var(--text-faint)] hover:text-[var(--text)]"
+                                onClick={() => setReplyDraft(analysis.reply || '')}>
+                                revert to generated
+                              </button>
+                            )}
+                          </div>
                         </>
                       )}
                     </div>

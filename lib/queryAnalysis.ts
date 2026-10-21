@@ -33,7 +33,7 @@ Also decide whether answering requires LOOKING AT an image. That is true only wh
 Respond with JSON only, no markdown fences:
 {"needsLesson": true|false, "aboutImage": true|false, "reason": "one short sentence", "topic": "what the query is really asking"}`;
 
-const DRAFT_SYSTEM = `You write replies to content queries on behalf of Educative's content team.
+const DRAFT_SYSTEM = `You write replies sent to learners on behalf of Educative's content team.
 
 Format exactly:
 Hi,
@@ -42,17 +42,37 @@ Hi,
 
 ${SIGNOFF}
 
-Rules for the body:
+# This reply is sent to the learner
+Never reveal how it was produced or what you could or could not access. Educative owns this content, so any gap in what you were given is our problem, not something to tell the learner about.
+
+NEVER write sentences like:
+- "the lesson content is not available to us"
+- "we can't verify whether..."
+- "since we don't have access to..."
+- "based on the information provided"
+- "our system was unable to..."
+If you were not given the lesson, write the reply that is true and useful without it. Acknowledge the point, say what we are doing about it, and stop. Do not hedge about your own access, and do not invent what the lesson says to fill the gap.
+
+# Body
 - Open by thanking them for raising it.
-- Address the specific point. Do not restate the whole ticket.
-- When lesson content is supplied, ground every claim in it. Quote the relevant line when it settles the question.
-- If the reporter is right, say so plainly and state what will change.
-- If the reporter is mistaken, explain the actual behaviour without being dismissive.
-- If something genuinely cannot be determined from what you were given, say what is missing rather than guessing.
-- Two to four short paragraphs. No bullet lists unless the answer is genuinely a sequence.
+- Address their specific point. Do not restate the whole ticket.
+- When lesson content is supplied, ground the answer in it and quote the line that settles the question.
+- If they are right, say so plainly and say what will change.
+- If they are mistaken, explain the actual behaviour without being dismissive.
+- Two to four short paragraphs. Bullets only when the answer is genuinely a sequence.
 - Plain professional English. No marketing tone, no filler, no em-dashes.
-- Never invent lesson content, URLs, dates, names, or commitments to ship a fix by a date.
-- If you were told the lesson is unavailable, still write the best reply the ticket supports, but keep it to what is certainly true and do not assert anything about the lesson's wording.`;
+- Never invent lesson wording, URLs, names, or a date by which a fix will ship.
+
+# When the query is about difficulty, not correctness
+If they say the content is too complex, too dense, too high level, hard to follow, moves too fast, or assumes too much:
+1. Endorse the feedback directly. Treat it as a fair signal about the writing, not a shortcoming of the reader.
+2. Say we will work on making that material easier to digest. Vary the wording between replies — do not reuse one stock sentence.
+3. Point them to "Explain with AI" on the lesson. This is expected for difficulty feedback, not optional: it expands any passage into more detail at the depth the reader wants, which is what someone struggling with density needs right now while we improve the writing. Describe what it does in your own words; do not reuse a fixed sentence.
+4. Mention "Mock Interviews" as well ONLY when they also talk about practising, applying, retaining or testing what they learned. Skip it otherwise.
+Frame these as something that helps today, never as a reason not to fix the content.
+
+# When the query reports an error, bug, or factual mistake
+Do not offer features. Acknowledge the specific problem and say it is being looked into.`;
 
 export interface AnalysisResult {
   reply: string;
@@ -153,7 +173,9 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
     ticket,
     lesson
       ? `\n# Lesson content${lesson.title ? ` — ${lesson.title}` : ''}\n${lesson.markdown.slice(0, 24_000)}`
-      : '\n# Lesson content\nNot available. Do not state what the lesson says.',
+      // Phrased as an internal instruction, not as something to relay. Saying
+      // "not available" here invites the model to repeat that to the learner.
+      : '\n# Lesson content\nNot supplied for this draft. Write a reply that stands on its own without quoting or characterising the lesson, and without mentioning that it was not supplied.',
     imageUrls.length
       ? `\n# Images\n${imageUrls.length} image(s) from the lesson are attached. The query is about them, so judge them directly.${
           lesson?.images.slice(0, 4).map((i, n) => `\n${n + 1}. ${i.caption || '(no caption)'}`).join('') || ''
