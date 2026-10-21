@@ -80,7 +80,7 @@ export default function ContentQueriesPage() {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   // Current filter state, so "load more" repeats the same query without
   // depending on a stale closure inside the observer.
-  const queryRef = useRef<{ statuses: string[]; mine: boolean; scope: string[] }>({ statuses: [], mine: false, scope: [] });
+  const queryRef = useRef<{ statuses: string[]; mine: boolean; scope: string[]; text: string }>({ statuses: [], mine: false, scope: [], text: '' });
   const [search, setSearch] = useState('');
 
   const [selected, setSelected] = useState<string | null>(null);
@@ -100,21 +100,22 @@ export default function ContentQueriesPage() {
 
   const PAGE = 20;
 
-  function buildQs(sel: string[], onlyMine: boolean, projects: string[], cur?: string | null) {
+  function buildQs(sel: string[], onlyMine: boolean, projects: string[], text: string, cur?: string | null) {
     const p = new URLSearchParams();
     p.set('max', String(PAGE));
     if (sel.length) p.set('status', sel.join(','));
     if (onlyMine) p.set('mine', '1');
     if (projects.length) p.set('projects', projects.join(','));
+    if (text.trim()) p.set('text', text.trim());
     if (cur) p.set('cursor', cur);
     return `?${p}`;
   }
 
-  const loadIssues = useCallback(async (sel: string[], onlyMine = false, projects: string[] = []) => {
-    queryRef.current = { statuses: sel, mine: onlyMine, scope: projects };
+  const loadIssues = useCallback(async (sel: string[], onlyMine = false, projects: string[] = [], text = '') => {
+    queryRef.current = { statuses: sel, mine: onlyMine, scope: projects, text };
     setLoading(true); setIssuesErr(''); setIssues(null); setCursor(null); setTotal(null);
     try {
-      const res = await fetch(`/api/jira/issues${buildQs(sel, onlyMine, projects)}`, { cache: 'no-store' });
+      const res = await fetch(`/api/jira/issues${buildQs(sel, onlyMine, projects, text)}`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Failed to load');
       setIssues(json.issues);
@@ -127,8 +128,8 @@ export default function ContentQueriesPage() {
     if (!cursor || loadingMore || loading) return;
     setLoadingMore(true);
     try {
-      const { statuses, mine: m, scope: sc } = queryRef.current;
-      const res = await fetch(`/api/jira/issues${buildQs(statuses, m, sc, cursor)}`, { cache: 'no-store' });
+      const { statuses, mine: m, scope: sc, text: tx } = queryRef.current;
+      const res = await fetch(`/api/jira/issues${buildQs(statuses, m, sc, tx, cursor)}`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Failed to load more');
       // De-duplicate: a shifting result set can repeat a key across pages.
@@ -168,12 +169,25 @@ export default function ContentQueriesPage() {
     if (!cfg.configured) return;
     if (!cfg.projectKey) { setPicking(true); return; }
     setActive([]);
-    loadIssues([], mine, scope);
+    loadIssues([], mine, scope, search);
     fetch('/api/jira/statuses', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => setStatuses(j.statuses || []))
       .catch(() => setStatuses([]));
   }, [cfg.configured, cfg.projectKey, loadIssues]);
+
+  // Debounce typing into a server-side search rather than filtering the page.
+  const searchRef = useRef(search);
+  searchRef.current = search;
+  const firstSearch = useRef(true);
+  useEffect(() => {
+    if (!cfg.configured || !cfg.projectKey) return;
+    if (firstSearch.current) { firstSearch.current = false; return; }
+    const t = setTimeout(() => {
+      if (searchRef.current === search) loadIssues(active, mine, scope, search);
+    }, 450);
+    return () => clearTimeout(t);
+  }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load detail whenever a different query is selected.
   useEffect(() => {
@@ -222,14 +236,14 @@ export default function ContentQueriesPage() {
   function toggleStatus(name: string) {
     const next = active.includes(name) ? active.filter((s) => s !== name) : [...active, name];
     setActive(next);
-    loadIssues(next, mine, scope);
+    loadIssues(next, mine, scope, search);
   }
 
   function toggleMine() {
     const next = !mine;
     setMine(next);
     setSelected(null);
-    loadIssues(active, next, scope);
+    loadIssues(active, next, scope, search);
   }
 
   // Clearing the scope while "mine" is on searches every project the user can see.
@@ -251,7 +265,7 @@ export default function ContentQueriesPage() {
   function toggleScope(key: string) {
     const next = scope.includes(key) ? scope.filter((k) => k !== key) : [...scope, key];
     setScope(next);
-    loadIssues(active, mine, next);
+    loadIssues(active, mine, next, search);
   }
 
   async function analyze(key: string) {
@@ -289,13 +303,8 @@ export default function ContentQueriesPage() {
     return relevant.slice(0, 80);
   }, [projects, projQuery, relevant, hiddenSet]);
 
-  // Client-side text search over the fetched page; status filtering is server-side.
-  const shown = useMemo(() => {
-    if (!issues) return null;
-    const q = search.trim().toLowerCase();
-    if (!q) return issues;
-    return issues.filter((i) => i.summary.toLowerCase().includes(q) || i.key.toLowerCase().includes(q));
-  }, [issues, search]);
+  // Filtering happens server-side, so the list renders what came back.
+  const shown = issues;
 
   const counts = useMemo(() => {
     const m = new Map<string, number>();
@@ -321,7 +330,7 @@ export default function ContentQueriesPage() {
             <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => { setPicking((v) => !v); if (!projects.length) loadProjects(); }}>
               Change project
             </button>
-            <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => loadIssues(active, mine, scope)} disabled={loading}>
+            <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => loadIssues(active, mine, scope, search)} disabled={loading}>
               {loading ? 'Loading…' : 'Refresh'}
             </button>
             <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => { setForm(cfg); setEditing((v) => !v); }}>
@@ -416,7 +425,7 @@ export default function ContentQueriesPage() {
                     : `${scope.length} selected`}
               </button>
               {scope.length > 0 && (
-                <button onClick={() => { setScope([]); loadIssues(active, mine, []); }} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)]">
+                <button onClick={() => { setScope([]); loadIssues(active, mine, [], search); }} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)]">
                   clear
                 </button>
               )}
@@ -486,7 +495,7 @@ export default function ContentQueriesPage() {
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${active.length === 0 ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
-                onClick={() => { setActive([]); loadIssues([], mine, scope); }}
+                onClick={() => { setActive([]); loadIssues([], mine, scope, search); }}
               >
                 All{total !== null ? ` (${total})` : issues ? ` (${issues.length})` : ''}
               </button>
@@ -502,7 +511,7 @@ export default function ContentQueriesPage() {
               })}
               {statuses.length === 0 && <span className="text-xs text-[var(--text-faint)]">No status filters available</span>}
             </div>
-            <input className="input w-full text-sm" placeholder="Filter the loaded queries by text or key…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <input className="input w-full text-sm" placeholder="Search all queries — text, or an issue key like PSB2C-20468…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
 
           {issuesErr && <div className="card p-3 text-sm text-red-300 border-red-500/40 bg-red-500/10">{issuesErr}</div>}
@@ -537,7 +546,7 @@ export default function ContentQueriesPage() {
                 ))}
 
                 {/* Scrolling this into view pulls the next page. */}
-                {cursor && !search && (
+                {cursor && (
                   <div ref={sentinelRef} className="px-3 py-3 text-center">
                     <span className="text-[11px] text-[var(--text-faint)]">
                       {loadingMore ? 'Loading more…' : 'Scroll for more'}
@@ -549,11 +558,7 @@ export default function ContentQueriesPage() {
                     End of results · {issues?.length} loaded
                   </p>
                 )}
-                {search && cursor && (
-                  <p className="px-3 py-2.5 text-center text-[10px] text-[var(--text-faint)]">
-                    Searching the {issues?.length} loaded. Clear the search to load more.
-                  </p>
-                )}
+
               </div>
             </div>
 

@@ -77,11 +77,42 @@ export interface QueryFilter {
   mine?: boolean;
   /** Projects to search. Empty with mine=true means every project. */
   projectKeys?: string[];
+  /** Free text, matched server-side across summary, description and comments. */
+  text?: string;
 }
 
 const q = (s: string) => `"${s.replace(/"/g, '')}"`;
 
+/**
+ * Escape a value for a quoted JQL string. Backslash first, or the escapes
+ * introduced for quotes would themselves be escaped.
+ */
+export function escapeJqlString(v: string): string {
+  return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+const ISSUE_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+
+/**
+ * The text clause. An issue key is looked up directly, since `text ~ "PROJ-1"`
+ * does not reliably find the issue itself. Otherwise CONTAINS, which Jira runs
+ * over summary, description, comments and text custom fields.
+ */
+export function textClause(raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return null;
+  if (ISSUE_KEY_RE.test(v)) return `key = ${v.toUpperCase()}`;
+  // A trailing lone quote or backslash would produce invalid JQL once quoted.
+  const safe = escapeJqlString(v);
+  return `text ~ "${safe}"`;
+}
+
 export function effectiveJql(c: JiraConfig, f: QueryFilter = {}): string {
+  // Searching an exact key means "find me this ticket", so it ignores the
+  // board and status filters that would otherwise hide it.
+  const keyed = f.text?.trim() && ISSUE_KEY_RE.test(f.text.trim());
+  if (keyed) return `key = ${f.text!.trim().toUpperCase()}`;
+
   const clauses: string[] = [];
   const projects = (f.projectKeys || []).filter(Boolean);
 
@@ -98,6 +129,10 @@ export function effectiveJql(c: JiraConfig, f: QueryFilter = {}): string {
 
   if (f.mine) clauses.push('assignee = currentUser()');
   if (f.statuses?.length) clauses.push(`status IN (${f.statuses.map(q).join(', ')})`);
+  if (f.text?.trim()) {
+    const t = textClause(f.text);
+    if (t) clauses.push(t);
+  }
 
   return `${clauses.join(' AND ')} ORDER BY created DESC`;
 }

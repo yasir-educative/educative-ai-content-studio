@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
           statuses: list('status'),
           projectKeys: list('projects'),
           mine: sp.get('mine') === '1',
+          text: sp.get('text') || '',
         },
         sp.get('cursor') || null,
       ),
