@@ -79,6 +79,8 @@ export interface QueryFilter {
   projectKeys?: string[];
   /** Free text, matched server-side across summary, description and comments. */
   text?: string;
+  /** Option-field selections, keyed by the numeric custom field id. */
+  facets?: Record<string, string>;
 }
 
 const q = (s: string) => `"${s.replace(/"/g, '')}"`;
@@ -129,6 +131,10 @@ export function effectiveJql(c: JiraConfig, f: QueryFilter = {}): string {
 
   if (f.mine) clauses.push('assignee = currentUser()');
   if (f.statuses?.length) clauses.push(`status IN (${f.statuses.map(q).join(', ')})`);
+  for (const [cf, value] of Object.entries(f.facets || {})) {
+    if (!value || !/^\d+$/.test(cf)) continue;
+    clauses.push(`cf[${cf}] = "${escapeJqlString(value)}"`);
+  }
   if (f.text?.trim()) {
     const t = textClause(f.text);
     if (t) clauses.push(t);
@@ -506,5 +512,48 @@ export function extractEducativeIds(...texts: (string | undefined)[]): Educative
     const any = text.match(/https?:\/\/(?:www\.)?educative\.io\/[^\s)\]]+/i);
     if (any) out.lessonUrl = any[0];
   }
+  return out;
+}
+
+// ── Facets ───────────────────────────────────────────────────────────────────
+// Option-valued fields on a project, discovered from createmeta so the filter
+// row reflects the project's real configuration instead of a hardcoded list.
+
+export interface JiraFacet {
+  fieldId: string;
+  /** Numeric id used in JQL as cf[11144]. */
+  cf: string;
+  name: string;
+  values: string[];
+}
+
+// Fields that are either not useful as a filter or already have their own control.
+const FACET_SKIP = new Set(['issuetype', 'project', 'priority', 'status', 'resolution']);
+
+export async function fetchFacets(c: JiraConfig, projectKey: string): Promise<JiraFacet[]> {
+  if (!isConfigured(c)) throw new Error('Jira is not configured yet');
+  const meta = await jiraFetch(c, `/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`);
+  const typeId = meta?.issueTypes?.[0]?.id;
+  if (!typeId) return [];
+
+  const detail = await jiraFetch(
+    c,
+    `/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${typeId}?maxResults=200`,
+  );
+
+  const out: JiraFacet[] = [];
+  for (const f of detail?.fields || []) {
+    const fieldId: string = f?.fieldId || '';
+    if (!fieldId || FACET_SKIP.has(fieldId)) continue;
+    const allowed = f?.allowedValues;
+    if (!Array.isArray(allowed) || allowed.length === 0 || allowed.length > 40) continue;
+    const values = allowed.map((a: any) => a?.value ?? a?.name).filter((v: any) => typeof v === 'string');
+    // A single-option field cannot narrow anything.
+    if (values.length < 2) continue;
+    const cf = fieldId.startsWith('customfield_') ? fieldId.slice('customfield_'.length) : '';
+    if (!cf) continue;
+    out.push({ fieldId, cf, name: f?.name || fieldId, values });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }

@@ -28,6 +28,8 @@ export interface JiraConfig {
   enabledBoardIds?: number[];
   /** Boards the user hid from the picker. They stay hidden until restored. */
   hiddenProjectKeys?: string[];
+  /** Facet selections applied on load, keyed by numeric custom field id. */
+  defaultFacets?: Record<string, string>;
   updatedAt?: string;
 }
 
@@ -62,6 +64,7 @@ export function redactJira(c: JiraConfig = getJiraConfig()) {
     defaultBoardId: c.defaultBoardId ?? null,
     enabledBoardIds: c.enabledBoardIds ?? [],
     hiddenProjectKeys: c.hiddenProjectKeys ?? [],
+    defaultFacets: c.defaultFacets ?? {},
     configured: isConfigured(c),
   };
 }
@@ -102,6 +105,8 @@ export async function saveJiraConfig(patch: Partial<JiraConfig>): Promise<JiraCo
       patch.hiddenProjectKeys === undefined
         ? existing.hiddenProjectKeys ?? []
         : [...new Set(patch.hiddenProjectKeys.map((k) => String(k).trim()).filter(Boolean))],
+    defaultFacets:
+      patch.defaultFacets === undefined ? existing.defaultFacets ?? {} : patch.defaultFacets,
     updatedAt: new Date().toISOString(),
   };
 

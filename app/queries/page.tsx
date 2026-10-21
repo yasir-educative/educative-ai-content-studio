@@ -8,10 +8,12 @@ const SENTINEL = '__UNCHANGED__';
 
 interface Cfg {
   siteUrl: string; email: string; apiToken: string; projectKey: string; jql: string;
-  defaultBoardId: number | null; enabledBoardIds: number[]; hiddenProjectKeys: string[]; configured: boolean;
+  defaultBoardId: number | null; enabledBoardIds: number[]; hiddenProjectKeys: string[];
+  defaultFacets: Record<string, string>; configured: boolean;
 }
 interface Project { key: string; name: string; type: string; archived: boolean }
 interface Status { name: string; category: string }
+interface Facet { fieldId: string; cf: string; name: string; values: string[] }
 interface Issue {
   key: string; url: string; summary: string; status: string; statusCategory: string;
   priority: string; issueType: string; reporter: string; assignee: string;
@@ -26,7 +28,7 @@ interface Detail extends Issue {
 
 const EMPTY: Cfg = {
   siteUrl: '', email: '', apiToken: '', projectKey: '', jql: '',
-  defaultBoardId: null, enabledBoardIds: [], hiddenProjectKeys: [], configured: false,
+  defaultBoardId: null, enabledBoardIds: [], hiddenProjectKeys: [], defaultFacets: {}, configured: false,
 };
 
 // Jira groups every status into one of three categories; colour by category so
@@ -67,6 +69,8 @@ export default function ContentQueriesPage() {
   const [statuses, setStatuses] = useState<Status[]>([]);
   const [active, setActive] = useState<string[]>([]);
   const [mine, setMine] = useState(false);
+  const [facets, setFacets] = useState<Facet[]>([]);
+  const [facetSel, setFacetSel] = useState<Record<string, string>>({});
   // Empty means "the default project"; non-empty searches across those projects.
   const [scope, setScope] = useState<string[]>([]);
   const [scoping, setScoping] = useState(false);
@@ -80,7 +84,7 @@ export default function ContentQueriesPage() {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   // Current filter state, so "load more" repeats the same query without
   // depending on a stale closure inside the observer.
-  const queryRef = useRef<{ statuses: string[]; mine: boolean; scope: string[]; text: string }>({ statuses: [], mine: false, scope: [], text: '' });
+  const queryRef = useRef<{ statuses: string[]; mine: boolean; scope: string[]; text: string; facets: Record<string, string> }>({ statuses: [], mine: false, scope: [], text: '', facets: {} });
   const [search, setSearch] = useState('');
 
   const [selected, setSelected] = useState<string | null>(null);
@@ -100,22 +104,28 @@ export default function ContentQueriesPage() {
 
   const PAGE = 20;
 
-  function buildQs(sel: string[], onlyMine: boolean, projects: string[], text: string, cur?: string | null) {
+  function encodeFacets(f: Record<string, string>) {
+    return Object.entries(f).filter(([, v]) => v).map(([k, v]) => `${k}:${v}`).join(',');
+  }
+
+  function buildQs(sel: string[], onlyMine: boolean, projects: string[], text: string, fac: Record<string, string>, cur?: string | null) {
     const p = new URLSearchParams();
     p.set('max', String(PAGE));
     if (sel.length) p.set('status', sel.join(','));
     if (onlyMine) p.set('mine', '1');
     if (projects.length) p.set('projects', projects.join(','));
     if (text.trim()) p.set('text', text.trim());
+    const fx = encodeFacets(fac);
+    if (fx) p.set('facets', fx);
     if (cur) p.set('cursor', cur);
     return `?${p}`;
   }
 
-  const loadIssues = useCallback(async (sel: string[], onlyMine = false, projects: string[] = [], text = '') => {
-    queryRef.current = { statuses: sel, mine: onlyMine, scope: projects, text };
+  const loadIssues = useCallback(async (sel: string[], onlyMine = false, projects: string[] = [], text = '', fac: Record<string, string> = {}) => {
+    queryRef.current = { statuses: sel, mine: onlyMine, scope: projects, text, facets: fac };
     setLoading(true); setIssuesErr(''); setIssues(null); setCursor(null); setTotal(null);
     try {
-      const res = await fetch(`/api/jira/issues${buildQs(sel, onlyMine, projects, text)}`, { cache: 'no-store' });
+      const res = await fetch(`/api/jira/issues${buildQs(sel, onlyMine, projects, text, fac)}`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Failed to load');
       setIssues(json.issues);
@@ -128,8 +138,8 @@ export default function ContentQueriesPage() {
     if (!cursor || loadingMore || loading) return;
     setLoadingMore(true);
     try {
-      const { statuses, mine: m, scope: sc, text: tx } = queryRef.current;
-      const res = await fetch(`/api/jira/issues${buildQs(statuses, m, sc, tx, cursor)}`, { cache: 'no-store' });
+      const { statuses, mine: m, scope: sc, text: tx, facets: fx } = queryRef.current;
+      const res = await fetch(`/api/jira/issues${buildQs(statuses, m, sc, tx, fx, cursor)}`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Failed to load more');
       // De-duplicate: a shifting result set can repeat a key across pages.
@@ -169,7 +179,7 @@ export default function ContentQueriesPage() {
     if (!cfg.configured) return;
     if (!cfg.projectKey) { setPicking(true); return; }
     setActive([]);
-    loadIssues([], mine, scope, search);
+    loadIssues([], mine, scope, search, facetSel);
     fetch('/api/jira/statuses', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => setStatuses(j.statuses || []))
@@ -184,7 +194,7 @@ export default function ContentQueriesPage() {
     if (!cfg.configured || !cfg.projectKey) return;
     if (firstSearch.current) { firstSearch.current = false; return; }
     const t = setTimeout(() => {
-      if (searchRef.current === search) loadIssues(active, mine, scope, search);
+      if (searchRef.current === search) loadIssues(active, mine, scope, search, facetSel);
     }, 450);
     return () => clearTimeout(t);
   }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -236,14 +246,32 @@ export default function ContentQueriesPage() {
   function toggleStatus(name: string) {
     const next = active.includes(name) ? active.filter((s) => s !== name) : [...active, name];
     setActive(next);
-    loadIssues(next, mine, scope, search);
+    loadIssues(next, mine, scope, search, facetSel);
+  }
+
+  function pickFacet(cf: string, value: string) {
+    const next = { ...facetSel };
+    if (value) next[cf] = value; else delete next[cf];
+    setFacetSel(next);
+    setSelected(null);
+    loadIssues(active, mine, scope, search, next);
+  }
+
+  // Remember the current selection so it applies on the next visit.
+  async function saveFacetDefaults() {
+    const r = await fetch('/api/jira', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...cfg, defaultFacets: facetSel }),
+    });
+    const j = await r.json();
+    if (r.ok) setCfg(j);
   }
 
   function toggleMine() {
     const next = !mine;
     setMine(next);
     setSelected(null);
-    loadIssues(active, next, scope, search);
+    loadIssues(active, next, scope, search, facetSel);
   }
 
   // Clearing the scope while "mine" is on searches every project the user can see.
@@ -265,7 +293,7 @@ export default function ContentQueriesPage() {
   function toggleScope(key: string) {
     const next = scope.includes(key) ? scope.filter((k) => k !== key) : [...scope, key];
     setScope(next);
-    loadIssues(active, mine, next, search);
+    loadIssues(active, mine, next, search, facetSel);
   }
 
   async function analyze(key: string) {
@@ -330,7 +358,7 @@ export default function ContentQueriesPage() {
             <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => { setPicking((v) => !v); if (!projects.length) loadProjects(); }}>
               Change project
             </button>
-            <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => loadIssues(active, mine, scope, search)} disabled={loading}>
+            <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => loadIssues(active, mine, scope, search, facetSel)} disabled={loading}>
               {loading ? 'Loading…' : 'Refresh'}
             </button>
             <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => { setForm(cfg); setEditing((v) => !v); }}>
@@ -425,7 +453,7 @@ export default function ContentQueriesPage() {
                     : `${scope.length} selected`}
               </button>
               {scope.length > 0 && (
-                <button onClick={() => { setScope([]); loadIssues(active, mine, [], search); }} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)]">
+                <button onClick={() => { setScope([]); loadIssues(active, mine, [], search, facetSel); }} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)]">
                   clear
                 </button>
               )}
@@ -495,7 +523,7 @@ export default function ContentQueriesPage() {
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${active.length === 0 ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
-                onClick={() => { setActive([]); loadIssues([], mine, scope, search); }}
+                onClick={() => { setActive([]); loadIssues([], mine, scope, search, facetSel); }}
               >
                 All{total !== null ? ` (${total})` : issues ? ` (${issues.length})` : ''}
               </button>
@@ -511,6 +539,34 @@ export default function ContentQueriesPage() {
               })}
               {statuses.length === 0 && <span className="text-xs text-[var(--text-faint)]">No status filters available</span>}
             </div>
+            {facets.length > 0 && (
+              <div className="flex items-end gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
+                {facets.map((f) => (
+                  <label key={f.cf} className="flex flex-col gap-0.5">
+                    <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">{f.name}</span>
+                    <select
+                      className="input text-xs py-1 min-w-[8rem]"
+                      value={facetSel[f.cf] || ''}
+                      onChange={(e) => pickFacet(f.cf, e.target.value)}
+                    >
+                      <option value="">All</option>
+                      {f.values.map((v) => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  </label>
+                ))}
+                {Object.keys(facetSel).length > 0 && (
+                  <button onClick={() => { setFacetSel({}); loadIssues(active, mine, scope, search, {}); }}
+                    className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)] pb-1.5">
+                    clear
+                  </button>
+                )}
+                <button onClick={saveFacetDefaults} title="Apply this selection automatically next time"
+                  className="text-[11px] text-[var(--text-faint)] hover:text-[var(--accent)] pb-1.5 ml-auto">
+                  {JSON.stringify(facetSel) === JSON.stringify(cfg.defaultFacets || {}) ? 'saved as default' : 'save as default'}
+                </button>
+              </div>
+            )}
+
             <input className="input w-full text-sm" placeholder="Search all queries — text, or an issue key like PSB2C-20468…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
 

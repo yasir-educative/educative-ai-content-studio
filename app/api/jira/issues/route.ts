@@ -29,6 +29,14 @@ export async function GET(req: NextRequest) {
           projectKeys: list('projects'),
           mine: sp.get('mine') === '1',
           text: sp.get('text') || '',
+          // facets arrive as "11144:Content,12460:Cloud"
+          facets: Object.fromEntries(
+            (sp.get('facets') || '')
+              .split(',')
+              .map((pair) => pair.split(':'))
+              .filter((kv) => kv.length === 2 && kv[0] && kv[1])
+              .map(([k, v]) => [k.trim(), v.trim()]),
+          ),
         },
         sp.get('cursor') || null,
       ),
