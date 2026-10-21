@@ -18,7 +18,11 @@ interface Issue {
   labels: string[]; created: string; updated: string;
 }
 interface Comment { author: string; created: string; body: string }
-interface Detail extends Issue { description: string; comments: Comment[]; resolution: string }
+interface Ids { authorId?: string; collectionId?: string; pageId?: string; lessonUrl?: string }
+interface Detail extends Issue {
+  description: string; comments: Comment[]; resolution: string;
+  ids: Ids; fields: Array<{ name: string; value: string }>;
+}
 
 const EMPTY: Cfg = {
   siteUrl: '', email: '', apiToken: '', projectKey: '', jql: '',
@@ -61,6 +65,10 @@ export default function ContentQueriesPage() {
 
   const [statuses, setStatuses] = useState<Status[]>([]);
   const [active, setActive] = useState<string[]>([]);
+  const [mine, setMine] = useState(false);
+  // Empty means "the default project"; non-empty searches across those projects.
+  const [scope, setScope] = useState<string[]>([]);
+  const [scoping, setScoping] = useState(false);
 
   const [issues, setIssues] = useState<Issue[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -82,10 +90,14 @@ export default function ContentQueriesPage() {
       .catch(() => setEditing(true));
   }, []);
 
-  const loadIssues = useCallback(async (sel: string[]) => {
+  const loadIssues = useCallback(async (sel: string[], onlyMine = false, projects: string[] = []) => {
     setLoading(true); setIssuesErr(''); setIssues(null);
     try {
-      const qs = sel.length ? `?status=${encodeURIComponent(sel.join(','))}` : '';
+      const p = new URLSearchParams();
+      if (sel.length) p.set('status', sel.join(','));
+      if (onlyMine) p.set('mine', '1');
+      if (projects.length) p.set('projects', projects.join(','));
+      const qs = p.toString() ? `?${p}` : '';
       const res = await fetch(`/api/jira/issues${qs}`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Failed to load');
@@ -106,7 +118,7 @@ export default function ContentQueriesPage() {
     if (!cfg.configured) return;
     if (!cfg.projectKey) { setPicking(true); return; }
     setActive([]);
-    loadIssues([]);
+    loadIssues([], mine, scope);
     fetch('/api/jira/statuses', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => setStatuses(j.statuses || []))
@@ -160,7 +172,21 @@ export default function ContentQueriesPage() {
   function toggleStatus(name: string) {
     const next = active.includes(name) ? active.filter((s) => s !== name) : [...active, name];
     setActive(next);
-    loadIssues(next);
+    loadIssues(next, mine, scope);
+  }
+
+  function toggleMine() {
+    const next = !mine;
+    setMine(next);
+    setSelected(null);
+    loadIssues(active, next, scope);
+  }
+
+  // Clearing the scope while "mine" is on searches every project the user can see.
+  function toggleScope(key: string) {
+    const next = scope.includes(key) ? scope.filter((k) => k !== key) : [...scope, key];
+    setScope(next);
+    loadIssues(active, mine, next);
   }
 
   async function analyze(key: string) {
@@ -213,7 +239,7 @@ export default function ContentQueriesPage() {
             <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => { setPicking((v) => !v); if (!projects.length) loadProjects(); }}>
               Change project
             </button>
-            <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => loadIssues(active)} disabled={loading}>
+            <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => loadIssues(active, mine, scope)} disabled={loading}>
               {loading ? 'Loading…' : 'Refresh'}
             </button>
             <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => { setForm(cfg); setEditing((v) => !v); }}>
@@ -286,10 +312,55 @@ export default function ContentQueriesPage() {
       {cfg.configured && cfg.projectKey && !editing && (
         <>
           <div className="card p-3 space-y-2.5">
+            <div className="flex items-center gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
+              <button
+                onClick={toggleMine}
+                className={`text-xs rounded-lg px-3 py-1.5 border font-medium transition-colors ${mine ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
+              >
+                {mine ? '✓ ' : ''}Assigned to me
+              </button>
+              <button
+                onClick={() => { setScoping((v) => !v); if (!projects.length) loadProjects(); }}
+                className="text-xs rounded-lg px-3 py-1.5 border border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)] transition-colors"
+              >
+                Boards: {scope.length === 0 ? (mine ? 'all' : cfg.projectKey) : `${scope.length} selected`}
+              </button>
+              {scope.length > 0 && (
+                <button onClick={() => { setScope([]); loadIssues(active, mine, []); }} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)]">
+                  clear
+                </button>
+              )}
+              {mine && scope.length === 0 && (
+                <span className="text-[11px] text-[var(--text-faint)]">your tickets across every board</span>
+              )}
+            </div>
+
+            {scoping && (
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-2">
+                <input className="input w-full text-xs" placeholder={`Search ${projects.length || ''} boards…`} value={projQuery} onChange={(e) => setProjQuery(e.target.value)} />
+                {projLoading && <p className="text-[11px] text-[var(--text-faint)]">Loading…</p>}
+                <div className="max-h-48 overflow-y-auto flex flex-wrap gap-1.5">
+                  {visibleProjects.map((p) => {
+                    const on = scope.includes(p.key);
+                    return (
+                      <button key={p.key} onClick={() => toggleScope(p.key)}
+                        className={`text-[11px] rounded-md px-2 py-1 border transition-colors ${on ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
+                        title={p.name}>
+                        {on ? '✓ ' : ''}{p.key}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-[var(--text-faint)]">
+                  Pick several to search them together. With none picked, “Assigned to me” covers every board you can see.
+                </p>
+              </div>
+            )}
+
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${active.length === 0 ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
-                onClick={() => { setActive([]); loadIssues([]); }}
+                onClick={() => { setActive([]); loadIssues([], mine, scope); }}
               >
                 All{issues && ` (${issues.length})`}
               </button>
@@ -382,6 +453,46 @@ export default function ContentQueriesPage() {
                   )}
 
                   <div className="px-4 py-3 space-y-4">
+                    {(detail.ids.authorId || detail.ids.collectionId || detail.ids.pageId || detail.ids.lessonUrl) && (
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] mb-1.5">Educative references</p>
+                        <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-1.5">
+                          {([['Author ID', detail.ids.authorId], ['Collection ID', detail.ids.collectionId], ['Page ID', detail.ids.pageId]] as const).map(([label, val]) =>
+                            val ? (
+                              <div key={label} className="flex items-center gap-2 text-xs">
+                                <span className="text-[var(--text-faint)] w-24 shrink-0">{label}</span>
+                                <code className="text-[var(--text)] font-mono">{val}</code>
+                                <button className="text-[10px] text-[var(--text-faint)] hover:text-[var(--accent)] ml-auto"
+                                  onClick={() => navigator.clipboard?.writeText(String(val))}>copy</button>
+                              </div>
+                            ) : null,
+                          )}
+                          {detail.ids.lessonUrl && (
+                            <a href={detail.ids.lessonUrl} target="_blank" rel="noreferrer"
+                              className="text-xs text-[var(--accent)] hover:underline break-all block pt-0.5">
+                              {detail.ids.lessonUrl} ↗
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {detail.fields.length > 0 && (
+                      <details className="group">
+                        <summary className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] cursor-pointer select-none hover:text-[var(--text-dim)]">
+                          Jira fields ({detail.fields.length})
+                        </summary>
+                        <div className="mt-1.5 rounded-lg border border-[var(--border)] divide-y divide-[var(--border)]">
+                          {detail.fields.map((fl) => (
+                            <div key={fl.name} className="flex gap-2 px-2.5 py-1.5 text-xs">
+                              <span className="text-[var(--text-faint)] w-40 shrink-0 truncate">{fl.name}</span>
+                              <span className="text-[var(--text-dim)] break-words min-w-0">{fl.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+
                     <div>
                       <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] mb-1.5">Description</p>
                       {detail.description

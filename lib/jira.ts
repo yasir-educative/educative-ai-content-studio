@@ -71,18 +71,34 @@ export interface JiraIssue {
   updated: string;
 }
 
-export function effectiveJql(c: JiraConfig, statuses: string[] = []): string {
+export interface QueryFilter {
+  statuses?: string[];
+  /** Restrict to the signed-in user's assigned issues. */
+  mine?: boolean;
+  /** Projects to search. Empty with mine=true means every project. */
+  projectKeys?: string[];
+}
+
+const q = (s: string) => `"${s.replace(/"/g, '')}"`;
+
+export function effectiveJql(c: JiraConfig, f: QueryFilter = {}): string {
   const clauses: string[] = [];
-  if (c.jql?.trim()) {
+  const projects = (f.projectKeys || []).filter(Boolean);
+
+  if (projects.length) {
+    clauses.push(`project IN (${projects.map(q).join(', ')})`);
+  } else if (c.jql?.trim()) {
     clauses.push(`(${c.jql.trim().replace(/\s+ORDER\s+BY\s+.*$/i, '')})`);
   } else if (c.projectKey?.trim()) {
-    clauses.push(`project = "${c.projectKey.trim()}"`);
-  } else {
+    clauses.push(`project = ${q(c.projectKey.trim())}`);
+  } else if (!f.mine) {
+    // Searching every project is only sensible when narrowed to one assignee.
     throw new Error('Set a project key or a JQL query first');
   }
-  if (statuses.length) {
-    clauses.push(`status IN (${statuses.map((x) => `"${x.replace(/"/g, '')}"`).join(', ')})`);
-  }
+
+  if (f.mine) clauses.push('assignee = currentUser()');
+  if (f.statuses?.length) clauses.push(`status IN (${f.statuses.map(q).join(', ')})`);
+
   return `${clauses.join(' AND ')} ORDER BY created DESC`;
 }
 
@@ -113,10 +129,10 @@ const FIELDS = 'summary,status,priority,issuetype,reporter,assignee,labels,creat
 export async function fetchIssues(
   c: JiraConfig = getJiraConfig(),
   maxResults = 50,
-  statuses: string[] = [],
+  filter: QueryFilter = {},
 ): Promise<{ issues: JiraIssue[]; jql: string; total: number }> {
   if (!isConfigured(c)) throw new Error('Jira is not configured yet');
-  const jql = effectiveJql(c, statuses);
+  const jql = effectiveJql(c, filter);
 
   let data: any;
   try {
@@ -280,24 +296,118 @@ export interface JiraIssueDetail extends JiraIssue {
   description: string;
   comments: JiraComment[];
   resolution: string;
+  /** Author/collection/page mined from the text, when present. */
+  ids: EducativeIds;
+  /** Populated custom fields, resolved to their human names. */
+  fields: Array<{ name: string; value: string }>;
+}
+
+// customfield_10234 tells the reader nothing, so map ids to names once per process.
+let fieldNameCache: Map<string, string> | null = null;
+async function fieldNames(c: JiraConfig): Promise<Map<string, string>> {
+  if (fieldNameCache) return fieldNameCache;
+  try {
+    const all = await jiraFetch(c, '/field');
+    const m = new Map<string, string>();
+    for (const f of Array.isArray(all) ? all : []) if (f?.id && f?.name) m.set(f.id, f.name);
+    fieldNameCache = m;
+  } catch {
+    fieldNameCache = new Map();
+  }
+  return fieldNameCache;
+}
+
+/** Render a custom field value, which may be a scalar, option object, or list. */
+function fieldValue(v: any): string {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (Array.isArray(v)) return v.map(fieldValue).filter(Boolean).join(', ');
+  if (typeof v === 'object') {
+    if (v.type === 'doc' || v.content) return adfToText(v.content).trim();
+    return String(v.displayName || v.name || v.value || v.emailAddress || '');
+  }
+  return '';
 }
 
 export async function fetchIssue(c: JiraConfig, key: string): Promise<JiraIssueDetail> {
   if (!isConfigured(c)) throw new Error('Jira is not configured yet');
-  const data = await jiraFetch(
-    c,
-    `/issue/${encodeURIComponent(key)}?fields=${FIELDS},description,resolution,comment`,
-  );
+  const data = await jiraFetch(c, `/issue/${encodeURIComponent(key)}?fields=*all`);
   const base = mapIssue(c.siteUrl, data);
   const f = data?.fields || {};
+
+  const description = adfToText(f.description?.content).trim();
+  const comments: JiraComment[] = (f.comment?.comments || []).map((cm: any) => ({
+    author: cm?.author?.displayName || '',
+    created: cm?.created || '',
+    body: adfToText(cm?.body?.content).trim(),
+  }));
+
+  const names = await fieldNames(c);
+  const fields: Array<{ name: string; value: string }> = [];
+  for (const [id, raw] of Object.entries(f)) {
+    if (!id.startsWith('customfield_')) continue;
+    const value = fieldValue(raw);
+    if (!value) continue;
+    fields.push({ name: names.get(id) || id, value: value.slice(0, 500) });
+  }
+  fields.sort((a, b) => a.name.localeCompare(b.name));
+
   return {
     ...base,
-    description: adfToText(f.description?.content).trim(),
+    description,
     resolution: f.resolution?.name || '',
-    comments: (f.comment?.comments || []).map((cm: any) => ({
-      author: cm?.author?.displayName || '',
-      created: cm?.created || '',
-      body: adfToText(cm?.body?.content).trim(),
-    })),
+    comments,
+    ids: extractEducativeIds(description, base.summary, ...comments.map((x) => x.body), ...fields.map((x) => `${x.name}: ${x.value}`)),
+    fields,
   };
+}
+
+// ── Educative identifiers ────────────────────────────────────────────────────
+// Query tickets carry the author, collection and page they refer to, but the
+// shape varies: sometimes labelled fields in the description, sometimes only an
+// Educative URL. Both are mined so the detail pane can show them either way.
+
+export interface EducativeIds {
+  authorId?: string;
+  collectionId?: string;
+  pageId?: string;
+  lessonUrl?: string;
+}
+
+/** Educative lesson URLs embed the three ids positionally. */
+const URL_RE = /https?:\/\/(?:www\.)?educative\.io\/(?:api\/)?(?:collection\/)?(\d{6,})\/(\d{6,})\/(\d{6,})/i;
+
+function labelled(text: string, words: string[]): string | undefined {
+  for (const w of words) {
+    // "Author ID: 123", "authorId = 123", "author_id 123"
+    const re = new RegExp(`${w}\\s*(?:id)?\\s*[:=#]?\\s*(\\d{4,})`, 'i');
+    const m = text.match(re);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
+export function extractEducativeIds(...texts: (string | undefined)[]): EducativeIds {
+  const text = texts.filter(Boolean).join('\n');
+  if (!text.trim()) return {};
+  const out: EducativeIds = {};
+
+  const u = text.match(URL_RE);
+  if (u) {
+    out.authorId = u[1];
+    out.collectionId = u[2];
+    out.pageId = u[3];
+    out.lessonUrl = u[0];
+  }
+
+  // Explicit labels win over anything inferred from a URL.
+  out.authorId = labelled(text, ['author[_ ]?id', 'author']) || out.authorId;
+  out.collectionId = labelled(text, ['collection[_ ]?id', 'collection', 'course[_ ]?id']) || out.collectionId;
+  out.pageId = labelled(text, ['page[_ ]?id', 'lesson[_ ]?id', 'page']) || out.pageId;
+
+  if (!out.lessonUrl) {
+    const any = text.match(/https?:\/\/(?:www\.)?educative\.io\/[^\s)\]]+/i);
+    if (any) out.lessonUrl = any[0];
+  }
+  return out;
 }
