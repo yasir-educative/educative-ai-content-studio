@@ -83,6 +83,8 @@ export default function ContentQueriesPage() {
   const [pickingAsg, setPickingAsg] = useState(false);
   const [facets, setFacets] = useState<Facet[]>([]);
   const [facetSel, setFacetSel] = useState<Record<string, string>>({});
+  // Facets are custom fields of one project; they mean nothing on another.
+  const [facetProject, setFacetProject] = useState('');
   // Empty means "the default project"; non-empty searches across those projects.
   const [scope, setScope] = useState<string[]>([]);
   const [scoping, setScoping] = useState(false);
@@ -212,8 +214,8 @@ export default function ContentQueriesPage() {
     loadIssues([], mine, scope, search, saved, assignee?.accountId || '');
     fetch('/api/jira/facets', { cache: 'no-store' })
       .then((r) => r.json())
-      .then((j) => setFacets(j.facets || []))
-      .catch(() => setFacets([]));
+      .then((j) => { setFacets(j.facets || []); setFacetProject(j.project || ''); })
+      .catch(() => { setFacets([]); setFacetProject(''); });
     fetch('/api/jira/statuses', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => setStatuses(j.statuses || []))
@@ -351,8 +353,11 @@ export default function ContentQueriesPage() {
     setScope([]);        // their boards are a different set, so start unscoped
     setActive([]);
     setAsgBoards([]);
+    setFacetSel({});
+    if (on) { setFacets([]); setFacetProject(''); }
+    else retargetFacets(cfg.projectKey);
     if (on) loadAsgBoards(user?.accountId);
-    loadIssues([], on, [], search, facetSel, user?.accountId || '');
+    loadIssues([], on, [], search, {}, user?.accountId || '');
   }
 
   function toggleMine() {
@@ -361,12 +366,27 @@ export default function ContentQueriesPage() {
   }
 
   // Jump to one of the assignee's boards: scopes the list and the facets.
+  // Switching board invalidates the facet selections: they are custom fields
+  // of the previous project and match nothing on the new one, which silently
+  // emptied the list.
+  const retargetFacets = useCallback(async (projectKey: string) => {
+    setFacetSel({});
+    if (!projectKey) { setFacets([]); setFacetProject(''); return; }
+    try {
+      const r = await fetch(`/api/jira/facets?project=${encodeURIComponent(projectKey)}`, { cache: 'no-store' });
+      const j = await r.json();
+      setFacets(j.facets || []);
+      setFacetProject(j.project || '');
+    } catch { setFacets([]); setFacetProject(''); }
+  }, []);
+
   function pickAsgBoard(key: string) {
     const next = scope.length === 1 && scope[0] === key ? [] : [key];
     setScope(next);
     setSelected(null);
     setActive([]);
-    loadIssues([], mine, next, search, facetSel, assignee?.accountId || '');
+    retargetFacets(next[0] || '');
+    loadIssues([], mine, next, search, {}, assignee?.accountId || '');
   }
 
   // Clearing the scope while "mine" is on searches every project the user can see.
