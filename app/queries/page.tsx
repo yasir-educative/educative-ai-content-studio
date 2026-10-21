@@ -516,16 +516,46 @@ export default function ContentQueriesPage() {
                   </div>
 
                   {analysis && (
-                    <div className="px-4 py-3 border-b border-[var(--border)]">
-                      <div className={`rounded-lg border p-3 text-xs leading-relaxed ${analysis.error ? 'border-red-500/30 bg-red-500/10 text-red-300' : 'border-[var(--accent)]/30 bg-[var(--accent-soft)] text-[var(--text-dim)]'}`}>
-                        <p className="font-semibold text-[var(--text)] mb-1">AI analysis</p>
-                        <p>{analysis.error || analysis.message}</p>
-                        {analysis.context && (
-                          <p className="text-[10px] text-[var(--text-faint)] mt-1.5">
-                            Loaded: {analysis.context.descriptionChars} chars of description, {analysis.context.commentCount} comment(s)
-                          </p>
-                        )}
-                      </div>
+                    <div className="px-4 py-3 border-b border-[var(--border)] space-y-2">
+                      {analysis.error ? (
+                        <div className="rounded-lg border border-red-500/30 bg-red-500/10 text-red-300 p-3 text-xs">{analysis.error}</div>
+                      ) : (
+                        <>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">Suggested reply</span>
+                            <span className={`text-[10px] rounded px-1.5 py-0.5 border ${analysis.usedLesson ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10' : 'text-[var(--text-faint)] border-[var(--border)]'}`}>
+                              {analysis.usedLesson ? 'lesson read' : analysis.needsLesson ? 'lesson unavailable' : 'answered from ticket'}
+                            </span>
+                            <button
+                              className="text-[10px] text-[var(--text-faint)] hover:text-[var(--accent)] ml-auto"
+                              onClick={() => navigator.clipboard?.writeText(analysis.reply || '')}
+                            >
+                              copy reply
+                            </button>
+                          </div>
+
+                          {analysis.reason && (
+                            <p className="text-[11px] text-[var(--text-faint)] italic">{analysis.reason}</p>
+                          )}
+                          {analysis.warning && (
+                            <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1.5">
+                              {analysis.warning}
+                            </p>
+                          )}
+                          {analysis.lessonTitle && (
+                            <p className="text-[11px] text-[var(--text-faint)]">
+                              Based on: <a href={analysis.lessonUrl} target="_blank" rel="noreferrer" className="text-[var(--accent)] hover:underline">{analysis.lessonTitle}</a>
+                            </p>
+                          )}
+
+                          <textarea
+                            readOnly
+                            value={analysis.reply || ''}
+                            spellCheck={false}
+                            className="input w-full text-xs leading-relaxed min-h-[220px] font-sans"
+                          />
+                        </>
+                      )}
                     </div>
                   )}
 
