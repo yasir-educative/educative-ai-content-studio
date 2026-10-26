@@ -663,14 +663,21 @@ export default function ContentQueriesPage() {
   const upd = (p: Partial<Cfg>) => setForm((f) => ({ ...f, ...p }));
   const selectQuery = useCallback((k: string) => setSelected(k), []);
 
-  // Boxes the user can click to scope the list. Their own pinned set once they
-  // have one; until then the default project plus the busiest boards, capped
-  // at four so the row stays one line.
-  const quickBoards = useMemo(() => {
+  // Two tiers. Pinned boards persist across reloads — seeded once with the
+  // default project plus the busiest assigned boards, capped at four. Session
+  // boards are added for the current visit only and clear on reload.
+  const [sessionBoards, setSessionBoards] = useState<string[]>([]);
+
+  const pinnedBoards = useMemo(() => {
     if (cfg.quickBoards.length) return cfg.quickBoards;
     const seeded = [cfg.projectKey, ...asgBoards.map((b) => b.key)].filter(Boolean);
     return [...new Set(seeded)].slice(0, 4);
   }, [cfg.quickBoards, cfg.projectKey, asgBoards]);
+
+  const quickBoards = useMemo(
+    () => [...pinnedBoards, ...sessionBoards.filter((k) => !pinnedBoards.includes(k))],
+    [pinnedBoards, sessionBoards],
+  );
 
   const boardName = useCallback(
     (key: string) => projects.find((p) => p.key === key)?.name
@@ -678,6 +685,28 @@ export default function ContentQueriesPage() {
       || key,
     [projects, asgBoards],
   );
+
+  const closePicker = () => { setScoping(false); setProjQuery(''); };
+
+  /** Show or hide a board in the row. New ones are session-only until starred. */
+  function toggleBoardShown(key: string) {
+    if (pinnedBoards.includes(key)) {
+      saveQuickBoards(pinnedBoards.filter((k) => k !== key));
+      return;
+    }
+    setSessionBoards((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  }
+
+  /** Promote a session board to persisted, or demote it back. */
+  function toggleKeep(key: string) {
+    if (pinnedBoards.includes(key)) {
+      saveQuickBoards(pinnedBoards.filter((k) => k !== key));
+      setSessionBoards((prev) => (prev.includes(key) ? prev : [...prev, key]));
+    } else {
+      saveQuickBoards([...pinnedBoards, key]);
+      setSessionBoards((prev) => prev.filter((k) => k !== key));
+    }
+  }
 
   async function saveQuickBoards(keys: string[]) {
     const r = await fetch('/api/jira', {
@@ -912,10 +941,11 @@ export default function ContentQueriesPage() {
                     <button onClick={() => openBoard(k)} title={k}
                       className={`text-xs pl-2.5 pr-1.5 py-1.5 font-medium ${on ? 'text-[var(--accent)]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'}`}>
                       {boardName(k)}{typeof n === 'number' ? <span className="opacity-60 font-normal"> ({n})</span> : null}
+                      {!pinnedBoards.includes(k) && <span className="opacity-50 font-normal" title="This session only"> ·</span>}
                     </button>
                     <button
-                      onClick={() => saveQuickBoards(quickBoards.filter((x) => x !== k))}
-                      title={`Remove ${k} from the quick row`}
+                      onClick={() => toggleBoardShown(k)}
+                      title={`Remove ${boardName(k)} from the row`}
                       className="text-[11px] pr-1.5 text-[var(--text-faint)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity">
                       ×
                     </button>
@@ -970,34 +1000,43 @@ export default function ContentQueriesPage() {
 
             {scoping && (
               <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-2">
-                <input className="input w-full text-xs" placeholder={`Search ${projects.length || ''} boards…`} value={projQuery} onChange={(e) => setProjQuery(e.target.value)} />
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-[var(--text)]">Add a board</span>
+                  <span className="text-[10px] text-[var(--text-faint)]">{pinnedBoards.length} kept · {sessionBoards.length} this session</span>
+                  <button onClick={closePicker} className="ml-auto text-[var(--text-faint)] hover:text-[var(--text)] text-sm leading-none px-1" title="Close">×</button>
+                </div>
+
+                <input className="input w-full text-xs" placeholder={`Search ${projects.length || ''} boards…`}
+                  value={projQuery} onChange={(e) => setProjQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Escape') closePicker(); }} />
                 {projLoading && <p className="text-[11px] text-[var(--text-faint)]">Loading…</p>}
+
                 <div className="max-h-56 overflow-y-auto rounded-md border border-[var(--border)] divide-y divide-[var(--border)]">
                   {visibleProjects.map((p) => {
-                    const on = scope.includes(p.key);
+                    const kept = pinnedBoards.includes(p.key);
+                    const shown = kept || sessionBoards.includes(p.key);
                     return (
                       <div key={p.key}
-                        className={`group flex items-center gap-2 px-2.5 py-1.5 transition-colors ${on ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--panel)]'}`}>
-                        <input
-                          type="checkbox"
-                          className="accent-emerald-500 shrink-0"
-                          checked={on}
-                          onChange={() => toggleScope(p.key)}
-                          id={`scope-${p.key}`}
-                        />
-                        <label htmlFor={`scope-${p.key}`} className="flex-1 min-w-0 cursor-pointer">
-                          <span className={`text-xs block truncate ${on ? 'text-[var(--accent)]' : 'text-[var(--text)]'}`}>{p.name}</span>
+                        className={`group flex items-center gap-2 px-2.5 py-1.5 transition-colors ${shown ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--panel)]'}`}>
+                        <input type="checkbox" className="accent-emerald-500 shrink-0" id={`pin-${p.key}`}
+                          checked={shown} onChange={() => toggleBoardShown(p.key)} />
+                        <label htmlFor={`pin-${p.key}`} className="flex-1 min-w-0 cursor-pointer">
+                          <span className={`text-xs block truncate ${shown ? 'text-[var(--accent)]' : 'text-[var(--text)]'}`}>{p.name}</span>
                         </label>
                         <code className="text-[10px] text-[var(--text-faint)] shrink-0 font-mono">{p.key}</code>
-                        <button onClick={() => hide(p.key)} title={`Hide ${p.name}`}
-                          className="text-xs text-[var(--text-faint)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity shrink-0 px-0.5">
-                          ×
-                        </button>
+                        {shown && (
+                          <button onClick={() => toggleKeep(p.key)} title={kept ? 'Stop keeping across reloads' : 'Keep across reloads'}
+                            className={`text-[10px] shrink-0 px-1 ${kept ? 'text-amber-500' : 'text-[var(--text-faint)] hover:text-amber-500'}`}>
+                            {kept ? '★' : '☆'}
+                          </button>
+                        )}
+                        <button onClick={() => hide(p.key)} title={`Hide ${p.name} from this list`}
+                          className="text-xs text-[var(--text-faint)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity shrink-0 px-0.5">×</button>
                       </div>
                     );
                   })}
                   {visibleProjects.length === 0 && !projLoading && (
-                    <p className="text-[11px] text-[var(--text-faint)] px-2.5 py-2">No boards left. Restore one below.</p>
+                    <p className="text-[11px] text-[var(--text-faint)] px-2.5 py-2">No boards matched.</p>
                   )}
                 </div>
 
@@ -1019,10 +1058,12 @@ export default function ContentQueriesPage() {
                   </div>
                 )}
 
-                <p className="text-[10px] text-[var(--text-faint)]">
-                  Hover a board and press × to hide it for good. Inactive and archived boards are already excluded.
-                  With none picked, “Assigned to me” covers every board you can see.
-                </p>
+                <div className="flex items-center gap-2 pt-1 border-t border-[var(--border)]">
+                  <p className="text-[10px] text-[var(--text-faint)] flex-1">
+                    Ticked boards show in the row. ★ keeps one across reloads; the rest clear when you leave.
+                  </p>
+                  <button onClick={closePicker} className="btn-primary text-xs py-1 px-3">Done</button>
+                </div>
               </div>
             )}
 
