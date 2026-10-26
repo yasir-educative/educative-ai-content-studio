@@ -143,17 +143,16 @@ const QueryRow = memo(function QueryRow({
 }: { i: Issue; isSelected: boolean; onSelect: (k: string) => void }) {
   return (
     <button onClick={() => onSelect(i.key)}
-      className={`w-full text-left px-3 py-2.5 transition-colors border-l-[3px] ${
-        isSelected ? 'bg-[var(--accent-soft)] border-[var(--accent)]' : `hover:bg-[var(--panel-2)] ${railFor(i.statusCategory)}`
+      className={`w-full text-left px-3 py-2.5 transition-colors border-l-2 ${
+        isSelected ? 'bg-[var(--accent-soft)] border-[var(--accent)]' : 'hover:bg-[var(--panel-2)] border-transparent'
       }`}>
       <div className="flex items-start gap-2">
         <span className="text-[11px] font-mono text-[var(--text-faint)] shrink-0 pt-0.5">{i.key}</span>
         <span className={`text-[10px] rounded px-1.5 py-0.5 border shrink-0 ml-auto ${categoryClasses(i.statusCategory)}`}>{i.status}</span>
       </div>
       <p className="text-sm text-[var(--text)] leading-snug mt-1 line-clamp-2">{i.summary}</p>
-      <p className="text-[10px] text-[var(--text-faint)] mt-1 flex items-center gap-1.5">
-        {i.reporter && <Avatar name={i.reporter} />}
-        <span className="truncate">{i.issueType}{i.reporter && ` · ${i.reporter}`}{i.created && ` · ${relative(i.created)}`}</span>
+      <p className="text-[10px] text-[var(--text-faint)] mt-1">
+        {i.issueType}{i.reporter && ` · ${i.reporter}`}{i.created && ` · ${relative(i.created)}`}
       </p>
     </button>
   );
@@ -869,7 +868,7 @@ export default function ContentQueriesPage() {
         <>
           <div className="card p-3 space-y-2.5">
             <div className="flex items-center gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400 w-12 shrink-0">Scope</span>
+              <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] w-12 shrink-0">Scope</span>
               <button
                 onClick={toggleMine}
                 className={`text-xs rounded-lg px-3 py-1.5 border font-medium transition-colors ${mine && !assignee ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
@@ -937,7 +936,7 @@ export default function ContentQueriesPage() {
 
             {/* Board boxes — click to scope, + to pin another */}
             <div className="flex items-center gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400 w-12 shrink-0">Boards</span>
+              <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] w-12 shrink-0">Boards</span>
               {quickBoards.map((k) => {
                 const on = scope.length === 1 && scope[0] === k;
                 const n = asgBoards.find((b) => b.key === k)?.count;
@@ -1076,7 +1075,7 @@ export default function ContentQueriesPage() {
             )}
 
             <div className="flex items-start gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 w-12 shrink-0 pt-1.5">Status</span>
+              <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] w-12 shrink-0 pt-1.5">Status</span>
               <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
               <button
                 className={`text-xs rounded-lg px-2.5 py-1 border transition-colors ${active.length === 0 ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)] font-medium' : 'border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text)]'}`}
@@ -1099,7 +1098,7 @@ export default function ContentQueriesPage() {
             </div>
             {facets.length > 0 && (
               <div className="flex items-end gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-400 w-12 shrink-0 pb-1.5">Fields</span>
+                <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] w-12 shrink-0 pb-1.5">Fields</span>
                 {facets.map((f) => (
                   <label key={f.cf} className="flex flex-col gap-0.5">
                     <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">{f.name}</span>
@@ -1131,7 +1130,7 @@ export default function ContentQueriesPage() {
 
           {issuesErr && <div className="card p-3 text-sm text-red-300 border-red-500/40 bg-red-500/10">{issuesErr}</div>}
 
-          <div className={`grid gap-4 items-start ${selected ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]' : 'grid-cols-1'}`}>
+          <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] gap-4 items-start">
             {/* List */}
             <div className="card p-0 overflow-hidden">
               <div className="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between">
@@ -1168,32 +1167,28 @@ export default function ContentQueriesPage() {
             </div>
 
             {/* Detail */}
-            {selected && (
             <div className="card p-0 overflow-hidden lg:sticky lg:top-20">
+              {!selected && <p className="text-sm text-[var(--text-faint)] px-4 py-10 text-center">Select a query to see its details.</p>}
               {selected && detailLoading && <p className="text-sm text-[var(--text-faint)] px-4 py-10 text-center">Loading {selected}…</p>}
               {selected && !detailLoading && !detail && <p className="text-sm text-red-300 px-4 py-10 text-center">Could not load {selected}.</p>}
               {detail && (
                 <div className="max-h-[calc(100vh-22rem)] overflow-y-auto">
-                  <div className="px-4 py-3 border-b border-[var(--border)] space-y-2 bg-gradient-to-br from-[var(--accent-soft)] to-transparent">
+                  <div className="px-4 py-3 border-b border-[var(--border)] space-y-2">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <a href={detail.url} target="_blank" rel="noreferrer" className="text-xs font-mono font-semibold text-[var(--accent)] hover:underline">{detail.key} ↗</a>
-                      <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 border ${categoryClasses(detail.statusCategory)}`}>{detail.status}</span>
-                      {detail.priority && (
-                        <span className={`text-[10px] font-semibold rounded px-1.5 py-0.5 border ${priorityClasses(detail.priority)}`}>{detail.priority}</span>
-                      )}
+                      <a href={detail.url} target="_blank" rel="noreferrer" className="text-xs font-mono text-[var(--accent)] hover:underline">{detail.key} ↗</a>
+                      <span className={`text-[10px] rounded px-1.5 py-0.5 border ${categoryClasses(detail.statusCategory)}`}>{detail.status}</span>
+                      {detail.priority && <span className="text-[10px] text-[var(--text-faint)]">{detail.priority}</span>}
                     </div>
                     <h2 className="text-base font-semibold leading-snug">{detail.summary}</h2>
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[var(--text-faint)]">
                       <span>Type: <span className="text-[var(--text-dim)]">{detail.issueType || '—'}</span></span>
-                      <span className="inline-flex items-center gap-1">Reporter: {detail.reporter ? <><Avatar name={detail.reporter} /><span className="text-[var(--text-dim)]">{detail.reporter}</span></> : <span className="text-[var(--text-dim)]">—</span>}</span>
-                      <span className="inline-flex items-center gap-1">Assignee: {detail.assignee ? <><Avatar name={detail.assignee} /><span className="text-[var(--text-dim)]">{detail.assignee}</span></> : <span className="text-[var(--text-dim)]">Unassigned</span>}</span>
+                      <span>Reporter: <span className="text-[var(--text-dim)]">{detail.reporter || '—'}</span></span>
+                      <span>Assignee: <span className="text-[var(--text-dim)]">{detail.assignee || 'Unassigned'}</span></span>
                       <span>Created: <span className="text-[var(--text-dim)]">{detail.created ? new Date(detail.created).toLocaleDateString() : '—'}</span></span>
                     </div>
                     {detail.labels.length > 0 && (
                       <div className="flex flex-wrap gap-1">
-                        {detail.labels.map((l) => (
-                          <span key={l} className="text-[10px] py-0.5 px-1.5 rounded border border-indigo-400/50 bg-indigo-100 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-200">{l}</span>
-                        ))}
+                        {detail.labels.map((l) => <span key={l} className="pill text-[10px] py-0 px-1.5">{l}</span>)}
                       </div>
                     )}
                     {canAnalyze && (
@@ -1211,7 +1206,7 @@ export default function ContentQueriesPage() {
                       ) : (
                         <>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[10px] font-semibold uppercase tracking-wide text-fuchsia-600 dark:text-fuchsia-400">AI analysis</span>
+                            <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">Suggested reply</span>
                             {analysis.category === 'not-content' ? (
                               <span className="text-[10px] font-semibold rounded px-1.5 py-0.5 border border-purple-500 bg-purple-100 dark:bg-purple-950/50 text-purple-900 dark:text-purple-200">
                                 Not content
@@ -1271,7 +1266,7 @@ export default function ContentQueriesPage() {
                   {/* Reply — usable with or without an AI draft */}
                   <div className="px-4 py-3 border-b border-[var(--border)] space-y-2">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-teal-600 dark:text-teal-400">Reply</span>
+                      <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">Reply</span>
                       <button className="text-[10px] text-[var(--text-faint)] hover:text-[var(--accent)] ml-auto"
                         onClick={() => navigator.clipboard?.writeText(replyDraft)} disabled={!replyDraft.trim()}>
                         copy
@@ -1311,8 +1306,8 @@ export default function ContentQueriesPage() {
                   </div>
 
                           {/* Post to Jira */}
-                          <div className="rounded-lg border border-indigo-400/40 bg-indigo-50 dark:bg-indigo-950/25 p-2.5 space-y-2">
-                            <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Post to Jira</p>
+                          <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-2">
+                            <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">Post to Jira</p>
                             <div className="flex items-end gap-2 flex-wrap">
                               <div className="flex flex-col gap-0.5 relative">
                                 <span className="text-[10px] text-[var(--text-faint)]">Mention</span>
@@ -1395,7 +1390,6 @@ export default function ContentQueriesPage() {
                 </div>
               )}
             </div>
-            )}
           </div>
         </>
       )}
