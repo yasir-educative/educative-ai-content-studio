@@ -9,7 +9,7 @@ const SENTINEL = '__UNCHANGED__';
 interface Cfg {
   siteUrl: string; email: string; apiToken: string; projectKey: string; jql: string;
   defaultBoardId: number | null; enabledBoardIds: number[]; hiddenProjectKeys: string[];
-  defaultFacets: Record<string, string>; configured: boolean;
+  defaultFacets: Record<string, string>; quickBoards: string[]; configured: boolean;
 }
 interface Project { key: string; name: string; type: string; archived: boolean }
 interface Status { name: string; category: string }
@@ -32,7 +32,7 @@ interface AsgBoard { key: string; name: string; count: number }
 
 const EMPTY: Cfg = {
   siteUrl: '', email: '', apiToken: '', projectKey: '', jql: '',
-  defaultBoardId: null, enabledBoardIds: [], hiddenProjectKeys: [], defaultFacets: {}, configured: false,
+  defaultBoardId: null, enabledBoardIds: [], hiddenProjectKeys: [], defaultFacets: {}, quickBoards: [], configured: false,
 };
 
 // Jira groups every status into one of three categories; colour by category so
@@ -496,13 +496,22 @@ export default function ContentQueriesPage() {
   // emptied the list.
   const retargetFacets = useCallback(async (projectKey: string) => {
     setFacetSel({});
-    if (!projectKey) { setFacets([]); setFacetProject(''); return; }
+    setActive([]);
+    if (!projectKey) { setFacets([]); setFacetProject(''); setStatuses([]); return; }
+    const q = `?project=${encodeURIComponent(projectKey)}`;
     try {
-      const r = await fetch(`/api/jira/facets?project=${encodeURIComponent(projectKey)}`, { cache: 'no-store' });
+      const r = await fetch(`/api/jira/facets${q}`, { cache: 'no-store' });
       const j = await r.json();
       setFacets(j.facets || []);
       setFacetProject(j.project || '');
     } catch { setFacets([]); setFacetProject(''); }
+    // Statuses are per-project too: FSB's workflow is not PSB2C's, so the
+    // chips must follow the board in scope or they filter on names it lacks.
+    try {
+      const r = await fetch(`/api/jira/statuses${q}`, { cache: 'no-store' });
+      const j = await r.json();
+      setStatuses(j.statuses || []);
+    } catch { setStatuses([]); }
   }, []);
 
   function pickAsgBoard(key: string) {
@@ -650,6 +659,40 @@ export default function ContentQueriesPage() {
 
   const upd = (p: Partial<Cfg>) => setForm((f) => ({ ...f, ...p }));
   const selectQuery = useCallback((k: string) => setSelected(k), []);
+
+  // Boxes the user can click to scope the list. Their own pinned set once they
+  // have one; until then the default project plus the busiest boards, capped
+  // at four so the row stays one line.
+  const quickBoards = useMemo(() => {
+    if (cfg.quickBoards.length) return cfg.quickBoards;
+    const seeded = [cfg.projectKey, ...asgBoards.map((b) => b.key)].filter(Boolean);
+    return [...new Set(seeded)].slice(0, 4);
+  }, [cfg.quickBoards, cfg.projectKey, asgBoards]);
+
+  const boardName = useCallback(
+    (key: string) => projects.find((p) => p.key === key)?.name
+      || asgBoards.find((b) => b.key === key)?.name
+      || key,
+    [projects, asgBoards],
+  );
+
+  async function saveQuickBoards(keys: string[]) {
+    const r = await fetch('/api/jira', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...cfg, quickBoards: keys }),
+    });
+    const j = await r.json();
+    if (r.ok) setCfg(j);
+  }
+
+  // Clicking a box scopes to that board alone; clicking the active one clears.
+  function openBoard(key: string) {
+    const next = scope.length === 1 && scope[0] === key ? [] : [key];
+    setScope(next);
+    setSelected(null);
+    retargetFacets(next[0] || cfg.projectKey);
+    loadIssues([], mine, next, search, {}, assignee?.accountId || '');
+  }
 
   const activeProject = projects.find((p) => p.key === cfg.projectKey) || null;
   // AI analysis answers content queries against a lesson, so it only applies to
@@ -850,6 +893,40 @@ export default function ContentQueriesPage() {
               {mine && scope.length === 0 && (
                 <span className="text-[11px] text-[var(--text-faint)]">your tickets across every board</span>
               )}
+            </div>
+
+            {/* Board boxes — click to scope, + to pin another */}
+            <div className="flex items-center gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400 w-12 shrink-0">Boards</span>
+              {quickBoards.map((k) => {
+                const on = scope.length === 1 && scope[0] === k;
+                const n = asgBoards.find((b) => b.key === k)?.count;
+                return (
+                  <span key={k}
+                    className={`group inline-flex items-center rounded-lg border transition-colors ${
+                      on ? 'border-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--border)] hover:border-[var(--text-faint)]'
+                    }`}>
+                    <button onClick={() => openBoard(k)} title={k}
+                      className={`text-xs pl-2.5 pr-1.5 py-1.5 font-medium ${on ? 'text-[var(--accent)]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'}`}>
+                      {boardName(k)}{typeof n === 'number' ? <span className="opacity-60 font-normal"> ({n})</span> : null}
+                    </button>
+                    <button
+                      onClick={() => saveQuickBoards(quickBoards.filter((x) => x !== k))}
+                      title={`Remove ${k} from the quick row`}
+                      className="text-[11px] pr-1.5 text-[var(--text-faint)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity">
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
+              {scope.length === 0 && (
+                <span className="text-[10px] text-[var(--text-faint)]">showing all</span>
+              )}
+              <button
+                onClick={() => { setScoping((v) => !v); if (!projects.length) loadProjects(); }}
+                className="text-xs rounded-lg px-2.5 py-1.5 border border-dashed border-[var(--border)] text-[var(--text-faint)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors">
+                + board
+              </button>
             </div>
 
             {mine && (

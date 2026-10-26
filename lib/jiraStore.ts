@@ -30,6 +30,8 @@ export interface JiraConfig {
   hiddenProjectKeys?: string[];
   /** Facet selections applied on load, keyed by numeric custom field id. */
   defaultFacets?: Record<string, string>;
+  /** Boards shown as one-click boxes above the list. User-defined. */
+  quickBoards?: string[];
   updatedAt?: string;
 }
 
@@ -65,6 +67,7 @@ export function redactJira(c: JiraConfig = getJiraConfig()) {
     enabledBoardIds: c.enabledBoardIds ?? [],
     hiddenProjectKeys: c.hiddenProjectKeys ?? [],
     defaultFacets: c.defaultFacets ?? {},
+    quickBoards: c.quickBoards ?? [],
     configured: isConfigured(c),
   };
 }
@@ -107,6 +110,10 @@ export async function saveJiraConfig(patch: Partial<JiraConfig>): Promise<JiraCo
         : [...new Set(patch.hiddenProjectKeys.map((k) => String(k).trim()).filter(Boolean))],
     defaultFacets:
       patch.defaultFacets === undefined ? existing.defaultFacets ?? {} : patch.defaultFacets,
+    quickBoards:
+      patch.quickBoards === undefined
+        ? existing.quickBoards ?? []
+        : [...new Set(patch.quickBoards.map((k) => String(k).trim()).filter(Boolean))],
     updatedAt: new Date().toISOString(),
   };
 
