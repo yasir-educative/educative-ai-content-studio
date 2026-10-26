@@ -12,6 +12,9 @@ import {
 } from '@/lib/educativeImageStyle';
 
 export default function EducativeImagesPage() {
+  const [mode, setMode] = useState<'create' | 'edit'>('create');
+  const [refFile, setRefFile] = useState<File | null>(null);
+  const [refPreview, setRefPreview] = useState<string>('');
   const [instructions, setInstructions] = useState('');
   const [model, setModel] = useState<string>(IMAGE_MODELS[0]);
   const [quality, setQuality] = useState<string>('high');
@@ -22,7 +25,7 @@ export default function EducativeImagesPage() {
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [result, setResult] = useState<{ url: string; filename: string; size: string } | null>(null);
+  const [result, setResult] = useState<{ url: string; filename: string; size: string; styleApplied?: boolean; usedReference?: boolean } | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [zoomed, setZoomed] = useState(false);
 
@@ -72,20 +75,41 @@ export default function EducativeImagesPage() {
   const { checks, valid } = useMemo(() => checkSize(width, height), [width, height]);
   const lossless = format === 'png';
 
+  function pickFile(f: File | null) {
+    setRefFile(f);
+    setRefPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return f ? URL.createObjectURL(f) : ''; });
+  }
+
   async function generate() {
     if (!instructions.trim() || !valid) return;
+    if (mode === 'edit' && !refFile) { setErr('Upload the image you want to edit'); return; }
     setBusy(true);
     setErr('');
     setResult(null);
     try {
-      const res = await fetch('/api/images/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instructions, model, quality, format, compression, width, height }),
-      });
+      let res: Response;
+      if (refFile) {
+        const fd = new FormData();
+        fd.append('mode', mode);
+        fd.append('instructions', instructions);
+        fd.append('model', model);
+        fd.append('quality', quality);
+        fd.append('format', format);
+        fd.append('compression', String(compression));
+        fd.append('width', String(width));
+        fd.append('height', String(height));
+        fd.append('image', refFile);
+        res = await fetch('/api/images/generate', { method: 'POST', body: fd });
+      } else {
+        res = await fetch('/api/images/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instructions, model, quality, format, compression, width, height }),
+        });
+      }
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Generation failed');
-      setResult({ url: json.url, filename: json.filename, size: json.size });
+      setResult({ url: json.url, filename: json.filename, size: json.size, styleApplied: json.styleApplied, usedReference: json.usedReference });
     } catch (e: any) {
       setErr(e?.message || String(e));
     } finally {
@@ -105,7 +129,42 @@ export default function EducativeImagesPage() {
         </p>
       </div>
 
-      {/* Fixed style block */}
+      {/* Mode */}
+      <div className="card p-1 flex gap-1">
+        {([['create', 'Create'], ['edit', 'Edit an image']] as const).map(([m, label]) => (
+          <button key={m} onClick={() => { setMode(m); setErr(''); }}
+            className={`flex-1 text-sm py-2 rounded-lg transition-colors ${mode === m ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : 'text-[var(--text-dim)] hover:text-[var(--text)]'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Image input */}
+      <div className="card p-5 space-y-2">
+        <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
+          {mode === 'edit' ? 'Image to edit' : 'Reference image (optional)'}
+        </label>
+        <p className="text-[11px] text-[var(--text-faint)]">
+          {mode === 'edit'
+            ? 'The change is applied inside this image. The house style is not re-applied, since the image already has one.'
+            : 'If supplied, the new image is drawn with this one as a reference. The house style still applies.'}
+        </p>
+        <div className="flex items-start gap-3 flex-wrap">
+          <input type="file" accept="image/*" disabled={busy}
+            onChange={(e) => pickFile(e.target.files?.[0] || null)}
+            className="text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--panel-2)] file:text-[var(--text-dim)] file:text-xs" />
+          {refPreview && (
+            <div className="relative">
+              <img src={refPreview} alt="Reference" className="h-24 rounded-lg border border-[var(--border)] bg-white object-contain" />
+              <button onClick={() => pickFile(null)} disabled={busy}
+                className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[var(--panel)] border border-[var(--border)] text-xs leading-none hover:text-red-400">×</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Fixed style block — not sent when editing */}
+      {mode === 'create' && (
       <div className="card p-5 space-y-2">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
@@ -182,21 +241,26 @@ export default function EducativeImagesPage() {
           />
         )}
       </div>
+      )}
 
       {/* User instructions */}
       <div className="card p-5 space-y-1.5">
         <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
-          What should the image show?
+          {mode === 'edit' ? 'What should change?' : 'What should the image show?'}
         </label>
         <textarea
           className="input w-full text-sm min-h-[120px]"
-          placeholder="e.g. A horizontal flow of three stages: Client, API gateway, and Database, connected by arrows."
+          placeholder={mode === 'edit'
+            ? 'e.g. Change the database cylinder to green and relabel it "Read replica".'
+            : 'e.g. A horizontal flow of three stages: Client, API gateway, and Database, connected by arrows.'}
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
           disabled={busy}
         />
         <p className="text-[11px] text-[var(--text-faint)]">
-          Sent as <code>#&nbsp;Create</code> after the style block.
+          {mode === 'edit'
+            ? 'Sent on its own — the style block is not included.'
+            : <>Sent as <code>#&nbsp;Create</code> after the style block.</>}
         </p>
       </div>
 
@@ -285,7 +349,7 @@ export default function EducativeImagesPage() {
           disabled={busy || !valid || !instructions.trim()}
         >
           {busy && <span className="h-3.5 w-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin inline-block" />}
-          {busy ? 'Generating…' : 'Generate'}
+          {busy ? (mode === 'edit' ? 'Editing…' : 'Generating…') : mode === 'edit' ? 'Apply edit' : 'Generate'}
         </button>
       </div>
 
@@ -295,7 +359,11 @@ export default function EducativeImagesPage() {
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <p className="text-sm font-semibold">Generated image</p>
-              <p className="text-[11px] text-[var(--text-faint)] mt-0.5">{result.size} · {result.filename}</p>
+              <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
+                {result.size} · {result.filename}
+                {result.usedReference && ' · from reference'}
+                {result.styleApplied === false && ' · house style not applied'}
+              </p>
             </div>
             <a href={result.url} download={result.filename} className="btn-primary text-xs py-1.5 px-4 shrink-0">
               Download
