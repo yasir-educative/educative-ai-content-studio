@@ -24,6 +24,7 @@ interface Ids { authorId?: string; collectionId?: string; pageId?: string; lesso
 interface Detail extends Issue {
   description: string; comments: Comment[]; resolution: string;
   ids: Ids; fields: Array<{ name: string; value: string }>;
+  fenzoSllId?: string;
   reporterId?: string; assigneeId?: string;
 }
 interface Transition { id: string; name: string; to: string; toCategory: string }
@@ -729,9 +730,13 @@ export default function ContentQueriesPage() {
   const activeProject = projects.find((p) => p.key === cfg.projectKey) || null;
   // AI analysis answers content queries against a lesson, so it only applies to
   // the query board or a ticket that actually references one.
+  // Analysis needs content to read: an Educative lesson, or a Fenzo PAL
+  // session. FSB tickets carry the latter, so key-prefix alone is not enough.
   const canAnalyze = !!detail && (
     detail.key.split('-')[0] === cfg.projectKey ||
-    !!(detail.ids.pageId || detail.ids.lessonUrl)
+    !!detail.ids.pageId ||
+    !!detail.ids.lessonUrl ||
+    !!detail.fenzoSllId
   );
 
   // Inactive boards and ones the user hid are kept out of the picker. A search

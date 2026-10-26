@@ -2,6 +2,7 @@
 // Read-only for now: verify the connection and list matching issues.
 
 import { getJiraConfig, isConfigured, type JiraConfig } from './jiraStore';
+import { extractSllId } from './fenzoLesson';
 
 const USER_AGENT = 'EducativeContentStudio/1.0 (+https://www.educative.io)';
 
@@ -407,6 +408,8 @@ export function adfToText(node: any, depth = 0): string {
 export interface JiraComment { author: string; created: string; body: string }
 
 export interface JiraIssueDetail extends JiraIssue {
+  /** Fenzo PAL lesson id, when the ticket points at one instead of a lesson. */
+  fenzoSllId: string;
   /** Account ids, needed to build an @-mention in a comment. */
   reporterId: string;
   assigneeId: string;
@@ -471,6 +474,11 @@ export async function fetchIssue(c: JiraConfig, key: string): Promise<JiraIssueD
 
   return {
     ...base,
+    fenzoSllId: extractSllId(
+      description,
+      base.summary,
+      ...fields.map((x) => `${x.name}: ${x.value}`),
+    ),
     reporterId: f.reporter?.accountId || '',
     assigneeId: f.assignee?.accountId || '',
     description,
