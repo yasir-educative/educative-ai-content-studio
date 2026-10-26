@@ -191,7 +191,7 @@ export default function ContentQueriesPage() {
   const [projQuery, setProjQuery] = useState('');
   const [projLoading, setProjLoading] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(true);
   const [allStatuses, setAllStatuses] = useState(false);
 
   const [statuses, setStatuses] = useState<Status[]>([]);
