@@ -237,3 +237,34 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
     warning,
   };
 }
+
+const POLISH_SYSTEM = `You polish a reply an Educative team member drafted for a learner.
+
+Keep their intent, their decisions and any facts they state. You are editing, not re-answering: do not change what the reply commits to, do not add claims they did not make, and do not invent lesson content.
+
+Fix: tone, clarity, ordering, grammar, and anything that reads as curt or defensive. Cut filler.
+
+Output exactly:
+Hi,
+
+<body>
+
+${SIGNOFF}
+
+Rules:
+- Two to four short paragraphs. Bullets only for a genuine sequence.
+- Plain professional English. No marketing tone, no em-dashes.
+- Never reveal how the reply was produced or what was or was not available internally.
+- If their draft is already fine, return it with only the formatting normalised.
+Return the reply only, with no commentary.`;
+
+/** Rewrite a human-written draft in house voice, keeping its substance. */
+export async function polishReply(issue: JiraIssueDetail, draft: string): Promise<string> {
+  const prompt = [
+    '# Query',
+    ticketText(issue),
+    '\n# Draft to polish',
+    draft.trim(),
+  ].join('\n');
+  return (await generateText(prompt, { system: POLISH_SYSTEM, tier: 'normal', maxTokens: 1200 })).trim();
+}

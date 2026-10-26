@@ -110,6 +110,10 @@ export default function ContentQueriesPage() {
   const [replyDraft, setReplyDraft] = useState('');
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [savingReply, setSavingReply] = useState(false);
+  const [polishing, setPolishing] = useState(false);
+  const [polishErr, setPolishErr] = useState('');
+  // Draft before the last polish, so one click can undo it.
+  const [prePolish, setPrePolish] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
   const [postMsg, setPostMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [transitions, setTransitions] = useState<Transition[]>([]);
@@ -240,7 +244,7 @@ export default function ContentQueriesPage() {
     if (!selected) { setDetail(null); return; }
     let cancelled = false;
     setDetailLoading(true); setDetail(null); setAnalysis(null); setReplyDraft(''); setSavedAt(null);
-    setPostMsg(null); setTransitions([]); setTransitionId('');
+    setPostMsg(null); setTransitions([]); setTransitionId(''); setPrePolish(null); setPolishErr('');
     setMention(null); setUserQuery(''); setUserHits([]); setPickingUser(false);
     // Transitions are per-issue and workflow-specific, so load the real list
     // rather than assuming a status name exists.
@@ -474,6 +478,22 @@ export default function ContentQueriesPage() {
     return () => { clearTimeout(t); setUserSearching(false); };
   }, [userQuery, pickingUser]);
 
+  async function polish() {
+    if (!detail || !replyDraft.trim()) return;
+    setPolishing(true); setPolishErr('');
+    const before = replyDraft;
+    try {
+      const r = await fetch('/api/jira/polish', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: detail.key, draft: replyDraft }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || 'Polish failed');
+      setPrePolish(before);
+      setReplyDraft(j.reply);
+    } catch (e: any) { setPolishErr(e?.message || String(e)); } finally { setPolishing(false); }
+  }
+
   async function postUpdate() {
     if (!detail || !replyDraft.trim()) return;
     const mentionId = mention?.accountId || '';
@@ -509,6 +529,12 @@ export default function ContentQueriesPage() {
 
   const upd = (p: Partial<Cfg>) => setForm((f) => ({ ...f, ...p }));
   const activeProject = projects.find((p) => p.key === cfg.projectKey) || null;
+  // AI analysis answers content queries against a lesson, so it only applies to
+  // the query board or a ticket that actually references one.
+  const canAnalyze = !!detail && (
+    detail.key.split('-')[0] === cfg.projectKey ||
+    !!(detail.ids.pageId || detail.ids.lessonUrl)
+  );
 
   // Inactive boards and ones the user hid are kept out of the picker. A search
   // still reaches hidden boards, so nothing becomes unreachable by accident.
@@ -924,10 +950,12 @@ export default function ContentQueriesPage() {
                         {detail.labels.map((l) => <span key={l} className="pill text-[10px] py-0 px-1.5">{l}</span>)}
                       </div>
                     )}
+                    {canAnalyze && (
                     <button className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5" onClick={() => analyze(detail.key)} disabled={analyzing}>
                       {analyzing && <span className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin inline-block" />}
                       {analyzing ? 'Analyzing…' : analysis && !analysis.error ? '✦ Re-analyze' : '✦ AI analysis'}
                     </button>
+                    )}
                   </div>
 
                   {analysis && (
@@ -988,28 +1016,53 @@ export default function ContentQueriesPage() {
                             </p>
                           )}
 
-                          <textarea
-                            value={replyDraft}
-                            onChange={(e) => setReplyDraft(e.target.value)}
-                            spellCheck={false}
-                            className="input w-full text-xs leading-relaxed min-h-[220px] font-sans"
-                          />
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <button className="btn-secondary text-xs py-1.5 px-3" onClick={saveReply} disabled={savingReply || !replyDraft.trim()}>
-                              {savingReply ? 'Saving…' : savedAt ? 'Save changes' : 'Save reply'}
-                            </button>
-                            {savedAt && (
-                              <span className="text-[10px] text-emerald-700 dark:text-emerald-300">
-                                saved {new Date(savedAt).toLocaleString()}
-                              </span>
-                            )}
-                            {replyDraft !== (analysis.reply || '') && (
-                              <button className="text-[10px] text-[var(--text-faint)] hover:text-[var(--text)]"
-                                onClick={() => setReplyDraft(analysis.reply || '')}>
-                                revert to generated
-                              </button>
-                            )}
-                          </div>
+
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Reply — usable with or without an AI draft */}
+                  <div className="px-4 py-3 border-b border-[var(--border)] space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">Reply</span>
+                      <button className="text-[10px] text-[var(--text-faint)] hover:text-[var(--accent)] ml-auto"
+                        onClick={() => navigator.clipboard?.writeText(replyDraft)} disabled={!replyDraft.trim()}>
+                        copy
+                      </button>
+                    </div>
+                    <textarea
+                      value={replyDraft}
+                      onChange={(e) => setReplyDraft(e.target.value)}
+                      spellCheck={false}
+                      placeholder="Write the reply, or generate one above and edit it."
+                      className="input w-full text-xs leading-relaxed min-h-[200px] font-sans"
+                    />
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+                        onClick={polish} disabled={polishing || !replyDraft.trim()}>
+                        {polishing && <span className="h-3 w-3 rounded-full border-2 border-current/30 border-t-current animate-spin inline-block" />}
+                        {polishing ? 'Polishing…' : '✦ Polish with AI'}
+                      </button>
+                      <button className="btn-secondary text-xs py-1.5 px-3" onClick={saveReply} disabled={savingReply || !replyDraft.trim()}>
+                        {savingReply ? 'Saving…' : savedAt ? 'Save changes' : 'Save reply'}
+                      </button>
+                      {savedAt && <span className="text-[10px] text-emerald-700 dark:text-emerald-300">saved {new Date(savedAt).toLocaleString()}</span>}
+                      {prePolish !== null && replyDraft !== prePolish && (
+                        <button className="text-[10px] text-[var(--text-faint)] hover:text-[var(--text)]"
+                          onClick={() => { setReplyDraft(prePolish); setPrePolish(null); }}>
+                          undo polish
+                        </button>
+                      )}
+                      {analysis?.reply && replyDraft !== analysis.reply && (
+                        <button className="text-[10px] text-[var(--text-faint)] hover:text-[var(--text)]"
+                          onClick={() => setReplyDraft(analysis.reply)}>
+                          revert to generated
+                        </button>
+                      )}
+                    </div>
+                    {polishErr && <p className="text-[11px] text-red-600 dark:text-red-300">{polishErr}</p>}
+                  </div>
 
                           {/* Post to Jira */}
                           <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-2">
@@ -1091,10 +1144,6 @@ export default function ContentQueriesPage() {
                               </p>
                             )}
                           </div>
-                        </>
-                      )}
-                    </div>
-                  )}
 
                   <div className="px-4 py-3 space-y-4">
                     {(detail.ids.authorId || detail.ids.collectionId || detail.ids.pageId || detail.ids.lessonUrl) && (
