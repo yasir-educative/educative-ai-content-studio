@@ -191,6 +191,8 @@ export default function ContentQueriesPage() {
   const [projQuery, setProjQuery] = useState('');
   const [projLoading, setProjLoading] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [allStatuses, setAllStatuses] = useState(false);
 
   const [statuses, setStatuses] = useState<Status[]>([]);
   const [active, setActive] = useState<string[]>([]);
@@ -770,6 +772,16 @@ export default function ContentQueriesPage() {
     return m;
   }, [issues]);
 
+  const activeFilterCount =
+    active.length + Object.values(facetSel).filter(Boolean).length + (mine ? 1 : 0) + (scope.length ? 1 : 0);
+  // 13 statuses wrap to two rows and most are empty on any given query, so
+  // lead with the ones that actually match and keep the rest behind a toggle.
+  const visibleStatuses = useMemo(() => {
+    if (allStatuses) return statuses;
+    const useful = statuses.filter((st) => counts.get(st.name) || active.includes(st.name));
+    return useful.length ? useful : statuses.slice(0, 6);
+  }, [statuses, counts, active, allStatuses]);
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -1072,6 +1084,21 @@ export default function ContentQueriesPage() {
               </div>
             )}
 
+            <button
+              onClick={() => setFiltersOpen((v) => !v)}
+              className="flex items-center gap-2 w-full text-left pb-1.5 text-[11px] text-[var(--text-dim)] hover:text-[var(--text)] transition-colors"
+            >
+              <span className="text-[10px]">{filtersOpen ? '▾' : '▸'}</span>
+              <span className="font-medium">Filters</span>
+              {activeFilterCount > 0 && (
+                <span className="text-[10px] rounded-full px-1.5 py-0.5 bg-[var(--accent)] text-white font-semibold">{activeFilterCount}</span>
+              )}
+              {!filtersOpen && active.length > 0 && (
+                <span className="text-[10px] text-[var(--text-faint)] truncate">{active.join(', ')}</span>
+              )}
+            </button>
+
+            {filtersOpen && (<>
             <div className="flex items-start gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
               <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 w-12 shrink-0 pt-1.5">Status</span>
               <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
@@ -1081,7 +1108,7 @@ export default function ContentQueriesPage() {
               >
                 All{total !== null ? ` (${total.toLocaleString()})` : issues ? ` (${issues.length})` : ''}
               </button>
-              {statuses.map((s) => {
+              {visibleStatuses.map((s) => {
                 const on = active.includes(s.name);
                 const n = counts.get(s.name);
                 return (
@@ -1092,6 +1119,14 @@ export default function ContentQueriesPage() {
                 );
               })}
               {statuses.length === 0 && <span className="text-xs text-[var(--text-faint)]">No status filters available</span>}
+              {statuses.length > visibleStatuses.length && (
+                <button onClick={() => setAllStatuses(true)} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)] px-1">
+                  +{statuses.length - visibleStatuses.length} more
+                </button>
+              )}
+              {allStatuses && statuses.length > 6 && (
+                <button onClick={() => setAllStatuses(false)} className="text-[11px] text-[var(--text-faint)] hover:text-[var(--text)] px-1">less</button>
+              )}
               </div>
             </div>
             {facets.length > 0 && (
@@ -1123,12 +1158,14 @@ export default function ContentQueriesPage() {
               </div>
             )}
 
+            </>)}
+
             <input className="input w-full text-sm" placeholder="Search all queries — text, or an issue key like PSB2C-20468…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
 
           {issuesErr && <div className="card p-3 text-sm text-red-300 border-red-500/40 bg-red-500/10">{issuesErr}</div>}
 
-          <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] gap-4 items-start">
+          <div className={`grid gap-4 items-start ${selected ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]' : 'grid-cols-1'}`}>
             {/* List */}
             <div className="card p-0 overflow-hidden">
               <div className="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between">
@@ -1165,13 +1202,8 @@ export default function ContentQueriesPage() {
             </div>
 
             {/* Detail */}
+            {selected && (
             <div className="card p-0 overflow-hidden lg:sticky lg:top-20">
-              {!selected && (
-                <div className="px-4 py-12 text-center space-y-1">
-                  <p className="text-3xl opacity-40">◧</p>
-                  <p className="text-sm text-[var(--text-faint)]">Select a query to see its details.</p>
-                </div>
-              )}
               {selected && detailLoading && <p className="text-sm text-[var(--text-faint)] px-4 py-10 text-center">Loading {selected}…</p>}
               {selected && !detailLoading && !detail && <p className="text-sm text-red-300 px-4 py-10 text-center">Could not load {selected}.</p>}
               {detail && (
@@ -1397,6 +1429,7 @@ export default function ContentQueriesPage() {
                 </div>
               )}
             </div>
+            )}
           </div>
         </>
       )}
