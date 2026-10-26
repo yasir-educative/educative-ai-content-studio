@@ -7,6 +7,7 @@
 
 import { generateText, generateTextWithImages, parseJsonLoose } from './ai';
 import { fetchImageAsDataUrl, fetchLessonMarkdown } from './educativeLesson';
+import { extractSllId, fenzoLessonToMarkdown, fetchFenzoLesson, resolveTarget } from './fenzoLesson';
 import type { JiraIssueDetail } from './jira';
 
 const SIGNOFF = 'Best regards,\nThe Educative Team';
@@ -164,7 +165,35 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
   let warning: string | undefined;
   const { authorId, collectionId, pageId } = issue.ids;
 
-  if (needsLesson) {
+  // Two content sources. Educative lessons are keyed by author/collection/page;
+  // Fenzo PAL lessons by sll_id, on either fenzo.ai or a master environment.
+  // The ticket's own fields decide which, so a board can carry both.
+  const fieldText = [
+    issue.description,
+    issue.summary,
+    ...issue.fields.map((f) => `${f.name}: ${f.value}`),
+  ].join('\n');
+  const sllId = extractSllId(fieldText);
+
+  if (needsLesson && !(authorId && collectionId && pageId) && sllId) {
+    try {
+      const target = resolveTarget(fieldText);
+      const fl = await fetchFenzoLesson(sllId, target);
+      if (fl) {
+        lesson = {
+          title: fl.lesson_title,
+          markdown: fenzoLessonToMarkdown(fl),
+          url: `${target.base.replace(/\/api$/, '')}/pal/${fl.sll_id}/0`,
+          images: [],
+          kind: 'lesson',
+        };
+      } else {
+        warning = 'The lesson could not be read, so the reply is based on the ticket alone.';
+      }
+    } catch (e: any) {
+      warning = `Lesson fetch failed (${e?.message || e}). The reply is based on the ticket alone.`;
+    }
+  } else if (needsLesson) {
     if (authorId && collectionId && pageId) {
       try {
         lesson = await fetchLessonMarkdown(authorId, collectionId, pageId);
