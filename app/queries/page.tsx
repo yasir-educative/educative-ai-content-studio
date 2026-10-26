@@ -337,6 +337,9 @@ export default function ContentQueriesPage() {
     const saved = cfg.defaultFacets || {};
     setFacetSel(saved);
     loadIssues([], mine, scope, search, saved, assignee?.accountId || '');
+    // Names for the board boxes come from here, so load it up front rather
+    // than only when the picker is opened.
+    if (projects.length === 0) loadProjects();
     fetch('/api/jira/facets', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { setFacets(j.facets || []); setFacetProject(j.project || ''); })
