@@ -15,6 +15,7 @@ export default function EducativeImagesPage() {
   const [mode, setMode] = useState<'create' | 'edit'>('create');
   const [refFile, setRefFile] = useState<File | null>(null);
   const [refPreview, setRefPreview] = useState<string>('');
+  const [dragging, setDragging] = useState(false);
   const [instructions, setInstructions] = useState('');
   const [model, setModel] = useState<string>(IMAGE_MODELS[0]);
   const [quality, setQuality] = useState<string>('high');
@@ -76,6 +77,7 @@ export default function EducativeImagesPage() {
   const lossless = format === 'png';
 
   function pickFile(f: File | null) {
+    if (f) setErr('');
     setRefFile(f);
     setRefPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return f ? URL.createObjectURL(f) : ''; });
   }
@@ -150,11 +152,39 @@ export default function EducativeImagesPage() {
             : 'If supplied, the new image is drawn with this one as a reference. The house style still applies.'}
         </p>
         <div className="flex items-start gap-3 flex-wrap">
-          <input type="file" accept="image/*" disabled={busy}
-            onChange={(e) => pickFile(e.target.files?.[0] || null)}
-            className="text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--panel-2)] file:text-[var(--text-dim)] file:text-xs" />
+          {/* Click, drag and drop, or paste all land in pickFile. */}
+          <label
+            onDragOver={(e) => { e.preventDefault(); if (!busy) setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              if (busy) return;
+              const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/'));
+              if (f) pickFile(f); else setErr('Drop an image file');
+            }}
+            onPaste={(e) => {
+              const f = Array.from(e.clipboardData.files).find((x) => x.type.startsWith('image/'));
+              if (f && !busy) pickFile(f);
+            }}
+            tabIndex={0}
+            className={`flex-1 min-w-[16rem] rounded-xl border-2 border-dashed px-4 py-5 text-center cursor-pointer transition-colors ${
+              dragging
+                ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
+                : 'border-[var(--border)] hover:border-[var(--text-faint)]'
+            } ${busy ? 'opacity-50 pointer-events-none' : ''}`}
+          >
+            <input type="file" accept="image/*" disabled={busy} className="hidden"
+              onChange={(e) => pickFile(e.target.files?.[0] || null)} />
+            <p className="text-xs text-[var(--text-dim)]">
+              {dragging ? 'Drop to use this image' : <>Drag an image here, <span className="text-[var(--accent)] underline">choose a file</span>, or paste</>}
+            </p>
+            {refFile && !dragging && (
+              <p className="text-[10px] text-[var(--text-faint)] mt-1 truncate">{refFile.name}</p>
+            )}
+          </label>
           {refPreview && (
-            <div className="relative">
+            <div className="relative shrink-0">
               <img src={refPreview} alt="Reference" className="h-24 rounded-lg border border-[var(--border)] bg-white object-contain" />
               <button onClick={() => pickFile(null)} disabled={busy}
                 className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[var(--panel)] border border-[var(--border)] text-xs leading-none hover:text-red-400">×</button>
