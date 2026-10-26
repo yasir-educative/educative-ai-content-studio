@@ -12,7 +12,7 @@ type PromptItem = {
   pipeline: string;
 };
 
-type TabId = 'blog' | 'newsletter' | 'course' | 'outline' | 'mobile-course' | 'mobile-short';
+type TabId = 'blog' | 'newsletter' | 'course' | 'outline' | 'mobile-course' | 'mobile-short' | 'queries';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'blog',          label: 'Blog'          },
@@ -20,6 +20,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'course',        label: 'Course'        },
   { id: 'mobile-course', label: 'Mobile Course' },
   { id: 'mobile-short',  label: 'Mobile Short'  },
+  { id: 'queries',       label: 'Queries'       },
   { id: 'outline',       label: 'Outline'       },
 ];
 
@@ -29,6 +30,7 @@ const PIPELINE_LABEL: Record<string, string> = {
   course:          'Course pipeline',
   'mobile-course': 'Mobile course pipeline',
   'mobile-short':  'Mobile short pipeline',
+  'queries':       'Content Queries — triage, drafting and polish',
   outline:         'Outline pipeline',
   shared:          'Shared (Blog + Newsletter)',
 };

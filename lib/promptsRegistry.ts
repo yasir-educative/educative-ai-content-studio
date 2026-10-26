@@ -53,3 +53,6 @@ export * from './mobileCoursePromptsRegistry';
 
 // --- Mobile Short pipeline ---
 export * from './mobileShortsPromptsRegistry';
+
+// Content Queries pipeline
+export * from './queryPromptsRegistry';

@@ -29,7 +29,7 @@ export interface StoredPrompt {
   editable: boolean;
 }
 
-export type PromptPipeline = 'outline' | 'blog' | 'newsletter' | 'course' | 'shared' | 'mobile-course' | 'mobile-short';
+export type PromptPipeline = 'outline' | 'blog' | 'newsletter' | 'course' | 'shared' | 'mobile-course' | 'mobile-short' | 'queries';
 
 interface RegistryEntry {
   name: string;
