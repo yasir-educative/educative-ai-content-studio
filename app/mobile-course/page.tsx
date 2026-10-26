@@ -59,14 +59,14 @@ export default function MobileCourseListPage() {
 
   useEffect(() => {
     const hasRunning = courses.some((c) => c.status === 'running');
-    if (hasRunning && !coursePollRef.current) coursePollRef.current = setInterval(() => refreshCourses(false), 3000);
+    if (hasRunning && !coursePollRef.current) coursePollRef.current = setInterval(() => { if (!document.hidden) refreshCourses(false); }, 5000);
     else if (!hasRunning && coursePollRef.current) { clearInterval(coursePollRef.current); coursePollRef.current = null; }
     return () => { if (coursePollRef.current) { clearInterval(coursePollRef.current); coursePollRef.current = null; } };
   }, [courses]);
 
   useEffect(() => {
     const hasRunning = shorts.some((s) => s.status === 'running');
-    if (hasRunning && !shortPollRef.current) shortPollRef.current = setInterval(() => refreshShorts(false), 3000);
+    if (hasRunning && !shortPollRef.current) shortPollRef.current = setInterval(() => { if (!document.hidden) refreshShorts(false); }, 5000);
     else if (!hasRunning && shortPollRef.current) { clearInterval(shortPollRef.current); shortPollRef.current = null; }
     return () => { if (shortPollRef.current) { clearInterval(shortPollRef.current); shortPollRef.current = null; } };
   }, [shorts]);

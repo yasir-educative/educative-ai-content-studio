@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Field } from '../_components/Field';
 
@@ -70,6 +70,93 @@ function priorityClasses(p: string) {
   if (v.startsWith('p2')) return 'text-amber-900 dark:text-amber-200 bg-amber-200 dark:bg-amber-900/50 border-amber-400';
   return 'text-[var(--text-faint)] border-[var(--border)]';
 }
+
+const DetailBody = memo(function DetailBody({ detail }: { detail: Detail }) {
+  return (
+                  <div className="px-4 py-3 space-y-4">
+                    {(detail.ids.authorId || detail.ids.collectionId || detail.ids.pageId || detail.ids.lessonUrl) && (
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] mb-1.5">Educative references</p>
+                        <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-1.5">
+                          {([['Author ID', detail.ids.authorId], ['Collection ID', detail.ids.collectionId], ['Page ID', detail.ids.pageId]] as const).map(([label, val]) =>
+                            val ? (
+                              <div key={label} className="flex items-center gap-2 text-xs">
+                                <span className="text-[var(--text-faint)] w-24 shrink-0">{label}</span>
+                                <code className="text-[var(--text)] font-mono">{val}</code>
+                                <button className="text-[10px] text-[var(--text-faint)] hover:text-[var(--accent)] ml-auto"
+                                  onClick={() => navigator.clipboard?.writeText(String(val))}>copy</button>
+                              </div>
+                            ) : null,
+                          )}
+                          {detail.ids.lessonUrl && (
+                            <a href={detail.ids.lessonUrl} target="_blank" rel="noreferrer"
+                              className="text-xs text-[var(--accent)] hover:underline break-all block pt-0.5">
+                              {detail.ids.lessonUrl} ↗
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {detail.fields.length > 0 && (
+                      <details className="group">
+                        <summary className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] cursor-pointer select-none hover:text-[var(--text-dim)]">
+                          Jira fields ({detail.fields.length})
+                        </summary>
+                        <div className="mt-1.5 rounded-lg border border-[var(--border)] divide-y divide-[var(--border)]">
+                          {detail.fields.map((fl) => (
+                            <div key={fl.name} className="flex gap-2 px-2.5 py-1.5 text-xs">
+                              <span className="text-[var(--text-faint)] w-40 shrink-0 truncate">{fl.name}</span>
+                              <span className="text-[var(--text-dim)] break-words min-w-0">{fl.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] mb-1.5">Description</p>
+                      {detail.description
+                        ? <pre className="text-xs text-[var(--text-dim)] whitespace-pre-wrap font-sans leading-relaxed">{detail.description}</pre>
+                        : <p className="text-xs text-[var(--text-faint)] italic">No description.</p>}
+                    </div>
+                    {detail.comments.length > 0 && (
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] mb-1.5">Comments ({detail.comments.length})</p>
+                        <div className="space-y-2">
+                          {detail.comments.map((c, idx) => (
+                            <div key={idx} className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5">
+                              <p className="text-[10px] text-[var(--text-faint)] mb-1">{c.author} · {relative(c.created)}</p>
+                              <pre className="text-xs text-[var(--text-dim)] whitespace-pre-wrap font-sans leading-relaxed">{c.body}</pre>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+  );
+});
+
+const QueryRow = memo(function QueryRow({
+  i, isSelected, onSelect,
+}: { i: Issue; isSelected: boolean; onSelect: (k: string) => void }) {
+  return (
+    <button onClick={() => onSelect(i.key)}
+      className={`w-full text-left px-3 py-2.5 transition-colors border-l-[3px] ${
+        isSelected ? 'bg-[var(--accent-soft)] border-[var(--accent)]' : `hover:bg-[var(--panel-2)] ${railFor(i.statusCategory)}`
+      }`}>
+      <div className="flex items-start gap-2">
+        <span className="text-[11px] font-mono text-[var(--text-faint)] shrink-0 pt-0.5">{i.key}</span>
+        <span className={`text-[10px] rounded px-1.5 py-0.5 border shrink-0 ml-auto ${categoryClasses(i.statusCategory)}`}>{i.status}</span>
+      </div>
+      <p className="text-sm text-[var(--text)] leading-snug mt-1 line-clamp-2">{i.summary}</p>
+      <p className="text-[10px] text-[var(--text-faint)] mt-1 flex items-center gap-1.5">
+        {i.reporter && <Avatar name={i.reporter} />}
+        <span className="truncate">{i.issueType}{i.reporter && ` · ${i.reporter}`}{i.created && ` · ${relative(i.created)}`}</span>
+      </p>
+    </button>
+  );
+});
 
 function railFor(category: string) {
   if (category === 'done') return 'border-emerald-400/70';
@@ -562,6 +649,8 @@ export default function ContentQueriesPage() {
   }
 
   const upd = (p: Partial<Cfg>) => setForm((f) => ({ ...f, ...p }));
+  const selectQuery = useCallback((k: string) => setSelected(k), []);
+
   const activeProject = projects.find((p) => p.key === cfg.projectKey) || null;
   // AI analysis answers content queries against a lesson, so it only applies to
   // the query board or a ticket that actually references one.
@@ -929,22 +1018,7 @@ export default function ContentQueriesPage() {
                 {loading && <p className="text-sm text-[var(--text-faint)] px-3 py-4">Fetching from Jira…</p>}
                 {shown?.length === 0 && !loading && <p className="text-sm text-[var(--text-faint)] px-3 py-4">No queries matched.</p>}
                 {shown?.map((i) => (
-                  <button key={i.key} onClick={() => setSelected(i.key)}
-                    className={`w-full text-left px-3 py-2.5 transition-colors border-l-[3px] ${
-                      selected === i.key
-                        ? 'bg-[var(--accent-soft)] border-[var(--accent)]'
-                        : `hover:bg-[var(--panel-2)] ${railFor(i.statusCategory)}`
-                    }`}>
-                    <div className="flex items-start gap-2">
-                      <span className="text-[11px] font-mono text-[var(--text-faint)] shrink-0 pt-0.5">{i.key}</span>
-                      <span className={`text-[10px] rounded px-1.5 py-0.5 border shrink-0 ml-auto ${categoryClasses(i.statusCategory)}`}>{i.status}</span>
-                    </div>
-                    <p className="text-sm text-[var(--text)] leading-snug mt-1 line-clamp-2">{i.summary}</p>
-                    <p className="text-[10px] text-[var(--text-faint)] mt-1 flex items-center gap-1.5">
-                      {i.reporter && <Avatar name={i.reporter} />}
-                      <span className="truncate">{i.issueType}{i.reporter && ` · ${i.reporter}`}{i.created && ` · ${relative(i.created)}`}</span>
-                    </p>
-                  </button>
+                  <QueryRow key={i.key} i={i} isSelected={selected === i.key} onSelect={selectQuery} />
                 ))}
 
                 {/* Scrolling this into view pulls the next page. */}
@@ -1193,67 +1267,7 @@ export default function ContentQueriesPage() {
                             )}
                           </div>
 
-                  <div className="px-4 py-3 space-y-4">
-                    {(detail.ids.authorId || detail.ids.collectionId || detail.ids.pageId || detail.ids.lessonUrl) && (
-                      <div>
-                        <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] mb-1.5">Educative references</p>
-                        <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5 space-y-1.5">
-                          {([['Author ID', detail.ids.authorId], ['Collection ID', detail.ids.collectionId], ['Page ID', detail.ids.pageId]] as const).map(([label, val]) =>
-                            val ? (
-                              <div key={label} className="flex items-center gap-2 text-xs">
-                                <span className="text-[var(--text-faint)] w-24 shrink-0">{label}</span>
-                                <code className="text-[var(--text)] font-mono">{val}</code>
-                                <button className="text-[10px] text-[var(--text-faint)] hover:text-[var(--accent)] ml-auto"
-                                  onClick={() => navigator.clipboard?.writeText(String(val))}>copy</button>
-                              </div>
-                            ) : null,
-                          )}
-                          {detail.ids.lessonUrl && (
-                            <a href={detail.ids.lessonUrl} target="_blank" rel="noreferrer"
-                              className="text-xs text-[var(--accent)] hover:underline break-all block pt-0.5">
-                              {detail.ids.lessonUrl} ↗
-                            </a>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {detail.fields.length > 0 && (
-                      <details className="group">
-                        <summary className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] cursor-pointer select-none hover:text-[var(--text-dim)]">
-                          Jira fields ({detail.fields.length})
-                        </summary>
-                        <div className="mt-1.5 rounded-lg border border-[var(--border)] divide-y divide-[var(--border)]">
-                          {detail.fields.map((fl) => (
-                            <div key={fl.name} className="flex gap-2 px-2.5 py-1.5 text-xs">
-                              <span className="text-[var(--text-faint)] w-40 shrink-0 truncate">{fl.name}</span>
-                              <span className="text-[var(--text-dim)] break-words min-w-0">{fl.value}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </details>
-                    )}
-
-                    <div>
-                      <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] mb-1.5">Description</p>
-                      {detail.description
-                        ? <pre className="text-xs text-[var(--text-dim)] whitespace-pre-wrap font-sans leading-relaxed">{detail.description}</pre>
-                        : <p className="text-xs text-[var(--text-faint)] italic">No description.</p>}
-                    </div>
-                    {detail.comments.length > 0 && (
-                      <div>
-                        <p className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] mb-1.5">Comments ({detail.comments.length})</p>
-                        <div className="space-y-2">
-                          {detail.comments.map((c, idx) => (
-                            <div key={idx} className="rounded-lg border border-[var(--border)] bg-[var(--panel-2)] p-2.5">
-                              <p className="text-[10px] text-[var(--text-faint)] mb-1">{c.author} · {relative(c.created)}</p>
-                              <pre className="text-xs text-[var(--text-dim)] whitespace-pre-wrap font-sans leading-relaxed">{c.body}</pre>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  <DetailBody detail={detail} />
                 </div>
               )}
             </div>

@@ -3,11 +3,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import ReactMarkdown from 'react-markdown';
+
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { Stages, StageItem } from '@/app/_components/Stages';
 import { StageOutputs, StageOutputMap, StageLogMap } from '@/app/_components/StageOutputs';
+import dynamic from 'next/dynamic';
+// Lazy: react-markdown is ~40% of this route's JS and only renders below the fold.
+const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 
 const STAGE_ORDER = [
   'template-lesson',

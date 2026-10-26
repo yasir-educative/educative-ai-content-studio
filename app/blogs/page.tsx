@@ -44,7 +44,7 @@ export default function HistoryPage() {
   useEffect(() => {
     const hasRunning = blogs.some((b) => b.status === 'running');
     if (hasRunning && !pollRef.current) {
-      pollRef.current = setInterval(() => refresh(false), 3000);
+      pollRef.current = setInterval(() => { if (!document.hidden) refresh(false); }, 5000);
     } else if (!hasRunning && pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
