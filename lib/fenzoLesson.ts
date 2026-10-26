@@ -74,35 +74,37 @@ async function getLog(t: FenzoTarget, path: string): Promise<any[]> {
   return Array.isArray(json) ? json : [];
 }
 
-/** Log payloads nest arrays; flatten to the strings so prefixes can be matched. */
-function lines(log: any[]): string[] {
-  const out: string[] = [];
+/**
+ * A log is a list of [label, payload] pairs: the label carries the prefix and
+ * the value sits in the next element, not after the prefix in the same string.
+ * Reading the remainder of the label yields an empty string every time.
+ */
+type Pair = [string, any];
+
+function pairs(log: any[]): Pair[] {
+  const out: Pair[] = [];
   const walk = (v: any) => {
-    if (typeof v === 'string') out.push(v);
-    else if (Array.isArray(v)) v.forEach(walk);
-    else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+    if (!Array.isArray(v)) return;
+    if (v.length === 2 && typeof v[0] === 'string') { out.push([v[0], v[1]]); return; }
+    v.forEach(walk);
   };
   walk(log);
   return out;
 }
 
-const after = (ls: string[], prefix: string): string | null => {
-  const hit = ls.find((l) => l.includes(prefix));
-  return hit ? hit.slice(hit.indexOf(prefix) + prefix.length).trim() : null;
-};
-
-function jsonAfter<T = any>(ls: string[], prefix: string): T | null {
-  const raw = after(ls, prefix);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    // Some entries wrap the payload in prose; take the first balanced object.
-    const i = raw.search(/[[{]/);
-    if (i < 0) return null;
-    try { return JSON.parse(raw.slice(i)) as T; } catch { return null; }
-  }
+/** Payload of the first pair whose label contains `prefix`. */
+function payload<T = any>(ps: Pair[], prefix: string): T | null {
+  const hit = ps.find(([label]) => label.includes(prefix));
+  return hit ? (hit[1] as T) : null;
 }
+
+function payloadMatching<T = any>(ps: Pair[], re: RegExp): T | null {
+  const hit = ps.find(([label]) => re.test(label));
+  return hit ? (hit[1] as T) : null;
+}
+
+const asText = (v: any): string =>
+  typeof v === 'string' ? v : v == null ? '' : JSON.stringify(v);
 
 export interface FenzoWidget {
   section_index: number;
@@ -129,37 +131,40 @@ const RESPONSE_RE = /^(.*?)(?: \(fenzo\))?: Response:\s*/;
 const ILLUSTRATION_RE = /illustration_generator: type:\s*(d2|mermaid|graphviz|svg|ai_image|p5)\s+Response:\s*/;
 
 function parseWidgetSections(log: any[]): FenzoWidget[] {
-  const ls = lines(log);
+  const ps = pairs(log);
   const marks: number[] = [];
-  ls.forEach((l, i) => { if (l.includes('[generate-widget] Received request')) marks.push(i); });
+  ps.forEach(([label], i) => { if (label.includes('[generate-widget] Received request')) marks.push(i); });
   if (!marks.length) return [];
 
   const out: FenzoWidget[] = [];
   for (let m = 0; m < marks.length; m++) {
-    const seg = ls.slice(marks[m], marks[m + 1] ?? ls.length);
-    const req = jsonAfter<any>(seg, '[generate-widget] Received request') || {};
-    const inj = jsonAfter<any>(seg, '[interactivity_injector]') || {};
+    const seg = ps.slice(marks[m], marks[m + 1] ?? ps.length);
+    const req = payload<any>(seg, '[generate-widget] Received request') || {};
+    const inj = payload<any>(seg, '[interactivity_injector]') || {};
 
-    let output: any = null;
-    const ill = seg.find((l) => ILLUSTRATION_RE.test(l));
-    if (ill) {
-      try { output = JSON.parse(ill.replace(new RegExp(`^.*${ILLUSTRATION_RE.source}`), '')); }
-      catch { output = ill.replace(new RegExp(`^.*${ILLUSTRATION_RE.source}`), '').trim(); }
-    } else {
-      const respLine = seg.find((l) => /: Response:\s*/.test(l) && !l.includes('illustration_enhancer'));
-      if (respLine) {
-        const body = respLine.slice(respLine.indexOf(': Response:') + ': Response:'.length).trim();
-        try { output = JSON.parse(body); } catch { output = body; }
-      }
-    }
+    // The generator's name is the label, not a field in the request: a section
+    // answers as "<gen>: Response: " or "<gen> (fenzo): Response: ". The
+    // request payload only carries the full agent list, not the one chosen.
+    const respPair = seg.find(([l]) => ILLUSTRATION_RE.test(l))
+      ?? seg.find(([l]) => /: Response:/.test(l) && !l.startsWith('illustration_enhancer'));
+    const output = respPair ? respPair[1] : null;
+    const genName = respPair
+      ? respPair[0].replace(ILLUSTRATION_RE, 'illustration_generator')
+          .replace(/\s*\(fenzo\)/, '')
+          .replace(/:\s*Response:.*$/, '')
+          .trim()
+      : '';
+
+    // Mode lives in the widget-DB context for the section.
+    const dbCtx = payload<any>(seg, '[interactivity_injector] Widget DB resolved this section');
 
     out.push({
-      section_index: Number(req.section_index ?? inj.section_index ?? m) || m,
-      widget_type: String(req.widget_type || req.type || inj.widget_type || ''),
+      section_index: Number(req.section_index ?? req.sectionIndex ?? inj.section_index ?? m) || m,
+      widget_type: genName || String(req.widget_type || req.type || inj.widget_type || ''),
       widget_spec: req.widget_spec ?? req.spec ?? req,
-      widget_output: output,
-      widget_mode: String(inj.widget_mode || inj.mode || req.mode || ''),
-      resolved_prompt: after(seg, '[interactivity_injector] Resolved prompt') || '',
+      widget_output: output ?? null,
+      widget_mode: String(dbCtx?.ctx?.mode || inj.widget_mode || inj.mode || req.mode || ''),
+      resolved_prompt: asText(payload(seg, '[interactivity_injector] Resolved prompt') || ''),
     });
   }
   return out.sort((a, b) => a.section_index - b.section_index);
@@ -176,17 +181,19 @@ export async function fetchFenzoLesson(
     getLog(target, `/sll/${encodeURIComponent(sllId)}/widget_log`).catch(() => [] as any[]),
   ]);
 
-  const ls = lines(textLog);
-  const props = jsonAfter<any>(ls, 'Got props') || {};
-  const content = after(ls, 'content_generator: Response: ') || '';
-  if (!content) return null;
+  const ps = pairs(textLog);
+  const props = payload<any>(ps, 'Got props') || {};
+  // "text_content_generator" also matches a bare "content_generator" search,
+  // so anchor on the label actually used for the lesson body.
+  const content = asText(payloadMatching(ps, /(^|[^_])content_generator: Response:/));
+  if (!content.trim()) return null;
 
   return {
     platform: target.platform,
     sll_id: String(props.sll_id || sllId),
     lesson_title: String(props.user_query || ''),
     lesson_content: content,
-    components: jsonAfter<any[]>(ls, 'stream: widgets: ') || [],
+    components: payload<any[]>(ps, 'stream: widgets: ') || [],
     widgets_injected: parseWidgetSections(widgetLog),
   };
 }
