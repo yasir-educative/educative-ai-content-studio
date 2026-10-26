@@ -19,10 +19,10 @@ export default function EducativeImagesPage() {
   const [instructions, setInstructions] = useState('');
   const [model, setModel] = useState<string>(IMAGE_MODELS[0]);
   const [quality, setQuality] = useState<string>('high');
-  const [format, setFormat] = useState<string>('png');
+  const [format, setFormat] = useState<string>('jpeg');
   const [compression, setCompression] = useState('');
-  const [width, setWidth] = useState(1088);
-  const [height, setHeight] = useState(608);
+  const [width, setWidth] = useState(1536);
+  const [height, setHeight] = useState(1024);
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
