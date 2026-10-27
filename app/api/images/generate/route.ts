@@ -10,6 +10,14 @@ export const maxDuration = 300;
 
 const OUT_DIR = path.join(process.cwd(), 'data', 'images', 'educative');
 
+/** Real format from the file's magic bytes. */
+function sniffExt(b: Buffer): 'png' | 'jpeg' | 'webp' | null {
+  if (b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'png';
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpeg';
+  if (b.length > 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP') return 'webp';
+  return null;
+}
+
 /**
  * Three paths, all landing in data/images/educative:
  *   create            — prompt only, house style prepended
@@ -92,6 +100,13 @@ export async function POST(req: NextRequest) {
       form.append('prompt', prompt);
       form.append('size', `${width}x${height}`);
       form.append('quality', quality);
+      // The edits endpoint honours output_format for gpt-image models; without
+      // it every result comes back PNG regardless of what was asked for.
+      form.append('output_format', format);
+      if (format !== 'png' && compression !== '' && compression !== undefined) {
+        const c = Number(compression);
+        if (Number.isFinite(c) && c >= 0 && c <= 100) form.append('output_compression', String(c));
+      }
       const buf = Buffer.from(await upload.arrayBuffer());
       const type = upload.type && upload.type.startsWith('image/') ? upload.type : 'image/png';
       form.append('image', new Blob([new Uint8Array(buf)], { type }), upload.name || 'image.png');
@@ -131,17 +146,21 @@ export async function POST(req: NextRequest) {
     const b64 = json?.data?.[0]?.b64_json;
     if (!b64) return NextResponse.json({ error: 'No image data returned' }, { status: 502 });
 
-    // The edits endpoint always answers PNG regardless of the requested format.
-    const ext = upload ? 'png' : format;
+    // Name the file after what actually came back, not what was requested, so
+    // a .jpeg never contains PNG bytes if the endpoint ignores output_format.
+    const buf = Buffer.from(b64, 'base64');
+    const ext = sniffExt(buf) || format;
     await fs.mkdir(OUT_DIR, { recursive: true });
     const filename = `img-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
-    await fs.writeFile(path.join(OUT_DIR, filename), Buffer.from(b64, 'base64'));
+    await fs.writeFile(path.join(OUT_DIR, filename), buf);
 
     return NextResponse.json({
       url: `/api/images/educative/${filename}`,
       filename,
       model,
       mode,
+      format: ext,
+      requestedFormat: format,
       usedReference: !!upload,
       styleApplied: mode !== 'edit',
       size: `${width}x${height}`,

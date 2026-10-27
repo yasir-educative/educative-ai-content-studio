@@ -29,6 +29,23 @@ export const IMAGE_MODELS = ['gpt-image-2.5-flare', 'gpt-image-2', 'gpt-image-1'
 export const IMAGE_QUALITIES = ['low', 'medium', 'high'] as const;
 export const IMAGE_FORMATS = ['png', 'jpeg', 'webp'] as const;
 
+/**
+ * Sizes offered in the picker. Every one satisfies SIZE_RULES, so a preset can
+ * never produce an invalid request. 1920x1080 is deliberately absent: 1080 is
+ * not a multiple of 16.
+ */
+export const IMAGE_SIZES: Array<{ w: number; h: number; label: string }> = [
+  { w: 1536, h: 1024, label: 'Landscape 3:2' },
+  { w: 1792, h: 1024, label: 'Landscape 7:4' },
+  { w: 2048, h: 1152, label: 'Landscape 16:9' },
+  { w: 2560, h: 1440, label: 'Landscape 16:9 (large)' },
+  { w: 3840, h: 2160, label: 'Landscape 16:9 (4K)' },
+  { w: 1280, h: 720,  label: 'Landscape 16:9 (small)' },
+  { w: 1024, h: 1024, label: 'Square' },
+  { w: 1024, h: 1536, label: 'Portrait 2:3' },
+  { w: 1440, h: 2560, label: 'Portrait 9:16' },
+];
+
 // Constraints the API enforces on width/height.
 export const SIZE_RULES = {
   multiple: 16,

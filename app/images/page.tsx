@@ -9,6 +9,7 @@ import {
   IMAGE_MODELS,
   IMAGE_QUALITIES,
   checkSize,
+  IMAGE_SIZES,
 } from '@/lib/educativeImageStyle';
 
 export default function EducativeImagesPage() {
@@ -26,7 +27,7 @@ export default function EducativeImagesPage() {
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [result, setResult] = useState<{ url: string; filename: string; size: string; styleApplied?: boolean; usedReference?: boolean } | null>(null);
+  const [result, setResult] = useState<{ url: string; filename: string; size: string; styleApplied?: boolean; usedReference?: boolean; format?: string; requestedFormat?: string } | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [zoomed, setZoomed] = useState(false);
 
@@ -111,7 +112,7 @@ export default function EducativeImagesPage() {
       }
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Generation failed');
-      setResult({ url: json.url, filename: json.filename, size: json.size, styleApplied: json.styleApplied, usedReference: json.usedReference });
+      setResult({ url: json.url, filename: json.filename, size: json.size, styleApplied: json.styleApplied, usedReference: json.usedReference, format: json.format, requestedFormat: json.requestedFormat });
     } catch (e: any) {
       setErr(e?.message || String(e));
     } finally {
@@ -329,28 +330,35 @@ export default function EducativeImagesPage() {
 
         <div>
           <div className="flex items-end gap-3 flex-wrap">
-            <Field label="Width (px)">
-              <input
-                className="input w-32"
-                type="number"
-                value={width}
-                onChange={(e) => setWidth(Number(e.target.value) || 0)}
+            <Field label="Size">
+              <select
+                className="input min-w-[15rem]"
+                value={IMAGE_SIZES.some((o) => o.w === width && o.h === height) ? `${width}x${height}` : 'custom'}
+                onChange={(e) => {
+                  if (e.target.value === 'custom') return;
+                  const [w, h] = e.target.value.split('x').map(Number);
+                  setWidth(w); setHeight(h);
+                }}
                 disabled={busy}
-              />
+              >
+                {IMAGE_SIZES.map((o) => (
+                  <option key={`${o.w}x${o.h}`} value={`${o.w}x${o.h}`}>
+                    {o.w} × {o.h} — {o.label}
+                  </option>
+                ))}
+                <option value="custom">Custom…</option>
+              </select>
+            </Field>
+            <Field label="Width (px)">
+              <input className="input w-28" type="number" value={width}
+                onChange={(e) => setWidth(Number(e.target.value) || 0)} disabled={busy} />
             </Field>
             <span className="text-[var(--text-faint)] pb-2.5">×</span>
             <Field label="Height (px)">
-              <input
-                className="input w-32"
-                type="number"
-                value={height}
-                onChange={(e) => setHeight(Number(e.target.value) || 0)}
-                disabled={busy}
-              />
+              <input className="input w-28" type="number" value={height}
+                onChange={(e) => setHeight(Number(e.target.value) || 0)} disabled={busy} />
             </Field>
-            <span
-              className={`pill text-xs py-1 mb-0.5 ${valid ? 'pill-success' : 'pill-error'}`}
-            >
+            <span className={`pill text-xs py-1 mb-0.5 ${valid ? 'pill-success' : 'pill-error'}`}>
               {valid ? '✓ Valid' : '✗ Invalid'}
             </span>
           </div>
@@ -391,6 +399,8 @@ export default function EducativeImagesPage() {
               <p className="text-sm font-semibold">Generated image</p>
               <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
                 {result.size} · {result.filename}
+                {result.format && result.requestedFormat && result.format !== result.requestedFormat &&
+                  ` · returned ${result.format}, not ${result.requestedFormat}`}
                 {result.usedReference && ' · from reference'}
                 {result.styleApplied === false && ' · house style not applied'}
               </p>
