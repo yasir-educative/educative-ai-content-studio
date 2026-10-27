@@ -38,6 +38,9 @@ export async function POST(req: NextRequest) {
     let width = 0;
     let height = 0;
     let upload: File | null = null;
+    // An image already in our own output dir, so "edit this result" does not
+    // have to round-trip the bytes through the browser.
+    let sourceUrl = '';
 
     if (ct.includes('multipart/form-data')) {
       const form = await req.formData();
@@ -52,6 +55,7 @@ export async function POST(req: NextRequest) {
       height = Number(get('height')) || 0;
       const f = form.get('image');
       if (f && typeof f === 'object' && 'arrayBuffer' in f) upload = f as File;
+      sourceUrl = get('sourceUrl');
     } else {
       const b = await req.json();
       instructions = String(b.instructions || '').trim();
@@ -61,6 +65,23 @@ export async function POST(req: NextRequest) {
       compression = b.compression ?? '';
       width = Number(b.width) || 0;
       height = Number(b.height) || 0;
+      mode = b.mode === 'edit' ? 'edit' : 'create';
+      sourceUrl = String(b.sourceUrl || '');
+    }
+
+    // Only a file this route itself wrote may be re-read. The name is matched
+    // whole so nothing can traverse out of the directory.
+    let sourceBuf: Buffer | null = null;
+    if (!upload && sourceUrl) {
+      const m = /^\/api\/images\/educative\/([A-Za-z0-9._-]+)$/.exec(sourceUrl);
+      if (!m || m[1].includes('..')) {
+        return NextResponse.json({ error: 'sourceUrl must be a generated image' }, { status: 400 });
+      }
+      try {
+        sourceBuf = await fs.readFile(path.join(OUT_DIR, m[1]));
+      } catch {
+        return NextResponse.json({ error: 'That image is no longer on disk' }, { status: 400 });
+      }
     }
 
     if (!instructions) {
@@ -69,7 +90,7 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    if (mode === 'edit' && !upload) {
+    if (mode === 'edit' && !upload && !sourceBuf) {
       return NextResponse.json({ error: 'Editing needs an image to edit' }, { status: 400 });
     }
 
@@ -94,7 +115,7 @@ export async function POST(req: NextRequest) {
       mode === 'edit' ? instructions : `${getImageStyle().style}\n\n# Create\n${instructions}`;
 
     let res: Response;
-    if (upload) {
+    if (upload || sourceBuf) {
       const form = new FormData();
       form.append('model', model);
       form.append('prompt', prompt);
@@ -107,9 +128,9 @@ export async function POST(req: NextRequest) {
         const c = Number(compression);
         if (Number.isFinite(c) && c >= 0 && c <= 100) form.append('output_compression', String(c));
       }
-      const buf = Buffer.from(await upload.arrayBuffer());
-      const type = upload.type && upload.type.startsWith('image/') ? upload.type : 'image/png';
-      form.append('image', new Blob([new Uint8Array(buf)], { type }), upload.name || 'image.png');
+      const srcBuf = sourceBuf ?? Buffer.from(await upload!.arrayBuffer());
+      const type = upload?.type?.startsWith('image/') ? upload.type : 'image/png';
+      form.append('image', new Blob([new Uint8Array(srcBuf)], { type }), upload?.name || 'image.png');
       res = await fetch('https://api.openai.com/v1/images/edits', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -161,7 +182,7 @@ export async function POST(req: NextRequest) {
       mode,
       format: ext,
       requestedFormat: format,
-      usedReference: !!upload,
+      usedReference: !!(upload || sourceBuf),
       styleApplied: mode !== 'edit',
       size: `${width}x${height}`,
     });

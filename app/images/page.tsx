@@ -16,6 +16,8 @@ export default function EducativeImagesPage() {
   const [mode, setMode] = useState<'create' | 'edit'>('create');
   const [refFile, setRefFile] = useState<File | null>(null);
   const [refPreview, setRefPreview] = useState<string>('');
+  // Set when editing a result in place: the server re-reads it from disk.
+  const [sourceUrl, setSourceUrl] = useState('');
   const [dragging, setDragging] = useState(false);
   const [instructions, setInstructions] = useState('');
   const [model, setModel] = useState<string>(IMAGE_MODELS[0]);
@@ -78,14 +80,14 @@ export default function EducativeImagesPage() {
   const lossless = format === 'png';
 
   function pickFile(f: File | null) {
-    if (f) setErr('');
+    if (f) { setErr(''); setSourceUrl(''); }
     setRefFile(f);
     setRefPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return f ? URL.createObjectURL(f) : ''; });
   }
 
   async function generate() {
     if (!instructions.trim() || !valid) return;
-    if (mode === 'edit' && !refFile) { setErr('Upload the image you want to edit'); return; }
+    if (mode === 'edit' && !refFile && !sourceUrl) { setErr('Upload the image you want to edit'); return; }
     setBusy(true);
     setErr('');
     setResult(null);
@@ -107,7 +109,7 @@ export default function EducativeImagesPage() {
         res = await fetch('/api/images/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instructions, model, quality, format, compression, width, height }),
+          body: JSON.stringify({ mode, sourceUrl, instructions, model, quality, format, compression, width, height }),
         });
       }
       const json = await res.json();
@@ -183,11 +185,14 @@ export default function EducativeImagesPage() {
             {refFile && !dragging && (
               <p className="text-[10px] text-[var(--text-faint)] mt-1 truncate">{refFile.name}</p>
             )}
+            {!refFile && sourceUrl && !dragging && (
+              <p className="text-[10px] text-[var(--text-faint)] mt-1 truncate">Using the generated image</p>
+            )}
           </label>
           {refPreview && (
             <div className="relative shrink-0">
               <img src={refPreview} alt="Reference" className="h-24 rounded-lg border border-[var(--border)] bg-white object-contain" />
-              <button onClick={() => pickFile(null)} disabled={busy}
+              <button onClick={() => { pickFile(null); setSourceUrl(''); setRefPreview(''); }} disabled={busy}
                 className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[var(--panel)] border border-[var(--border)] text-xs leading-none hover:text-red-400">×</button>
             </div>
           )}
@@ -405,9 +410,27 @@ export default function EducativeImagesPage() {
                 {result.styleApplied === false && ' · house style not applied'}
               </p>
             </div>
-            <a href={result.url} download={result.filename} className="btn-primary text-xs py-1.5 px-4 shrink-0">
-              Download
-            </a>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                className="btn-secondary text-xs py-1.5 px-4"
+                onClick={() => {
+                  // Carry the result into edit mode without re-uploading it.
+                  setMode('edit');
+                  setSourceUrl(result.url);
+                  pickFile(null);
+                  setSourceUrl(result.url);
+                  setRefPreview(result.url);
+                  setInstructions('');
+                  setErr('');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+              >
+                Edit this image
+              </button>
+              <a href={result.url} download={result.filename} className="btn-primary text-xs py-1.5 px-4">
+                Download
+              </a>
+            </div>
           </div>
           <button
             type="button"
