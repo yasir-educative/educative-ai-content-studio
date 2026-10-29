@@ -4,6 +4,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { checkSize, IMAGE_FORMATS, IMAGE_MODELS, IMAGE_QUALITIES } from '@/lib/educativeImageStyle';
 import { getImageStyle } from '@/lib/imageStyleStore';
+import { readReferenceBytes } from '@/lib/referenceImageStore';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -41,6 +42,8 @@ export async function POST(req: NextRequest) {
     // An image already in our own output dir, so "edit this result" does not
     // have to round-trip the bytes through the browser.
     let sourceUrl = '';
+    // Whether the saved style reference should be sent alongside the subject.
+    let useReference = false;
 
     if (ct.includes('multipart/form-data')) {
       const form = await req.formData();
@@ -56,6 +59,7 @@ export async function POST(req: NextRequest) {
       const f = form.get('image');
       if (f && typeof f === 'object' && 'arrayBuffer' in f) upload = f as File;
       sourceUrl = get('sourceUrl');
+      useReference = get('useReference') === '1';
     } else {
       const b = await req.json();
       instructions = String(b.instructions || '').trim();
@@ -67,6 +71,7 @@ export async function POST(req: NextRequest) {
       height = Number(b.height) || 0;
       mode = b.mode === 'edit' ? 'edit' : 'create';
       sourceUrl = String(b.sourceUrl || '');
+      useReference = !!b.useReference;
     }
 
     // Only a file this route itself wrote may be re-read. The name is matched
@@ -109,13 +114,23 @@ export async function POST(req: NextRequest) {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) return NextResponse.json({ error: 'OPENAI_API_KEY is not set' }, { status: 500 });
 
+    const reference = useReference ? await readReferenceBytes() : null;
+    const hasSubject = !!(upload || sourceBuf);
+
     // An edit works inside an image that already follows the house style, so
     // prepending the style block would fight the existing artwork.
-    const prompt =
-      mode === 'edit' ? instructions : `${getImageStyle().style}\n\n# Create\n${instructions}`;
+    let prompt = mode === 'edit' ? instructions : `${getImageStyle().style}\n\n# Create\n${instructions}`;
+
+    // With two images the model needs to be told which is which, and in what
+    // order they were attached, or it treats both as subject matter.
+    if (reference) {
+      prompt = hasSubject
+        ? `# Images attached\nThe FIRST image is a STYLE REFERENCE only: match its visual style, palette, line weight and treatment. Do not copy its subject matter or reproduce its content.\nThe SECOND image is the SUBJECT to recreate: keep what it depicts, its structure and its labels.\n\n${prompt}`
+        : `# Images attached\nThe attached image is a STYLE REFERENCE only: match its visual style, palette, line weight and treatment. Do not copy its subject matter.\n\n${prompt}`;
+    }
 
     let res: Response;
-    if (upload || sourceBuf) {
+    if (upload || sourceBuf || reference) {
       const form = new FormData();
       form.append('model', model);
       form.append('prompt', prompt);
@@ -128,9 +143,15 @@ export async function POST(req: NextRequest) {
         const c = Number(compression);
         if (Number.isFinite(c) && c >= 0 && c <= 100) form.append('output_compression', String(c));
       }
-      const srcBuf = sourceBuf ?? Buffer.from(await upload!.arrayBuffer());
-      const type = upload?.type?.startsWith('image/') ? upload.type : 'image/png';
-      form.append('image', new Blob([new Uint8Array(srcBuf)], { type }), upload?.name || 'image.png');
+      // Order matters: the prompt refers to the reference as the first image.
+      if (reference) {
+        form.append('image[]', new Blob([new Uint8Array(reference.buf)], { type: reference.type }), 'reference.png');
+      }
+      if (hasSubject) {
+        const srcBuf = sourceBuf ?? Buffer.from(await upload!.arrayBuffer());
+        const type = upload?.type?.startsWith('image/') ? upload.type : 'image/png';
+        form.append(reference ? 'image[]' : 'image', new Blob([new Uint8Array(srcBuf)], { type }), upload?.name || 'image.png');
+      }
       res = await fetch('https://api.openai.com/v1/images/edits', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -182,7 +203,8 @@ export async function POST(req: NextRequest) {
       mode,
       format: ext,
       requestedFormat: format,
-      usedReference: !!(upload || sourceBuf),
+      usedReference: !!reference,
+      usedSubject: hasSubject,
       styleApplied: mode !== 'edit',
       size: `${width}x${height}`,
     });

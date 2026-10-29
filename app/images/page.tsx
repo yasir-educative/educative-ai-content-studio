@@ -18,6 +18,10 @@ export default function EducativeImagesPage() {
   const [refPreview, setRefPreview] = useState<string>('');
   // Set when editing a result in place: the server re-reads it from disk.
   const [sourceUrl, setSourceUrl] = useState('');
+  // Style reference: saved server-side, reused until replaced or removed.
+  const [refImage, setRefImage] = useState<{ url: string } | null>(null);
+  const [useRef, setUseRef] = useState(true);
+  const [refBusy, setRefBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [instructions, setInstructions] = useState('');
   const [model, setModel] = useState<string>(IMAGE_MODELS[0]);
@@ -29,7 +33,7 @@ export default function EducativeImagesPage() {
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [result, setResult] = useState<{ url: string; filename: string; size: string; styleApplied?: boolean; usedReference?: boolean; format?: string; requestedFormat?: string } | null>(null);
+  const [result, setResult] = useState<{ url: string; filename: string; size: string; styleApplied?: boolean; usedReference?: boolean; usedSubject?: boolean; format?: string; requestedFormat?: string } | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [zoomed, setZoomed] = useState(false);
 
@@ -79,6 +83,34 @@ export default function EducativeImagesPage() {
   const { checks, valid } = useMemo(() => checkSize(width, height), [width, height]);
   const lossless = format === 'png';
 
+  useEffect(() => {
+    fetch('/api/images/reference', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => setRefImage(j.reference || null))
+      .catch(() => {});
+  }, []);
+
+  async function uploadReference(f: File | null) {
+    if (!f) return;
+    setRefBusy(true); setErr('');
+    try {
+      const fd = new FormData();
+      fd.append('image', f);
+      const r = await fetch('/api/images/reference', { method: 'POST', body: fd });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || 'Failed to save reference');
+      setRefImage(j.reference); setUseRef(true);
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setRefBusy(false); }
+  }
+
+  async function removeReference() {
+    setRefBusy(true);
+    try {
+      await fetch('/api/images/reference', { method: 'DELETE' });
+      setRefImage(null);
+    } finally { setRefBusy(false); }
+  }
+
   function pickFile(f: File | null) {
     if (f) { setErr(''); setSourceUrl(''); }
     setRefFile(f);
@@ -87,7 +119,7 @@ export default function EducativeImagesPage() {
 
   async function generate() {
     if (!instructions.trim() || !valid) return;
-    if (mode === 'edit' && !refFile && !sourceUrl) { setErr('Upload the image you want to edit'); return; }
+    if (mode === 'edit' && !refFile && !sourceUrl) { setErr('Add the image you want to edit'); return; }
     setBusy(true);
     setErr('');
     setResult(null);
@@ -104,17 +136,18 @@ export default function EducativeImagesPage() {
         fd.append('width', String(width));
         fd.append('height', String(height));
         fd.append('image', refFile);
+        fd.append('useReference', useRef && refImage ? '1' : '0');
         res = await fetch('/api/images/generate', { method: 'POST', body: fd });
       } else {
         res = await fetch('/api/images/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode, sourceUrl, instructions, model, quality, format, compression, width, height }),
+          body: JSON.stringify({ mode, sourceUrl, useReference: useRef && !!refImage, instructions, model, quality, format, compression, width, height }),
         });
       }
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Generation failed');
-      setResult({ url: json.url, filename: json.filename, size: json.size, styleApplied: json.styleApplied, usedReference: json.usedReference, format: json.format, requestedFormat: json.requestedFormat });
+      setResult({ url: json.url, filename: json.filename, size: json.size, styleApplied: json.styleApplied, usedReference: json.usedReference, usedSubject: json.usedSubject, format: json.format, requestedFormat: json.requestedFormat });
     } catch (e: any) {
       setErr(e?.message || String(e));
     } finally {
@@ -144,15 +177,64 @@ export default function EducativeImagesPage() {
         ))}
       </div>
 
+      {/* Style reference — persists until replaced or removed */}
+      <div className="card p-5 space-y-2">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">Style reference</label>
+            <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
+              Its style is matched, not its subject. Saved and reused until you replace or remove it.
+            </p>
+          </div>
+          {refImage && (
+            <label className="flex items-center gap-2 text-xs cursor-pointer shrink-0">
+              <input type="checkbox" className="accent-emerald-500" checked={useRef}
+                onChange={(e) => setUseRef(e.target.checked)} disabled={busy} />
+              Use this reference
+            </label>
+          )}
+        </div>
+        <div className="flex items-start gap-3 flex-wrap">
+          <label className={`flex-1 min-w-[14rem] rounded-xl border-2 border-dashed px-4 py-4 text-center cursor-pointer transition-colors border-[var(--border)] hover:border-[var(--text-faint)] ${busy || refBusy ? 'opacity-50 pointer-events-none' : ''}`}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/'));
+              if (f) uploadReference(f);
+            }}
+            onPaste={(e) => {
+              const f = Array.from(e.clipboardData.files).find((x) => x.type.startsWith('image/'));
+              if (f) uploadReference(f);
+            }}
+          >
+            <input type="file" accept="image/*" className="hidden" disabled={busy || refBusy}
+              onChange={(e) => uploadReference(e.target.files?.[0] || null)} />
+            <p className="text-xs text-[var(--text-dim)]">
+              {refBusy ? 'Saving…' : refImage
+                ? <>Replace the reference — <span className="text-[var(--accent)] underline">choose</span>, drag or paste</>
+                : <>Set a style reference — <span className="text-[var(--accent)] underline">choose a file</span>, drag or paste</>}
+            </p>
+          </label>
+          {refImage && (
+            <div className="relative shrink-0">
+              <img src={refImage.url} alt="Style reference"
+                className={`h-24 rounded-lg border object-contain bg-white ${useRef ? 'border-[var(--accent)]' : 'border-[var(--border)] opacity-40'}`} />
+              <button onClick={removeReference} disabled={busy || refBusy} title="Remove reference"
+                className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[var(--panel)] border border-[var(--border)] text-xs leading-none hover:text-red-400">×</button>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Image input */}
       <div className="card p-5 space-y-2">
         <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
-          {mode === 'edit' ? 'Image to edit' : 'Reference image (optional)'}
+          {mode === 'edit' ? 'Image to edit' : 'Image to recreate (optional)'}
         </label>
         <p className="text-[11px] text-[var(--text-faint)]">
           {mode === 'edit'
             ? 'The change is applied inside this image. The house style is not re-applied, since the image already has one.'
-            : 'If supplied, the new image is drawn with this one as a reference. The house style still applies.'}
+            : 'Its subject and structure are kept and redrawn. Leave empty to create from the description alone.'}
         </p>
         <div className="flex items-start gap-3 flex-wrap">
           {/* Click, drag and drop, or paste all land in pickFile. */}
@@ -406,7 +488,8 @@ export default function EducativeImagesPage() {
                 {result.size} · {result.filename}
                 {result.format && result.requestedFormat && result.format !== result.requestedFormat &&
                   ` · returned ${result.format}, not ${result.requestedFormat}`}
-                {result.usedReference && ' · from reference'}
+                {result.usedReference && ' · style reference used'}
+                {result.usedSubject && ' · recreated from image'}
                 {result.styleApplied === false && ' · house style not applied'}
               </p>
             </div>
