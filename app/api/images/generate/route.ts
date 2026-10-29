@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
     let sourceUrl = '';
     // Whether the saved style reference should be sent alongside the subject.
     let useReference = false;
+    let styleId = '';
 
     if (ct.includes('multipart/form-data')) {
       const form = await req.formData();
@@ -60,6 +61,7 @@ export async function POST(req: NextRequest) {
       if (f && typeof f === 'object' && 'arrayBuffer' in f) upload = f as File;
       sourceUrl = get('sourceUrl');
       useReference = get('useReference') === '1';
+      styleId = get('styleId');
     } else {
       const b = await req.json();
       instructions = String(b.instructions || '').trim();
@@ -72,6 +74,7 @@ export async function POST(req: NextRequest) {
       mode = b.mode === 'edit' ? 'edit' : 'create';
       sourceUrl = String(b.sourceUrl || '');
       useReference = !!b.useReference;
+      styleId = String(b.styleId || '');
     }
 
     // Only a file this route itself wrote may be re-read. The name is matched
@@ -119,7 +122,7 @@ export async function POST(req: NextRequest) {
 
     // An edit works inside an image that already follows the house style, so
     // prepending the style block would fight the existing artwork.
-    let prompt = mode === 'edit' ? instructions : `${getImageStyle().style}\n\n# Create\n${instructions}`;
+    let prompt = mode === 'edit' ? instructions : `${getImageStyle(styleId).style}\n\n# Create\n${instructions}`;
 
     // With two images the model needs to be told which is which, and in what
     // order they were attached, or it treats both as subject matter.

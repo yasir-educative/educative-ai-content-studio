@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Field } from '../_components/Field';
 import {
@@ -37,51 +37,48 @@ export default function EducativeImagesPage() {
   const [showPrompt, setShowPrompt] = useState(false);
   const [zoomed, setZoomed] = useState(false);
 
-  // House style: server-backed so an edit survives reloads and applies to generation.
-  const [style, setStyle] = useState(EDUCATIVE_IMAGE_STYLE);
-  const [isDefault, setIsDefault] = useState(true);
+  // Styles: many saved, one default, one picked for this generation.
+  interface Sty { id: string; name: string; body: string; builtin: boolean }
+  const [styles, setStyles] = useState<Sty[]>([]);
+  const [defaultStyleId, setDefaultStyleId] = useState('');
+  const [styleId, setStyleId] = useState('');
   const [editing, setEditing] = useState(false);
   const [styleDraft, setStyleDraft] = useState('');
+  const [styleName, setStyleName] = useState('');
   const [styleBusy, setStyleBusy] = useState(false);
   const [styleErr, setStyleErr] = useState('');
+
+  const activeStyle = styles.find((x) => x.id === styleId) || null;
+
+  const applyStyles = useCallback((j: any, selectId?: string) => {
+    const list: Sty[] = j.styles || [];
+    setStyles(list);
+    setDefaultStyleId(j.defaultId || '');
+    setStyleId((cur) => selectId || (list.some((x) => x.id === cur) ? cur : j.defaultId || list[0]?.id || ''));
+  }, []);
 
   useEffect(() => {
     fetch('/api/images/style', { cache: 'no-store' })
       .then((r) => r.json())
-      .then((j) => { if (typeof j?.style === 'string') { setStyle(j.style); setIsDefault(!!j.isDefault); } })
-      .catch(() => { /* keep the bundled default */ });
-  }, []);
+      .then((j) => applyStyles(j))
+      .catch(() => {});
+  }, [applyStyles]);
 
-  async function persistStyle(method: 'PUT' | 'DELETE', body?: object) {
-    setStyleBusy(true);
-    setStyleErr('');
+  async function persistStyle(method: 'POST' | 'PUT' | 'DELETE', body?: any) {
+    setStyleBusy(true); setStyleErr('');
     try {
-      const res = await fetch('/api/images/style', {
+      const url = method === 'DELETE' ? `/api/images/style?id=${encodeURIComponent(styleId)}` : '/api/images/style';
+      const res = await fetch(url, {
         method,
         ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || 'Failed');
-      setStyle(json.style);
-      setIsDefault(!!json.isDefault);
+      const j = await res.json();
+      if (!res.ok) throw new Error(j?.error || 'Failed');
+      // A saved edit to the builtin returns a new id, so select what came back.
+      applyStyles(j, method === 'POST' ? j.style?.id : method === 'DELETE' ? j.defaultId : undefined);
       setEditing(false);
-    } catch (e: any) {
-      setStyleErr(e?.message || String(e));
-    } finally {
-      setStyleBusy(false);
-    }
+    } catch (e: any) { setStyleErr(e?.message || String(e)); } finally { setStyleBusy(false); }
   }
-
-  // Close the zoom overlay on Escape.
-  useEffect(() => {
-    if (!zoomed) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setZoomed(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [zoomed]);
-
-  const { checks, valid } = useMemo(() => checkSize(width, height), [width, height]);
-  const lossless = format === 'png';
 
   useEffect(() => {
     fetch('/api/images/reference', { cache: 'no-store' })
@@ -117,6 +114,9 @@ export default function EducativeImagesPage() {
     setRefPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return f ? URL.createObjectURL(f) : ''; });
   }
 
+  const { checks, valid } = useMemo(() => checkSize(width, height), [width, height]);
+  const lossless = format === 'png';
+
   async function generate() {
     if (!instructions.trim() || !valid) return;
     if (mode === 'edit' && !refFile && !sourceUrl) { setErr('Add the image you want to edit'); return; }
@@ -137,12 +137,13 @@ export default function EducativeImagesPage() {
         fd.append('height', String(height));
         fd.append('image', refFile);
         fd.append('useReference', useRef && refImage ? '1' : '0');
+        fd.append('styleId', styleId);
         res = await fetch('/api/images/generate', { method: 'POST', body: fd });
       } else {
         res = await fetch('/api/images/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode, sourceUrl, useReference: useRef && !!refImage, instructions, model, quality, format, compression, width, height }),
+          body: JSON.stringify({ mode, sourceUrl, useReference: useRef && !!refImage, styleId, instructions, model, quality, format, compression, width, height }),
         });
       }
       const json = await res.json();
@@ -176,6 +177,76 @@ export default function EducativeImagesPage() {
           </button>
         ))}
       </div>
+
+      {/* Styles — many saved, one default, picked per generation */}
+      {mode === 'create' && (
+      <div className="card p-5 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">Visual style</label>
+            <p className="text-[11px] text-[var(--text-faint)] mt-0.5">Prepended to every create. Not used when editing.</p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <select className="input text-xs py-1 min-w-[13rem]" value={styleId}
+              onChange={(e) => { setStyleId(e.target.value); setEditing(false); }} disabled={busy}>
+              {styles.map((st) => (
+                <option key={st.id} value={st.id}>{st.name}{st.id === defaultStyleId ? ' (default)' : ''}</option>
+              ))}
+            </select>
+            {!editing && (
+              <>
+                <button className="btn-secondary text-xs py-1 px-3" onClick={() => setShowPrompt((v) => !v)}>
+                  {showPrompt ? 'Hide' : 'Show'}
+                </button>
+                <button className="btn-secondary text-xs py-1 px-3"
+                  onClick={() => { setStyleDraft(activeStyle?.body || ''); setStyleName(activeStyle?.name || ''); setEditing(true); setShowPrompt(true); setStyleErr(''); }}>
+                  Edit
+                </button>
+                <button className="btn-secondary text-xs py-1 px-3"
+                  onClick={() => { setStyleDraft(activeStyle?.body || ''); setStyleName(''); setStyleId(''); setEditing(true); setShowPrompt(true); setStyleErr(''); }}>
+                  + New
+                </button>
+                {styleId !== defaultStyleId && (
+                  <button className="btn-secondary text-xs py-1 px-3" onClick={() => persistStyle('PUT', { id: styleId })} disabled={styleBusy}>
+                    Make default
+                  </button>
+                )}
+                {activeStyle && !activeStyle.builtin && (
+                  <button className="text-[11px] text-[var(--text-faint)] hover:text-red-400 px-1"
+                    onClick={() => { if (confirm(`Delete style "${activeStyle.name}"?`)) persistStyle('DELETE'); }} disabled={styleBusy}>
+                    Delete
+                  </button>
+                )}
+              </>
+            )}
+            {editing && (
+              <>
+                <button className="btn-secondary text-xs py-1 px-3" onClick={() => { setEditing(false); setStyleErr(''); }} disabled={styleBusy}>Cancel</button>
+                <button className="btn-primary text-xs py-1 px-3"
+                  onClick={() => persistStyle('POST', { id: styleId || undefined, name: styleName, body: styleDraft })}
+                  disabled={styleBusy || !styleDraft.trim()}>
+                  {styleBusy ? 'Saving…' : 'Save'}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {editing && (
+          <input className="input w-full text-sm" placeholder="Style name" value={styleName}
+            onChange={(e) => setStyleName(e.target.value)} />
+        )}
+        {activeStyle?.builtin && editing && (
+          <p className="text-[11px] text-[var(--text-faint)]">Saving edits to the house style creates a copy; the original stays available.</p>
+        )}
+        {styleErr && <p className="text-xs text-red-400">{styleErr}</p>}
+        {showPrompt && (
+          <textarea readOnly={!editing} value={editing ? styleDraft : (activeStyle?.body || '')}
+            onChange={(e) => setStyleDraft(e.target.value)} spellCheck={false}
+            className={`input w-full font-mono text-[11px] leading-relaxed min-h-[240px] ${editing ? '' : 'opacity-80 cursor-default'}`} />
+        )}
+      </div>
+      )}
 
       {/* Style reference — persists until replaced or removed */}
       <div className="card p-5 space-y-2">
@@ -280,86 +351,6 @@ export default function EducativeImagesPage() {
           )}
         </div>
       </div>
-
-      {/* Fixed style block — not sent when editing */}
-      {mode === 'create' && (
-      <div className="card p-5 space-y-2">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
-              Mandatory visual style
-              {!isDefault && <span className="ml-2 pill text-[10px] py-0 px-1.5">edited</span>}
-            </label>
-            <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
-              Prepended to every request.{isDefault ? ' Currently the default.' : ' Customized.'}
-            </p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {!editing && (
-              <>
-                <button className="btn-secondary text-xs py-1 px-3" onClick={() => setShowPrompt((v) => !v)}>
-                  {showPrompt ? 'Hide' : 'Show'}
-                </button>
-                <button
-                  className="btn-secondary text-xs py-1 px-3"
-                  onClick={() => { setStyleDraft(style); setEditing(true); setShowPrompt(true); setStyleErr(''); }}
-                >
-                  Edit
-                </button>
-                {!isDefault && (
-                  <button
-                    className="btn-secondary text-xs py-1 px-3"
-                    onClick={() => persistStyle('DELETE')}
-                    disabled={styleBusy}
-                    title="Discard the customization and restore the shipped style"
-                  >
-                    {styleBusy ? '…' : 'Set to default'}
-                  </button>
-                )}
-              </>
-            )}
-            {editing && (
-              <>
-                <button
-                  className="btn-secondary text-xs py-1 px-3"
-                  onClick={() => { setEditing(false); setStyleErr(''); }}
-                  disabled={styleBusy}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="btn-secondary text-xs py-1 px-3"
-                  onClick={() => setStyleDraft(EDUCATIVE_IMAGE_STYLE)}
-                  disabled={styleBusy}
-                  title="Load the shipped style into the editor"
-                >
-                  Load default
-                </button>
-                <button
-                  className="btn-primary text-xs py-1 px-3"
-                  onClick={() => persistStyle('PUT', { style: styleDraft })}
-                  disabled={styleBusy || !styleDraft.trim()}
-                >
-                  {styleBusy ? 'Saving…' : 'Save'}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-        {styleErr && <p className="text-xs text-red-400">{styleErr}</p>}
-        {showPrompt && (
-          <textarea
-            readOnly={!editing}
-            value={editing ? styleDraft : style}
-            onChange={(e) => setStyleDraft(e.target.value)}
-            spellCheck={false}
-            className={`input w-full font-mono text-[11px] leading-relaxed min-h-[260px] ${
-              editing ? '' : 'opacity-80 cursor-default'
-            }`}
-          />
-        )}
-      </div>
-      )}
 
       {/* User instructions */}
       <div className="card p-5 space-y-1.5">
