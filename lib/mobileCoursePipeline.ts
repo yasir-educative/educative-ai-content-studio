@@ -9,6 +9,7 @@ import { fetchCollectionWithContent, fetchLessonContent, CollectionChapterData }
 import { generateGptImage, slugify } from './imageGen';
 import type { MobileCard, MobileCardType, MobileChapter } from './mobileCourseStorage';
 import { normalizeCardType } from './mobileCardTypes';
+import { ensureCardQuality } from './mobileCardQuality';
 import {
   registeredCardPlannerPrompt,
   registeredCardsGeneratorPrompt,
@@ -322,6 +323,15 @@ export async function processChapter(
   finalCards = [...finalCards]
     .sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0))
     .map((c: any, i: number) => mapRawCard(c, i));
+
+  // Same gate as the shorts pipeline. A chapter has no fixed card count or
+  // highlight toggle, so only the type, blank and length rules apply.
+  const gated = await ensureCardQuality(
+    finalCards,
+    { numCards: finalCards.length, isHighlightCardNeeded: true },
+    (m) => emit({ type: 'log', message: `${chapterId}: ${m}` }),
+  );
+  finalCards = gated.cards as any[];
 
   // Stage 5: Generate images for text_img and img_only cards
   const imageCards = finalCards.filter(
