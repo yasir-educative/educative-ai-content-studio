@@ -174,15 +174,25 @@ export async function ensureCardQuality(
   //    cards supplied so the new ones do not repeat them.
   const want = Math.min(5, Math.max(1, spec.numCards || 5));
   const needHighlight = !!spec.isHighlightCardNeeded && !cards.some((c) => c.type === 'highlightCard');
-  if (spec.topic && (cards.length < want || needHighlight)) {
-    const missing = Math.max(want - cards.length, needHighlight ? 1 : 0);
-    say(`generating ${missing} missing card(s)`);
-    const extra = await topUp(spec, cards, missing, needHighlight);
-    if (extra.length) {
-      pass = enforce([...cards, ...extra], spec);
-      cards = pass.cards;
-      fixed.push(...pass.report.fixed);
+  // Two attempts: a single top-up can come back blank, mistyped, or without
+  // the highlight card it was asked for, and the count must be exact.
+  for (let attempt = 0; spec.topic && attempt < 2; attempt++) {
+    const lacksHighlight = !!spec.isHighlightCardNeeded && !cards.some((c) => c.type === 'highlightCard');
+    const missing = Math.max(want - cards.length, lacksHighlight ? 1 : 0);
+    if (missing <= 0) break;
+    say(`generating ${missing} missing card(s)${lacksHighlight ? ' including the highlight' : ''}`);
+    const extra = await topUp(spec, cards, missing, lacksHighlight);
+    if (!extra.length) continue;
+    // Drop a surplus non-highlight card so a late highlight still fits the count.
+    let merged = [...cards, ...extra];
+    pass = enforce(merged, spec);
+    if (lacksHighlight && !pass.cards.some((c) => c.type === 'highlightCard')) {
+      const hl = enforce(extra, { ...spec, numCards: 5 }).cards.find((c) => c.type === 'highlightCard');
+      if (hl) merged = [...cards.slice(0, Math.max(0, want - 1)), hl];
+      pass = enforce(merged, spec);
     }
+    cards = pass.cards;
+    fixed.push(...pass.report.fixed);
   }
 
   // 2. One review pass. It patches fields in place rather than regenerating,
@@ -220,9 +230,16 @@ export async function ensureCardQuality(
     }
   }
 
-  // Recompute from the cards actually being returned. Deriving this from an
-  // earlier pass let a short card ship while the report claimed none.
+  // Unconditional final ceiling. Earlier passes track which cards were over,
+  // and a card slipped through that bookkeeping once; this depends on nothing
+  // but the array being returned, so an oversized card cannot ship.
   const out = last.cards;
+  for (const c of out) {
+    const lim = CARD_LIMITS[c.type as MobileCardType];
+    if (!lim) continue;
+    const n = text(c).length;
+    if (n > lim.max) { c.text = trimToMax(text(c), lim.max); say(`card ${c.card_number}: trimmed to ${lim.max}`); }
+  }
   const problems: string[] = [...last.report.remaining];
   for (const c of out) {
     const lim = CARD_LIMITS[c.type as MobileCardType];
@@ -316,6 +333,7 @@ ${JSON.stringify(cards.map((c) => ({
   })), null, 1).slice(0, 12000)}
 
 Correct a card only when it is:
+- technically wrong: incorrect code, wrong syntax or output, wrong complexity or cost, misstated API or tool behaviour, a wrong number, unit or threshold, an invalid quiz answer, or a claim that does not hold in the stated context
 - factually wrong or misleading
 - empty of substance, or restating another card
 - not teaching the stated topic

@@ -229,8 +229,11 @@ export async function runMobileShortPipeline(
     .sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0))
     .map((c: any, i: number) => ({ ...c, id: c.id || `card-${i + 1}` }));
 
-  // One gate guarantees type names, blank cards, the highlight toggle, the
-  // count and the character ceilings, and repairs only what code cannot.
+  // Prose-only formatting first: it rewrites text_img bodies, so running it
+  // after the gate would reintroduce over-length cards the gate had cleared.
+  rawCards = await enforceTextImgProse(rawCards);
+
+  // The gate is last before images, so nothing edits text after it.
   const { cards: checked } = await ensureCardQuality(
     rawCards,
     {
@@ -243,10 +246,6 @@ export async function runMobileShortPipeline(
     (m) => emit({ type: 'log', message: m }),
   );
   rawCards = checked as any[];
-
-  // Prose-only enforcement on TEXT_IMG is separate: it is a formatting rule,
-  // not a quality bound.
-  rawCards = await enforceTextImgProse(rawCards);
 
   // Stage 4: Image generation for visual cards
   const imageCards = rawCards.filter(
