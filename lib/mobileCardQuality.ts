@@ -186,44 +186,57 @@ export async function ensureCardQuality(
     }
   }
 
-  // 2. Lengthen anything still under its minimum.
-  if (pass.short.length) {
-    const rewrites = await expandShort(pass.short);
-    if (rewrites.size) {
-      cards = cards.map((c) => {
-        const t = rewrites.get(Number(c.card_number));
-        return t ? { ...c, text: t } : c;
-      });
-      say(`expanded ${rewrites.size} short card(s)`);
-    }
-  }
-
-  // 3. Review substance, then rewrite only what fails. One round: a second
-  //    reviewer pass on its own output tends to churn rather than improve.
+  // 2. One review pass. It patches fields in place rather than regenerating,
+  //    so a card keeps its slot, type and intent.
   if (spec.topic && !spec.skipReview) {
-    const failing = await review(spec, cards);
-    if (failing.length) {
-      say(`reviewer rejected card(s) ${failing.join(', ')}`);
-      const fresh = await regenerate(spec, cards, failing);
-      if (fresh.size) {
-        cards = cards.map((c) => fresh.get(Number(c.card_number)) ?? c);
-        say(`rewrote ${fresh.size} card(s)`);
-      }
+    const fixes = await reviewAndFix(spec, cards);
+    if (fixes.size) {
+      cards = cards.map((c) => {
+        const patch = fixes.get(Number(c.card_number));
+        // Merge fields; never let a patch change the number or type.
+        return patch ? { ...c, ...patch, card_number: c.card_number, type: c.type } : c;
+      });
+      say(`reviewer corrected card(s) ${[...fixes.keys()].join(', ')}`);
     }
   }
 
-  // 4. Final deterministic pass. Everything above is model output and must be
-  //    bounded again: a rewrite can be blank, over-length or wrongly typed.
-  const last = enforce(cards, spec);
-  const report: QualityReport = {
-    fixed: [...fixed, ...last.report.fixed],
-    remaining: [
-      ...new Set([
-        ...last.report.remaining,
-        ...last.short.map((c) => `card ${c.card_number} still under minimum`),
-      ]),
-    ],
-  };
+  // 3. Lengthen last. The reviewer edits text, so measuring before it runs
+  //    lets a shortened card slip through; measure after everything else.
+  //    Two attempts: the first often lands just under, and code cannot write
+  //    the words itself. Anything still short after that is reported, never
+  //    silently shipped.
+  let last = enforce(cards, spec);
+  for (let attempt = 0; attempt < 2 && last.short.length; attempt++) {
+    const rewrites = await expandShort(last.short);
+    if (!rewrites.size) break;
+    cards = last.cards.map((c) => {
+      const t = rewrites.get(Number(c.card_number));
+      return t ? { ...c, text: t } : c;
+    });
+    say(`expanded ${rewrites.size} short card(s)`);
+    // Re-check every time: the expansion is model output too.
+    const next = enforce(cards, spec);
+    if (next.short.length === last.short.length && attempt > 0) { last = next; break; }
+    last = next;
+  }
+  // Recompute from the cards actually being returned. Deriving this from an
+  // earlier pass let a short card ship while the report claimed none.
+  const out = last.cards;
+  const problems: string[] = [...last.report.remaining];
+  for (const c of out) {
+    const lim = CARD_LIMITS[c.type as MobileCardType];
+    if (!lim) continue;
+    const n = text(c).length;
+    if (n < lim.min) problems.push(`card ${c.card_number} (${c.type}) is ${n} chars, under the ${lim.min} minimum`);
+    if (n > lim.max) problems.push(`card ${c.card_number} (${c.type}) is ${n} chars, over the ${lim.max} maximum`);
+  }
+  if (spec.isHighlightCardNeeded && !out.some((c) => c.type === 'highlightCard')) {
+    problems.push('highlight card requested but none present');
+  }
+  const wanted = Math.min(5, Math.max(1, spec.numCards || 5));
+  if (out.length !== wanted) problems.push(`${out.length} cards, wanted ${wanted}`);
+
+  const report: QualityReport = { fixed: [...fixed, ...last.report.fixed], remaining: [...new Set(problems)] };
   for (const m of report.remaining) log?.(`unresolved: ${m}`);
   return { cards: last.cards as MobileCard[], report };
 }
@@ -279,54 +292,52 @@ Return a JSON array of exactly ${missing} card object(s). Raw JSON only, no fenc
   return parseCards(await generateText(prompt, { tier: 'normal', maxTokens: 4000 }));
 }
 
-/** Judge substance only; length, type and blankness are already guaranteed. */
-async function review(spec: CardSpec, cards: any[]): Promise<number[]> {
-  if (!spec.topic || cards.length === 0) return [];
-  const prompt = `Review these mobile learning cards and name only the ones that must be rewritten.
+/**
+ * Review and fix in one call. The model returns a patch per failing card —
+ * only the fields that change — rather than a verdict followed by a second
+ * regeneration call. Cards it does not mention are left untouched.
+ */
+async function reviewAndFix(spec: CardSpec, cards: any[]): Promise<Map<number, Record<string, any>>> {
+  const out = new Map<number, Record<string, any>>();
+  if (!spec.topic || cards.length === 0) return out;
+
+  const prompt = `Review these mobile learning cards and correct only the ones that are genuinely unusable.
 
 ${ctx(spec)}
 
-${brief(cards)}
+${JSON.stringify(cards.map((c) => ({
+    card_number: c.card_number,
+    type: c.type,
+    title: c.title,
+    text: text(c),
+    illustration_idea: c.illustration_idea || undefined,
+    question: c.question || undefined,
+  })), null, 1).slice(0, 12000)}
 
-A card fails only if it is genuinely unusable:
+Correct a card only when it is:
 - factually wrong or misleading
-- says nothing concrete, or restates another card
-- does not teach the stated topic
-- a text_img whose text just describes its own diagram instead of adding the why
+- empty of substance, or restating another card
+- not teaching the stated topic
+- a text_img whose text merely describes its own diagram instead of adding the why
 
-Do NOT fail a card for length, formatting, type or tone. Those are handled elsewhere. Most decks should return an empty list.
+Do NOT touch a card for length, formatting, type or tone. Those are enforced in code and your edits are re-checked against them. Most decks need no corrections at all.
 
-Return JSON: {"failing":[card_number,...]}. Raw JSON only, no fences.`;
-  try {
-    const raw = await generateText(prompt, { tier: 'edit', maxTokens: 400 });
-    const p = JSON.parse(raw.trim().replace(/^```json\n?|```$/g, ''));
-    return Array.isArray(p?.failing) ? p.failing.map(Number).filter(Boolean) : [];
-  } catch {
-    return [];
-  }
-}
-
-/** Rewrite the cards the reviewer rejected, keeping their type and slot. */
-async function regenerate(spec: CardSpec, cards: any[], failing: number[]): Promise<Map<number, any>> {
-  const out = new Map<number, any>();
-  const bad = cards.filter((c) => failing.includes(Number(c.card_number)));
-  if (!bad.length || !spec.topic) return out;
-  const keep = cards.filter((c) => !failing.includes(Number(c.card_number)));
-  const prompt = `Rewrite these mobile learning cards. Each was rejected as unusable: wrong, empty of substance, redundant, or off-topic.
-
-${ctx(spec)}
-
-Keep each card's card_number and type. Do not duplicate the cards being kept:
-${brief(keep) || '(none)'}
-
-Rewrite these:
-${JSON.stringify(bad, null, 1).slice(0, 6000)}
+Edit in place: keep each card's number, type and intent, and change the least that fixes it. Return only the fields you changed.
 
 ${CARD_SHAPES}
 
-Return a JSON array of the rewritten card objects. Raw JSON only, no fences.`;
-  for (const c of parseCards(await generateText(prompt, { tier: 'normal', maxTokens: 4000 }))) {
-    if (c?.card_number) out.set(Number(c.card_number), c);
+Return JSON: {"fixes":[{"card_number":N,"reason":"short","fields":{"text":"..."}}]}
+An empty list is the correct answer for a sound deck. Raw JSON only, no fences.`;
+
+  try {
+    const raw = await generateText(prompt, { tier: 'normal', maxTokens: 4000 });
+    const p = JSON.parse(raw.trim().replace(/^```json\n?|```$/g, ''));
+    for (const fx of Array.isArray(p?.fixes) ? p.fixes : []) {
+      const n = Number(fx?.card_number);
+      if (n && fx?.fields && typeof fx.fields === 'object') out.set(n, fx.fields);
+    }
+  } catch {
+    // review is advisory; a parse failure leaves the deck as generated
   }
   return out;
 }
