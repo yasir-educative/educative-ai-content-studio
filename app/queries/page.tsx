@@ -187,6 +187,9 @@ export default function ContentQueriesPage() {
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [picking, setPicking] = useState(false);
+  // One attempt per mount: a failed pick must not retry on every render.
+  const autoPickRef = useRef(false);
+  const [autoPicking, setAutoPicking] = useState(false);
   const [projQuery, setProjQuery] = useState('');
   const [projLoading, setProjLoading] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
@@ -328,9 +331,41 @@ export default function ContentQueriesPage() {
     } finally { setProjLoading(false); }
   }, []);
 
+  /**
+   * First board on a fresh connection. Preference order: the board with the
+   * most issues assigned to this person, then the first project that is not
+   * hidden. Only opens the picker when neither call returns anything.
+   */
+  const autoPickBoard = useCallback(async () => {
+    if (autoPickRef.current) return;
+    autoPickRef.current = true;
+    setAutoPicking(true);
+    try {
+      const asg = await fetch('/api/jira/assignee-boards', { cache: 'no-store' })
+        .then((r) => r.json()).catch(() => null);
+      let key: string = asg?.boards?.[0]?.key || '';
+      if (asg?.boards?.length) setAsgBoards(asg.boards);
+      if (!key) {
+        const pj = await fetch('/api/jira/projects', { cache: 'no-store' })
+          .then((r) => r.json()).catch(() => null);
+        if (pj?.projects?.length) setProjects(pj.projects);
+        const hidden = new Set(cfg.hiddenProjectKeys || []);
+        key = (pj?.projects || []).find((x: Project) => !hidden.has(x.key))?.key || '';
+      }
+      if (!key) { setPicking(true); return; }
+      await setProject(key);
+    } catch {
+      setPicking(true);
+    } finally { setAutoPicking(false); }
+  }, [cfg.hiddenProjectKeys]);
+
   useEffect(() => {
     if (!cfg.configured) return;
-    if (!cfg.projectKey) { setPicking(true); return; }
+    // Credentials are in but no board has been chosen. Choosing one by hand
+    // before anything is on screen is the worst moment to ask, so pick the
+    // board holding most of this person's work and persist it; the picker
+    // stays available to change it.
+    if (!cfg.projectKey) { autoPickBoard(); return; }
     setActive([]);
     // Apply the saved facet defaults (e.g. Team = Content) to the first load,
     // rather than fetching everything and narrowing afterwards.
@@ -348,7 +383,7 @@ export default function ContentQueriesPage() {
       .then((r) => r.json())
       .then((j) => setStatuses(j.statuses || []))
       .catch(() => setStatuses([]));
-  }, [cfg.configured, cfg.projectKey, loadIssues]);
+  }, [cfg.configured, cfg.projectKey, loadIssues, autoPickBoard]);
 
   // Debounce typing into a server-side search rather than filtering the page.
   const searchRef = useRef(search);
@@ -1143,6 +1178,7 @@ export default function ContentQueriesPage() {
                 {active.length > 0 && <span className="text-[10px] text-[var(--text-faint)]">{active.length} filter{active.length > 1 ? 's' : ''}</span>}
               </div>
               <div className="max-h-[calc(100vh-22rem)] overflow-y-auto divide-y divide-[var(--border)]">
+                {autoPicking && <p className="text-sm text-[var(--text-faint)] px-3 py-4">Finding your busiest board…</p>}
                 {loading && <p className="text-sm text-[var(--text-faint)] px-3 py-4">Fetching from Jira…</p>}
                 {shown?.length === 0 && !loading && <p className="text-sm text-[var(--text-faint)] px-3 py-4">No queries matched.</p>}
                 {shown?.map((i) => (
