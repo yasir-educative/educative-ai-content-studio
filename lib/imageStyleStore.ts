@@ -79,10 +79,10 @@ export function getStyleById(id?: string): ImageStyle {
 }
 
 /** Back-compat for callers that just want the active style text. */
-export function getImageStyle(id?: string): { style: string; isDefault: boolean } {
+export function getImageStyle(id?: string): { style: string; name: string; isDefault: boolean } {
   const { defaultId } = read();
   const s = getStyleById(id);
-  return { style: s.body, isDefault: s.id === defaultId };
+  return { style: s.body, name: s.name, isDefault: s.id === defaultId };
 }
 
 export async function saveStyle(input: { id?: string; name?: string; body: string }): Promise<ImageStyle> {

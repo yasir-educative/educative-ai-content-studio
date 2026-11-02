@@ -33,7 +33,7 @@ export default function EducativeImagesPage() {
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [result, setResult] = useState<{ url: string; filename: string; size: string; styleApplied?: boolean; usedReference?: boolean; usedSubject?: boolean; format?: string; requestedFormat?: string } | null>(null);
+  const [result, setResult] = useState<{ url: string; filename: string; size: string; styleApplied?: boolean; styleName?: string | null; usedReference?: boolean; usedSubject?: boolean; format?: string; requestedFormat?: string } | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [zoomed, setZoomed] = useState(false);
 
@@ -49,6 +49,8 @@ export default function EducativeImagesPage() {
   const [styleErr, setStyleErr] = useState('');
 
   const activeStyle = styles.find((x) => x.id === styleId) || null;
+  // One source of style per generation: a reference in use replaces the text.
+  const styleOverridden = mode === 'create' && !!refImage && useRef;
 
   const applyStyles = useCallback((j: any, selectId?: string) => {
     const list: Sty[] = j.styles || [];
@@ -148,7 +150,7 @@ export default function EducativeImagesPage() {
       }
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Generation failed');
-      setResult({ url: json.url, filename: json.filename, size: json.size, styleApplied: json.styleApplied, usedReference: json.usedReference, usedSubject: json.usedSubject, format: json.format, requestedFormat: json.requestedFormat });
+      setResult({ url: json.url, filename: json.filename, size: json.size, styleApplied: json.styleApplied, styleName: json.styleName, usedReference: json.usedReference, usedSubject: json.usedSubject, format: json.format, requestedFormat: json.requestedFormat });
     } catch (e: any) {
       setErr(e?.message || String(e));
     } finally {
@@ -180,175 +182,187 @@ export default function EducativeImagesPage() {
 
       {/* Styles — many saved, one default, picked per generation */}
       {mode === 'create' && (
-      <div className="card p-5 space-y-3">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">Visual style</label>
-            <p className="text-[11px] text-[var(--text-faint)] mt-0.5">Prepended to every create. Not used when editing.</p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <select className="input text-xs py-1 min-w-[13rem]" value={styleId}
-              onChange={(e) => { setStyleId(e.target.value); setEditing(false); }} disabled={busy}>
-              {styles.map((st) => (
-                <option key={st.id} value={st.id}>{st.name}{st.id === defaultStyleId ? ' (default)' : ''}</option>
-              ))}
-            </select>
-            {!editing && (
-              <>
-                <button className="btn-secondary text-xs py-1 px-3" onClick={() => setShowPrompt((v) => !v)}>
-                  {showPrompt ? 'Hide' : 'Show'}
-                </button>
-                <button className="btn-secondary text-xs py-1 px-3"
-                  onClick={() => { setStyleDraft(activeStyle?.body || ''); setStyleName(activeStyle?.name || ''); setEditing(true); setShowPrompt(true); setStyleErr(''); }}>
-                  Edit
-                </button>
-                <button className="btn-secondary text-xs py-1 px-3"
-                  onClick={() => { setStyleDraft(activeStyle?.body || ''); setStyleName(''); setStyleId(''); setEditing(true); setShowPrompt(true); setStyleErr(''); }}>
-                  + New
-                </button>
-                {styleId !== defaultStyleId && (
-                  <button className="btn-secondary text-xs py-1 px-3" onClick={() => persistStyle('PUT', { id: styleId })} disabled={styleBusy}>
-                    Make default
+        <div className={`card p-5 space-y-3 transition-opacity ${styleOverridden ? 'opacity-55' : ''}`}>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
+                Visual style <span className="text-[var(--text-faint)] normal-case tracking-normal">(optional)</span>
+              </label>
+              <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
+                {styleOverridden
+                  ? 'Not used — the reference image is styling this generation.'
+                  : 'Prepended to every create. Not used when editing.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <select className="input text-xs py-1 min-w-[13rem]" value={styleId}
+                onChange={(e) => { setStyleId(e.target.value); setEditing(false); }} disabled={busy}>
+                {styles.map((st) => (
+                  <option key={st.id} value={st.id}>{st.name}{st.id === defaultStyleId ? ' (default)' : ''}</option>
+                ))}
+              </select>
+              {!editing && (
+                <>
+                  <button className="btn-secondary text-xs py-1 px-3" onClick={() => setShowPrompt((v) => !v)}>
+                    {showPrompt ? 'Hide' : 'Show'}
                   </button>
-                )}
-                {activeStyle && !activeStyle.builtin && (
-                  <button className="text-[11px] text-[var(--text-faint)] hover:text-red-400 px-1"
-                    onClick={() => { if (confirm(`Delete style "${activeStyle.name}"?`)) persistStyle('DELETE'); }} disabled={styleBusy}>
-                    Delete
+                  <button className="btn-secondary text-xs py-1 px-3"
+                    onClick={() => { setStyleDraft(activeStyle?.body || ''); setStyleName(activeStyle?.name || ''); setEditing(true); setShowPrompt(true); setStyleErr(''); }}>
+                    Edit
                   </button>
-                )}
-              </>
-            )}
-            {editing && (
-              <>
-                <button className="btn-secondary text-xs py-1 px-3" onClick={() => { setEditing(false); setStyleErr(''); }} disabled={styleBusy}>Cancel</button>
-                <button className="btn-primary text-xs py-1 px-3"
-                  onClick={() => persistStyle('POST', { id: styleId || undefined, name: styleName, body: styleDraft })}
-                  disabled={styleBusy || !styleDraft.trim()}>
-                  {styleBusy ? 'Saving…' : 'Save'}
-                </button>
-              </>
-            )}
+                  <button className="btn-secondary text-xs py-1 px-3"
+                    onClick={() => { setStyleDraft(activeStyle?.body || ''); setStyleName(''); setStyleId(''); setEditing(true); setShowPrompt(true); setStyleErr(''); }}>
+                    + New
+                  </button>
+                  {styleId !== defaultStyleId && (
+                    <button className="btn-secondary text-xs py-1 px-3" onClick={() => persistStyle('PUT', { id: styleId })} disabled={styleBusy}>
+                      Make default
+                    </button>
+                  )}
+                  {activeStyle && !activeStyle.builtin && (
+                    <button className="text-[11px] text-[var(--text-faint)] hover:text-red-400 px-1"
+                      onClick={() => { if (confirm(`Delete style "${activeStyle.name}"?`)) persistStyle('DELETE'); }} disabled={styleBusy}>
+                      Delete
+                    </button>
+                  )}
+                </>
+              )}
+              {editing && (
+                <>
+                  <button className="btn-secondary text-xs py-1 px-3" onClick={() => { setEditing(false); setStyleErr(''); }} disabled={styleBusy}>Cancel</button>
+                  <button className="btn-primary text-xs py-1 px-3"
+                    onClick={() => persistStyle('POST', { id: styleId || undefined, name: styleName, body: styleDraft })}
+                    disabled={styleBusy || !styleDraft.trim()}>
+                    {styleBusy ? 'Saving…' : 'Save'}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
-        </div>
 
-        {editing && (
-          <input className="input w-full text-sm" placeholder="Style name" value={styleName}
-            onChange={(e) => setStyleName(e.target.value)} />
-        )}
-        {activeStyle?.builtin && editing && (
-          <p className="text-[11px] text-[var(--text-faint)]">Saving edits to the house style creates a copy; the original stays available.</p>
-        )}
-        {styleErr && <p className="text-xs text-red-400">{styleErr}</p>}
-        {showPrompt && (
-          <textarea readOnly={!editing} value={editing ? styleDraft : (activeStyle?.body || '')}
-            onChange={(e) => setStyleDraft(e.target.value)} spellCheck={false}
-            className={`input w-full font-mono text-[11px] leading-relaxed min-h-[240px] ${editing ? '' : 'opacity-80 cursor-default'}`} />
-        )}
-      </div>
+          {editing && (
+            <input className="input w-full text-sm" placeholder="Style name" value={styleName}
+              onChange={(e) => setStyleName(e.target.value)} />
+          )}
+          {activeStyle?.builtin && editing && (
+            <p className="text-[11px] text-[var(--text-faint)]">Saving edits to the house style creates a copy; the original stays available.</p>
+          )}
+          {styleErr && <p className="text-xs text-red-400">{styleErr}</p>}
+          {showPrompt && (
+            <textarea readOnly={!editing} value={editing ? styleDraft : (activeStyle?.body || '')}
+              onChange={(e) => setStyleDraft(e.target.value)} spellCheck={false}
+              className={`input w-full font-mono text-[11px] leading-relaxed min-h-[240px] ${editing ? '' : 'opacity-80 cursor-default'}`} />
+          )}
+        </div>
       )}
 
-      {/* Style reference — persists until replaced or removed */}
-      <div className="card p-5 space-y-2">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">Style reference</label>
-            <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
-              Its style is matched, not its subject. Saved and reused until you replace or remove it.
-            </p>
+      {/* Both optional, and set before anything is written */}
+      <div className="grid gap-4 lg:grid-cols-2 items-start">
+        {/* Style reference — persists until replaced or removed */}
+        <div className="card p-5 space-y-2">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
+                Style reference <span className="text-[var(--text-faint)] normal-case tracking-normal">(optional)</span>
+              </label>
+              <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
+                Optional. Its style is matched, not its subject, and it replaces the written style while in use.
+                Saved and reused until you replace or remove it.
+              </p>
+            </div>
+            {refImage && (
+              <label className="flex items-center gap-2 text-xs cursor-pointer shrink-0">
+                <input type="checkbox" className="accent-emerald-500" checked={useRef}
+                  onChange={(e) => setUseRef(e.target.checked)} disabled={busy} />
+                {useRef ? 'In use — overrides the style' : 'Ignored — using the style'}
+              </label>
+            )}
           </div>
-          {refImage && (
-            <label className="flex items-center gap-2 text-xs cursor-pointer shrink-0">
-              <input type="checkbox" className="accent-emerald-500" checked={useRef}
-                onChange={(e) => setUseRef(e.target.checked)} disabled={busy} />
-              Use this reference
+          <div className="flex items-start gap-3 flex-wrap">
+            <label className={`flex-1 min-w-[14rem] rounded-xl border-2 border-dashed px-4 py-4 text-center cursor-pointer transition-colors border-[var(--border)] hover:border-[var(--text-faint)] ${busy || refBusy ? 'opacity-50 pointer-events-none' : ''}`}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/'));
+                if (f) uploadReference(f);
+              }}
+              onPaste={(e) => {
+                const f = Array.from(e.clipboardData.files).find((x) => x.type.startsWith('image/'));
+                if (f) uploadReference(f);
+              }}
+            >
+              <input type="file" accept="image/*" className="hidden" disabled={busy || refBusy}
+                onChange={(e) => uploadReference(e.target.files?.[0] || null)} />
+              <p className="text-xs text-[var(--text-dim)]">
+                {refBusy ? 'Saving…' : refImage
+                  ? <>Replace the reference — <span className="text-[var(--accent)] underline">choose</span>, drag or paste</>
+                  : <>Set a style reference — <span className="text-[var(--accent)] underline">choose a file</span>, drag or paste</>}
+              </p>
             </label>
-          )}
+            {refImage && (
+              <div className="relative shrink-0">
+                <img src={refImage.url} alt="Style reference"
+                  className={`h-24 rounded-lg border object-contain bg-white ${useRef ? 'border-[var(--accent)]' : 'border-[var(--border)] opacity-40'}`} />
+                <button onClick={removeReference} disabled={busy || refBusy} title="Remove reference"
+                  className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[var(--panel)] border border-[var(--border)] text-xs leading-none hover:text-red-400">×</button>
+              </div>
+            )}
+          </div>
         </div>
-        <div className="flex items-start gap-3 flex-wrap">
-          <label className={`flex-1 min-w-[14rem] rounded-xl border-2 border-dashed px-4 py-4 text-center cursor-pointer transition-colors border-[var(--border)] hover:border-[var(--text-faint)] ${busy || refBusy ? 'opacity-50 pointer-events-none' : ''}`}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/'));
-              if (f) uploadReference(f);
-            }}
-            onPaste={(e) => {
-              const f = Array.from(e.clipboardData.files).find((x) => x.type.startsWith('image/'));
-              if (f) uploadReference(f);
-            }}
-          >
-            <input type="file" accept="image/*" className="hidden" disabled={busy || refBusy}
-              onChange={(e) => uploadReference(e.target.files?.[0] || null)} />
-            <p className="text-xs text-[var(--text-dim)]">
-              {refBusy ? 'Saving…' : refImage
-                ? <>Replace the reference — <span className="text-[var(--accent)] underline">choose</span>, drag or paste</>
-                : <>Set a style reference — <span className="text-[var(--accent)] underline">choose a file</span>, drag or paste</>}
-            </p>
-          </label>
-          {refImage && (
-            <div className="relative shrink-0">
-              <img src={refImage.url} alt="Style reference"
-                className={`h-24 rounded-lg border object-contain bg-white ${useRef ? 'border-[var(--accent)]' : 'border-[var(--border)] opacity-40'}`} />
-              <button onClick={removeReference} disabled={busy || refBusy} title="Remove reference"
-                className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[var(--panel)] border border-[var(--border)] text-xs leading-none hover:text-red-400">×</button>
-            </div>
-          )}
-        </div>
-      </div>
 
-      {/* Image input */}
-      <div className="card p-5 space-y-2">
-        <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
-          {mode === 'edit' ? 'Image to edit' : 'Image to recreate (optional)'}
-        </label>
-        <p className="text-[11px] text-[var(--text-faint)]">
-          {mode === 'edit'
-            ? 'The change is applied inside this image. The house style is not re-applied, since the image already has one.'
-            : 'Its subject and structure are kept and redrawn. Leave empty to create from the description alone.'}
-        </p>
-        <div className="flex items-start gap-3 flex-wrap">
-          {/* Click, drag and drop, or paste all land in pickFile. */}
-          <label
-            onDragOver={(e) => { e.preventDefault(); if (!busy) setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragging(false);
-              if (busy) return;
-              const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/'));
-              if (f) pickFile(f); else setErr('Drop an image file');
-            }}
-            onPaste={(e) => {
-              const f = Array.from(e.clipboardData.files).find((x) => x.type.startsWith('image/'));
-              if (f && !busy) pickFile(f);
-            }}
-            tabIndex={0}
-            className={`flex-1 min-w-[16rem] rounded-xl border-2 border-dashed px-4 py-5 text-center cursor-pointer transition-colors ${
-              dragging
-                ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
-                : 'border-[var(--border)] hover:border-[var(--text-faint)]'
-            } ${busy ? 'opacity-50 pointer-events-none' : ''}`}
-          >
-            <input type="file" accept="image/*" disabled={busy} className="hidden"
-              onChange={(e) => pickFile(e.target.files?.[0] || null)} />
-            <p className="text-xs text-[var(--text-dim)]">
-              {dragging ? 'Drop to use this image' : <>Drag an image here, <span className="text-[var(--accent)] underline">choose a file</span>, or paste</>}
-            </p>
-            {refFile && !dragging && (
-              <p className="text-[10px] text-[var(--text-faint)] mt-1 truncate">{refFile.name}</p>
-            )}
-            {!refFile && sourceUrl && !dragging && (
-              <p className="text-[10px] text-[var(--text-faint)] mt-1 truncate">Using the generated image</p>
-            )}
+        {/* Image input */}
+        <div className="card p-5 space-y-2">
+          <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
+            {mode === 'edit' ? 'Image to edit' : 'Image to recreate (optional)'}
           </label>
-          {refPreview && (
-            <div className="relative shrink-0">
-              <img src={refPreview} alt="Reference" className="h-24 rounded-lg border border-[var(--border)] bg-white object-contain" />
-              <button onClick={() => { pickFile(null); setSourceUrl(''); setRefPreview(''); }} disabled={busy}
-                className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[var(--panel)] border border-[var(--border)] text-xs leading-none hover:text-red-400">×</button>
-            </div>
-          )}
+          <p className="text-[11px] text-[var(--text-faint)]">
+            {mode === 'edit'
+              ? 'The change is applied inside this image. The house style is not re-applied, since the image already has one.'
+              : 'Its subject and structure are kept and redrawn. Leave empty to create from the description alone.'}
+          </p>
+          <div className="flex items-start gap-3 flex-wrap">
+            {/* Click, drag and drop, or paste all land in pickFile. */}
+            <label
+              onDragOver={(e) => { e.preventDefault(); if (!busy) setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                if (busy) return;
+                const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/'));
+                if (f) pickFile(f); else setErr('Drop an image file');
+              }}
+              onPaste={(e) => {
+                const f = Array.from(e.clipboardData.files).find((x) => x.type.startsWith('image/'));
+                if (f && !busy) pickFile(f);
+              }}
+              tabIndex={0}
+              className={`flex-1 min-w-[16rem] rounded-xl border-2 border-dashed px-4 py-5 text-center cursor-pointer transition-colors ${
+                dragging
+                  ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
+                  : 'border-[var(--border)] hover:border-[var(--text-faint)]'
+              } ${busy ? 'opacity-50 pointer-events-none' : ''}`}
+            >
+              <input type="file" accept="image/*" disabled={busy} className="hidden"
+                onChange={(e) => pickFile(e.target.files?.[0] || null)} />
+              <p className="text-xs text-[var(--text-dim)]">
+                {dragging ? 'Drop to use this image' : <>Drag an image here, <span className="text-[var(--accent)] underline">choose a file</span>, or paste</>}
+              </p>
+              {refFile && !dragging && (
+                <p className="text-[10px] text-[var(--text-faint)] mt-1 truncate">{refFile.name}</p>
+              )}
+              {!refFile && sourceUrl && !dragging && (
+                <p className="text-[10px] text-[var(--text-faint)] mt-1 truncate">Using the generated image</p>
+              )}
+            </label>
+            {refPreview && (
+              <div className="relative shrink-0">
+                <img src={refPreview} alt="Reference" className="h-24 rounded-lg border border-[var(--border)] bg-white object-contain" />
+                <button onClick={() => { pickFile(null); setSourceUrl(''); setRefPreview(''); }} disabled={busy}
+                  className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[var(--panel)] border border-[var(--border)] text-xs leading-none hover:text-red-400">×</button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -479,7 +493,9 @@ export default function EducativeImagesPage() {
                 {result.size} · {result.filename}
                 {result.format && result.requestedFormat && result.format !== result.requestedFormat &&
                   ` · returned ${result.format}, not ${result.requestedFormat}`}
-                {result.usedReference && ' · style reference used'}
+                {result.usedReference
+                  ? ' · styled from the reference image'
+                  : result.styleApplied && result.styleName ? ` · style: ${result.styleName}` : ''}
                 {result.usedSubject && ' · recreated from image'}
                 {result.styleApplied === false && ' · house style not applied'}
               </p>

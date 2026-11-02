@@ -20,12 +20,15 @@ function sniffExt(b: Buffer): 'png' | 'jpeg' | 'webp' | null {
 }
 
 /**
- * Three paths, all landing in data/images/educative:
- *   create            — prompt only, house style prepended
- *   create + reference — the reference steers composition; style still applies
- *   edit              — change an existing image, house style deliberately NOT
- *                       applied, since the image already follows one and the
- *                       request is a targeted change within it
+ * Style comes from exactly one source per request, never two:
+ *   create                     — the saved style text (Educative by default)
+ *   create + reference         — the reference image; the style text is skipped
+ *   create + reference + subject — reference styles it, subject is recreated
+ *   edit                       — neither; the image already follows a style and
+ *                                the request is a targeted change within it
+ *
+ * A written style and a picture of a style pull in different directions when
+ * both are sent, so the reference wins whenever one is attached.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -121,8 +124,14 @@ export async function POST(req: NextRequest) {
     const hasSubject = !!(upload || sourceBuf);
 
     // An edit works inside an image that already follows the house style, so
-    // prepending the style block would fight the existing artwork.
-    let prompt = mode === 'edit' ? instructions : `${getImageStyle(styleId).style}\n\n# Create\n${instructions}`;
+    // prepending the style block would fight the existing artwork. A reference
+    // image replaces the written style for the same reason.
+    const styleApplied = mode !== 'edit' && !reference;
+    let prompt = mode === 'edit'
+      ? instructions
+      : styleApplied
+        ? `${getImageStyle(styleId).style}\n\n# Create\n${instructions}`
+        : `# Create\n${instructions}`;
 
     // With two images the model needs to be told which is which, and in what
     // order they were attached, or it treats both as subject matter.
@@ -208,7 +217,8 @@ export async function POST(req: NextRequest) {
       requestedFormat: format,
       usedReference: !!reference,
       usedSubject: hasSubject,
-      styleApplied: mode !== 'edit',
+      styleApplied,
+      styleName: styleApplied ? getImageStyle(styleId).name : null,
       size: `${width}x${height}`,
     });
   } catch (e: any) {
