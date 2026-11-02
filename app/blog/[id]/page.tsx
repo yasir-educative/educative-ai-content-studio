@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import { ArticleToc } from '@/app/_components/ArticleToc';
 import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -402,6 +403,7 @@ export default function BlogRunPage() {
   const hasDebug = stages.length > 0 || Object.keys(outputs).length > 0;
   const liveText = typeof outputs['text-generator'] === 'string' ? outputs['text-generator'] : null;
   const htmlSegments = final?.html ? parseHtmlSegments(final.html) : [];
+  const contentKey = `${final?.html?.length || 0}:${final?.markdown?.length || 0}`;
 
   const activeContentText = contentView === 'html' ? (final?.html || '') : (final?.markdown || '');
   const activeContentExt = contentView === 'html' ? 'html' : 'md';
@@ -578,7 +580,8 @@ export default function BlogRunPage() {
           <StageOutputs outputs={outputs} logs={logs} order={STAGE_ORDER} defaultTab="text-generator" />
         ) : (
           /* ── Clean blog article ── */
-          <article ref={articleRef} className="card p-8">
+          <div className="article-layout">
+            <article ref={articleRef} className="card p-8 article-reader">
             <div className="article-prose">
               {final.html ? (
                 htmlSegments.map((seg, i) =>
@@ -616,7 +619,9 @@ export default function BlogRunPage() {
                 </ReactMarkdown>
               )}
             </div>
-          </article>
+            </article>
+            <ArticleToc containerRef={articleRef} contentKey={contentKey} />
+          </div>
         )
       )}
 

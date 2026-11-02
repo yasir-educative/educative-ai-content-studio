@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import { ArticleToc } from '@/app/_components/ArticleToc';
 import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -430,6 +431,7 @@ export default function NewsletterRunPage() {
   const activeContentMime = contentView === 'html' ? 'text/html' : 'text/markdown';
 
   const htmlSegments = final?.html ? parseHtmlSegments(final.html) : [];
+  const contentKey = `${final?.html?.length || 0}:${final?.markdown?.length || 0}`;
 
   const articleRef = useRef<HTMLElement>(null);
 
@@ -584,7 +586,8 @@ export default function NewsletterRunPage() {
         ) : debugOpen ? (
           <StageOutputs outputs={outputs} logs={logs} order={STAGE_ORDER} defaultTab={draftStage} />
         ) : (
-          <article ref={articleRef} className="card p-8">
+          <div className="article-layout">
+            <article ref={articleRef} className="card p-8 article-reader">
             <div className="article-prose">
               {final.html ? (
                 <div>
@@ -623,7 +626,9 @@ export default function NewsletterRunPage() {
                 </ReactMarkdown>
               )}
             </div>
-          </article>
+            </article>
+            <ArticleToc containerRef={articleRef} contentKey={contentKey} />
+          </div>
         )
       )}
 

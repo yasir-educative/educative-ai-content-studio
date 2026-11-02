@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { ArticleToc } from '@/app/_components/ArticleToc';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { PublishMenu, PublishResults, type PublishChannel, type PublishOutcome } from '@/app/_components/PublishMenu';
@@ -192,6 +193,7 @@ export default function HistoryDetailPage() {
   const [publishErr, setPublishErr] = useState('');
 
   const [contentView, setContentView] = useState<null | 'html' | 'markdown'>(null);
+  const articleRef = useRef<HTMLElement>(null);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState('');
@@ -370,6 +372,7 @@ export default function HistoryDetailPage() {
 
   // Parse HTML into segments so we can overlay edit buttons on images
   const htmlSegments = blog.html ? parseHtmlSegments(blog.html) : [];
+  const contentKey = `${blog.html?.length || 0}:${blog.markdown?.length || 0}`;
 
   return (
     <div className="space-y-6">
@@ -537,7 +540,8 @@ export default function HistoryDetailPage() {
         </div>
       ) : (
         (blog.html || blog.markdown) && (
-          <article className="card p-8">
+          <div className="article-layout">
+            <article ref={articleRef} className="card p-8 article-reader">
             <div className="article-prose">
               {blog.html ? (
                 // Render HTML segments: plain HTML interspersed with edit-overlaid images
@@ -579,7 +583,9 @@ export default function HistoryDetailPage() {
                 <MarkdownRenderer>{blog.markdown || ''}</MarkdownRenderer>
               )}
             </div>
-          </article>
+            </article>
+            <ArticleToc containerRef={articleRef} contentKey={contentKey} />
+          </div>
         )
       )}
     </div>
