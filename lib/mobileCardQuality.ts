@@ -21,6 +21,12 @@ export interface CardSpec {
   /** Exact number of cards wanted. 5 is the ceiling everywhere. */
   numCards?: number;
   isHighlightCardNeeded?: boolean;
+  /** Context for regeneration and review. Without it both are skipped. */
+  topic?: string;
+  objective?: string;
+  level?: string;
+  /** Skip the reviewer, e.g. for a chapter already reviewed upstream. */
+  skipReview?: boolean;
 }
 
 export interface QualityReport {
@@ -158,26 +164,169 @@ export async function ensureCardQuality(
   spec: CardSpec,
   log?: (m: string) => void,
 ): Promise<{ cards: MobileCard[]; report: QualityReport }> {
-  const first = enforce(raw, spec);
-  let cards = first.cards;
+  const fixed: string[] = [];
+  const say = (m: string) => { fixed.push(m); log?.(m); };
 
-  if (first.short.length) {
-    const rewrites = await expandShort(first.short);
+  let pass = enforce(raw, spec);
+  let cards = pass.cards;
+  fixed.push(...pass.report.fixed);
+
+  // 1. Incomplete deck: generate exactly what is missing, with the existing
+  //    cards supplied so the new ones do not repeat them.
+  const want = Math.min(5, Math.max(1, spec.numCards || 5));
+  const needHighlight = !!spec.isHighlightCardNeeded && !cards.some((c) => c.type === 'highlightCard');
+  if (spec.topic && (cards.length < want || needHighlight)) {
+    const missing = Math.max(want - cards.length, needHighlight ? 1 : 0);
+    say(`generating ${missing} missing card(s)`);
+    const extra = await topUp(spec, cards, missing, needHighlight);
+    if (extra.length) {
+      pass = enforce([...cards, ...extra], spec);
+      cards = pass.cards;
+      fixed.push(...pass.report.fixed);
+    }
+  }
+
+  // 2. Lengthen anything still under its minimum.
+  if (pass.short.length) {
+    const rewrites = await expandShort(pass.short);
     if (rewrites.size) {
       cards = cards.map((c) => {
         const t = rewrites.get(Number(c.card_number));
         return t ? { ...c, text: t } : c;
       });
-      first.report.fixed.push(`expanded ${rewrites.size} short card(s)`);
+      say(`expanded ${rewrites.size} short card(s)`);
     }
   }
 
-  // Re-run deterministically: the repair is model output and must be bounded.
-  const second = enforce(cards, spec);
+  // 3. Review substance, then rewrite only what fails. One round: a second
+  //    reviewer pass on its own output tends to churn rather than improve.
+  if (spec.topic && !spec.skipReview) {
+    const failing = await review(spec, cards);
+    if (failing.length) {
+      say(`reviewer rejected card(s) ${failing.join(', ')}`);
+      const fresh = await regenerate(spec, cards, failing);
+      if (fresh.size) {
+        cards = cards.map((c) => fresh.get(Number(c.card_number)) ?? c);
+        say(`rewrote ${fresh.size} card(s)`);
+      }
+    }
+  }
+
+  // 4. Final deterministic pass. Everything above is model output and must be
+  //    bounded again: a rewrite can be blank, over-length or wrongly typed.
+  const last = enforce(cards, spec);
   const report: QualityReport = {
-    fixed: [...first.report.fixed, ...second.report.fixed],
-    remaining: [...new Set([...second.report.remaining, ...second.short.map((c) => `card ${c.card_number} still under minimum`)])],
+    fixed: [...fixed, ...last.report.fixed],
+    remaining: [
+      ...new Set([
+        ...last.report.remaining,
+        ...last.short.map((c) => `card ${c.card_number} still under minimum`),
+      ]),
+    ],
   };
-  for (const m of [...report.fixed, ...report.remaining.map((r) => `unresolved: ${r}`)]) log?.(m);
-  return { cards: second.cards as MobileCard[], report };
+  for (const m of report.remaining) log?.(`unresolved: ${m}`);
+  return { cards: last.cards as MobileCard[], report };
+}
+
+// ── Regeneration and review ──────────────────────────────────────────────────
+// Code guarantees the mechanics. These two handle what it cannot: a deck that
+// came back incomplete, and content that is structurally valid but weak.
+
+const CARD_SHAPES = `Allowed types and required fields:
+- text: title, text (350-450 chars)
+- text_img: title, text (230-280 chars, ONE prose paragraph, no lists), illustration_idea, visible_labels
+- img_only: title, img_context, illustration_idea, visible_labels
+- highlightCard: text (100-130 chars, no markdown)
+- quiz: title, question, options [{id,text}], correctAnswer, incorrectMessage`;
+
+function brief(cards: any[]): string {
+  return cards
+    .map((c) => `${c.card_number}. [${c.type}] ${String(c.title || '').slice(0, 60)} :: ${text(c).slice(0, 160)}`)
+    .join('\n');
+}
+
+function ctx(spec: CardSpec): string {
+  return [
+    spec.topic && `Topic: ${spec.topic}`,
+    spec.objective && `Objective: ${spec.objective}`,
+    spec.level && `Audience: ${spec.level}`,
+  ].filter(Boolean).join('\n');
+}
+
+function parseCards(raw: string): any[] {
+  try {
+    const t = raw.trim().replace(/^```json\n?|```$/g, '');
+    const p = JSON.parse(t);
+    return Array.isArray(p) ? p : Array.isArray(p?.cards) ? p.cards : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Generate the cards a short deck is missing, without repeating what exists. */
+async function topUp(spec: CardSpec, existing: any[], missing: number, needHighlight: boolean): Promise<any[]> {
+  if (missing <= 0 || !spec.topic) return [];
+  const prompt = `Write ${missing} more mobile learning card(s) to complete a deck.
+
+${ctx(spec)}
+
+Cards already written — do NOT repeat these points:
+${brief(existing) || '(none)'}
+
+${needHighlight ? 'Exactly one of the new cards must be type "highlightCard".\n' : ''}${CARD_SHAPES}
+
+Return a JSON array of exactly ${missing} card object(s). Raw JSON only, no fences.`;
+  return parseCards(await generateText(prompt, { tier: 'normal', maxTokens: 4000 }));
+}
+
+/** Judge substance only; length, type and blankness are already guaranteed. */
+async function review(spec: CardSpec, cards: any[]): Promise<number[]> {
+  if (!spec.topic || cards.length === 0) return [];
+  const prompt = `Review these mobile learning cards and name only the ones that must be rewritten.
+
+${ctx(spec)}
+
+${brief(cards)}
+
+A card fails only if it is genuinely unusable:
+- factually wrong or misleading
+- says nothing concrete, or restates another card
+- does not teach the stated topic
+- a text_img whose text just describes its own diagram instead of adding the why
+
+Do NOT fail a card for length, formatting, type or tone. Those are handled elsewhere. Most decks should return an empty list.
+
+Return JSON: {"failing":[card_number,...]}. Raw JSON only, no fences.`;
+  try {
+    const raw = await generateText(prompt, { tier: 'edit', maxTokens: 400 });
+    const p = JSON.parse(raw.trim().replace(/^```json\n?|```$/g, ''));
+    return Array.isArray(p?.failing) ? p.failing.map(Number).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Rewrite the cards the reviewer rejected, keeping their type and slot. */
+async function regenerate(spec: CardSpec, cards: any[], failing: number[]): Promise<Map<number, any>> {
+  const out = new Map<number, any>();
+  const bad = cards.filter((c) => failing.includes(Number(c.card_number)));
+  if (!bad.length || !spec.topic) return out;
+  const keep = cards.filter((c) => !failing.includes(Number(c.card_number)));
+  const prompt = `Rewrite these mobile learning cards. Each was rejected as unusable: wrong, empty of substance, redundant, or off-topic.
+
+${ctx(spec)}
+
+Keep each card's card_number and type. Do not duplicate the cards being kept:
+${brief(keep) || '(none)'}
+
+Rewrite these:
+${JSON.stringify(bad, null, 1).slice(0, 6000)}
+
+${CARD_SHAPES}
+
+Return a JSON array of the rewritten card objects. Raw JSON only, no fences.`;
+  for (const c of parseCards(await generateText(prompt, { tier: 'normal', maxTokens: 4000 }))) {
+    if (c?.card_number) out.set(Number(c.card_number), c);
+  }
+  return out;
 }

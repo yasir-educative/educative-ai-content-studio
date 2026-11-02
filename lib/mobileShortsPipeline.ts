@@ -233,7 +233,13 @@ export async function runMobileShortPipeline(
   // count and the character ceilings, and repairs only what code cannot.
   const { cards: checked } = await ensureCardQuality(
     rawCards,
-    { numCards: input.numCards, isHighlightCardNeeded: input.isHighlightCardNeeded },
+    {
+      numCards: input.numCards,
+      isHighlightCardNeeded: input.isHighlightCardNeeded,
+      topic: input.topic,
+      objective: input.objective,
+      level: input.level,
+    },
     (m) => emit({ type: 'log', message: m }),
   );
   rawCards = checked as any[];

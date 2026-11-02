@@ -328,7 +328,9 @@ export async function processChapter(
   // highlight toggle, so only the type, blank and length rules apply.
   const gated = await ensureCardQuality(
     finalCards,
-    { numCards: finalCards.length, isHighlightCardNeeded: true },
+    // A chapter has no fixed count or toggle, and its cards were already
+    // refined upstream, so only the mechanical rules apply here.
+    { numCards: finalCards.length, isHighlightCardNeeded: true, skipReview: true },
     (m) => emit({ type: 'log', message: `${chapterId}: ${m}` }),
   );
   finalCards = gated.cards as any[];
