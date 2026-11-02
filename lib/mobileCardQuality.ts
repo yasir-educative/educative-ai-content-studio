@@ -82,7 +82,7 @@ export function trimToMax(s: string, max: number): string {
  * The deterministic pass. Returns cards that already satisfy every invariant
  * except "too few" and "too short", which are reported for the repair pass.
  */
-export function enforce(raw: any[], spec: CardSpec): { cards: any[]; report: QualityReport; short: any[] } {
+export function enforce(raw: any[], spec: CardSpec): { cards: any[]; report: QualityReport; long: any[] } {
   const fixed: string[] = [];
   const remaining: string[] = [];
   let cards = Array.isArray(raw) ? [...raw] : [];
@@ -117,30 +117,29 @@ export function enforce(raw: any[], spec: CardSpec): { cards: any[]; report: Qua
 
   cards = cards.map((c, i) => ({ ...c, card_number: i + 1 }));
 
-  // 5. Character ceilings, last, so `short` references the cards actually
-  //    returned rather than copies discarded by the renumber.
-  const short: any[] = [];
+  // 5. Over-length cards are collected, not cut here: a rewrite that keeps the
+  //    point is better than a sentence lopped off. Trimming is the last resort.
+  //    Under-length is not a failure — a short card that makes its point is
+  //    fine, and padding to hit a floor makes content worse.
+  const long: any[] = [];
   for (const c of cards) {
     const lim = CARD_LIMITS[c.type as MobileCardType];
-    if (!lim) continue;
-    const body = text(c);
-    if (body.length > lim.max) { c.text = trimToMax(body, lim.max); fixed.push(`card ${c.card_number}: trimmed to ${lim.max}`); }
-    else if (body.length < lim.min) short.push(c);
+    if (lim && text(c).length > lim.max) long.push(c);
   }
 
-  return { cards, report: { fixed, remaining }, short };
+  return { cards, report: { fixed, remaining }, long };
 }
 
-/** One model call to lengthen only the cards that came back too short. */
-async function expandShort(short: any[]): Promise<Map<number, string>> {
+/** One model call to bring over-length cards inside their ceiling. */
+async function refitLong(long: any[]): Promise<Map<number, string>> {
   const out = new Map<number, string>();
-  if (!short.length) return out;
-  const prompt = `Each card below is under its minimum length. Rewrite ONLY its text so it lands inside the range, adding real substance rather than padding. Keep the meaning, voice and any markdown. text_img cards must stay one prose paragraph with no lists.
+  if (!long.length) return out;
+  const prompt = `Each card below exceeds its character ceiling. Rewrite ONLY its text so it fits, keeping the point intact. Aim just under the ceiling, not far below it: land within about 10 percent of max so the card keeps its substance. Cut the least important clause rather than truncating a sentence. Keep the voice and any markdown. A text_img card must stay one prose paragraph with no lists.
 
-${JSON.stringify(short.map((c) => {
-  const lim = CARD_LIMITS[c.type as MobileCardType]!;
-  return { card_number: c.card_number, type: c.type, min: lim.min, max: lim.max, current_length: text(c).length, current_text: text(c) };
-}), null, 1)}
+${JSON.stringify(long.map((c) => {
+    const lim = CARD_LIMITS[c.type as MobileCardType]!;
+    return { card_number: c.card_number, type: c.type, max: lim.max, current_length: text(c).length, current_text: text(c) };
+  }), null, 1)}
 
 Return a JSON array of { "card_number": N, "new_text": "..." }. Raw JSON only, no fences.`;
   try {
@@ -150,7 +149,7 @@ Return a JSON array of { "card_number": N, "new_text": "..." }. Raw JSON only, n
       if (r?.card_number && typeof r?.new_text === 'string') out.set(Number(r.card_number), r.new_text);
     }
   } catch {
-    // keep the short text rather than failing the run
+    // fall through to the hard trim
   }
   return out;
 }
@@ -200,25 +199,27 @@ export async function ensureCardQuality(
     }
   }
 
-  // 3. Lengthen last. The reviewer edits text, so measuring before it runs
-  //    lets a shortened card slip through; measure after everything else.
-  //    Two attempts: the first often lands just under, and code cannot write
-  //    the words itself. Anything still short after that is reported, never
-  //    silently shipped.
+  // 3. Over-length last, since the reviewer also edits text. Rewrite the
+  //    offenders once; anything still over is trimmed, which guarantees the
+  //    ceiling without ever shipping an oversized card.
   let last = enforce(cards, spec);
-  for (let attempt = 0; attempt < 2 && last.short.length; attempt++) {
-    const rewrites = await expandShort(last.short);
-    if (!rewrites.size) break;
-    cards = last.cards.map((c) => {
-      const t = rewrites.get(Number(c.card_number));
-      return t ? { ...c, text: t } : c;
-    });
-    say(`expanded ${rewrites.size} short card(s)`);
-    // Re-check every time: the expansion is model output too.
-    const next = enforce(cards, spec);
-    if (next.short.length === last.short.length && attempt > 0) { last = next; break; }
-    last = next;
+  if (last.long.length) {
+    const rewrites = await refitLong(last.long);
+    if (rewrites.size) {
+      cards = last.cards.map((c) => {
+        const t = rewrites.get(Number(c.card_number));
+        return t ? { ...c, text: t } : c;
+      });
+      say(`rewrote ${rewrites.size} over-length card(s)`);
+      last = enforce(cards, spec);
+    }
+    for (const c of last.long) {
+      const lim = CARD_LIMITS[c.type as MobileCardType]!;
+      c.text = trimToMax(text(c), lim.max);
+      say(`card ${c.card_number}: trimmed to ${lim.max}`);
+    }
   }
+
   // Recompute from the cards actually being returned. Deriving this from an
   // earlier pass let a short card ship while the report claimed none.
   const out = last.cards;
@@ -227,7 +228,7 @@ export async function ensureCardQuality(
     const lim = CARD_LIMITS[c.type as MobileCardType];
     if (!lim) continue;
     const n = text(c).length;
-    if (n < lim.min) problems.push(`card ${c.card_number} (${c.type}) is ${n} chars, under the ${lim.min} minimum`);
+    // Only the ceiling is a failure. A short card that makes its point is fine.
     if (n > lim.max) problems.push(`card ${c.card_number} (${c.type}) is ${n} chars, over the ${lim.max} maximum`);
   }
   if (spec.isHighlightCardNeeded && !out.some((c) => c.type === 'highlightCard')) {
