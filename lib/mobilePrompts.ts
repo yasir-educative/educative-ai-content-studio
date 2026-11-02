@@ -1,6 +1,23 @@
+import { COURSE_PLANNER_TYPES, HIGHLIGHT_CARD_TYPE_IDS, highlightCardTypeGuide, type CoursePlannerType } from './mobileCardTypes';
+
 // Mobile course prompt functions — refactored with single object-arg signatures so
 // promptStore's Proxy-based template extraction can capture {{var}} placeholders.
 // Callers pre-process array/slice args before passing them in.
+
+export const COURSE_TYPE_DESCRIPTIONS: Record<CoursePlannerType, string> = {
+  text: 'A concept is best explained with simple prose alone.',
+  highlight: 'You have a single punchy insight, stat, or quote worth spotlighting.',
+  text_img: 'An explanation needs a supporting diagram or illustration to land. High priority — prefer this over plain `text` when a visual adds clarity.',
+  img_only: 'A concept can be conveyed entirely through a standalone image with embedded labels — no separate text block needed. Second highest visual priority.',
+  text_code: 'Explanation paired with a code snippet. Only if source has code.',
+  code_output: 'Code snippet paired with its console result. Only if source has code.',
+  compare: 'Two alternatives need side-by-side treatment (e.g., SQL vs NoSQL, monolith vs microservices). Renders as tabs.',
+  scenario: 'A common mistake vs correct approach needs to be shown.',
+  quiz: 'A multiple-choice recall check fits after a core concept.',
+  true_false: 'A quick binary check reinforces a fact.',
+  fill_in_the_blanks: 'A sentence-completion exercise reinforces terminology or a key phrase.',
+  recap: 'Summarize the key points discussed across the card deck. Always the final card.',
+};
 
 export function cardPlannerPrompt({
   courseTitle,
@@ -55,37 +72,9 @@ Given a knowledge source (text, code, images), design an accessible, mobile-firs
 
 ## 3. Card types
 
-### Informational
-
 | Type | Use when |
 |---|---|
-| \`text\` | A concept is best explained with simple prose alone. |
-| \`highlight\` | You have a single punchy insight, stat, or quote worth spotlighting. |
-| \`text_img\` | An explanation needs a supporting diagram or illustration to land. High priority — prefer this over plain \`text\` when a visual adds clarity. |
-| \`img_only\` | A concept can be conveyed entirely through a standalone image with embedded labels — no separate text block needed. Second highest visual priority. |
-| \`text_code\` | Explanation paired with a code snippet. Only if source has code. |
-| \`code_output\` | Code snippet paired with its console result. Only if source has code. |
-
-### Comparative
-
-| Type | Use when |
-|---|---|
-| \`compare\` | Two alternatives need side-by-side treatment (e.g., SQL vs NoSQL, monolith vs microservices). Renders as tabs. |
-| \`scenario\` | A common mistake vs correct approach needs to be shown. |
-
-### Interactive
-
-| Type | Use when |
-|---|---|
-| \`quiz\` | A multiple-choice recall check fits after a core concept. |
-| \`true_false\` | A quick binary check reinforces a fact. |
-| \`fill_in_the_blanks\` | A sentence-completion exercise reinforces terminology or a key phrase. |
-
-### Wrap-up
-
-| Type | Use when |
-|---|---|
-| \`recap\` | Summarize the key points discussed across the card deck. Always the final card. |
+${COURSE_PLANNER_TYPES.map((type) => `| \`${type}\` | ${COURSE_TYPE_DESCRIPTIONS[type]} |`).join('\n')}
 
 ---
 
@@ -125,7 +114,7 @@ Your plan should generally follow this progression (adapt as needed, not every s
 
 ## 7. Output format
 
-Return a single JSON array. No markdown fences. Raw JSON only.
+Return a JSON object with a cards array. No markdown fences. Raw JSON only.
 
 Each object must contain exactly these fields:
 
@@ -169,7 +158,8 @@ Your job: turn each plan item into a polished, final card. Follow all character 
 3. **Depth (40-50%):** Stay conceptual. Do not add complexity beyond what the planner intended.
 4. **Card independence:** Each card is self-contained. Never reference other cards, say "as we saw," or mention "next" or "previous."
 5. **Forbidden terms:** Never use "card," "planner," "lesson," "next card," or "previous card" in output content.
-6. **TEXT_IMG prose rule (hard constraint):** The \`content\` field of every TEXT_IMG card must be a single prose paragraph. No bullet lists. No blockquotes. No tables. This applies even when the concept involves multiple steps — weave them into prose or focus on the why and the takeaway. A TEXT_IMG card with any line starting with a hyphen, greater-than, or pipe is wrong and must be rewritten before output.
+6. **Fixed types:** Keep every card_type exactly as given in the decided plan. Never choose a different type.
+7. **TEXT_IMG prose rule (hard constraint):** The \`content\` field of every TEXT_IMG card must be a single prose paragraph. No bullet lists. No blockquotes. No tables. This applies even when the concept involves multiple steps — weave them into prose or focus on the why and the takeaway. A TEXT_IMG card with any line starting with a hyphen, greater-than, or pipe is wrong and must be rewritten before output.
 
 ---
 
@@ -274,9 +264,7 @@ TEXT_IMG cards never use bullets, blockquotes, or tables. See the TEXT_IMG card 
 - **Length:** 100-130 chars
 - **Goal:** One powerful, non-obvious insight. Plain text only, no formatting.
 - **Choose one type:**
-  - \`key-insight\`: A hard-earned truth.
-  - \`point-to-ponder\`: A provocative question.
-  - \`bigger-picture\`: A zoomed-out perspective.
+${highlightCardTypeGuide().replace(/^/gm, '  ')}
 
 ### Comparative cards
 
@@ -508,7 +496,7 @@ Given some information for individual cards for a mobile app, you are supposed t
     "type": "highlightCard",
     "card_number": number,
     "text": string,
-    "highlightCardType": string
+    "highlightCardType": ${HIGHLIGHT_CARD_TYPE_IDS.map((id) => `"${id}"`).join(' | ')}
 }
 }
 

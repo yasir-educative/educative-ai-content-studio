@@ -2,44 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-
-type MobileCardType =
-  | 'text' | 'text_img' | 'img_only' | 'text-with-code' | 'code-with-output'
-  | 'comparisonCards' | 'recapCard' | 'quiz' | 'trueFalseCard' | 'fillInTheBlank'
-  | 'scenarioCard' | 'highlightCard';
-
-interface MobileCard {
-  id: string;
-  type: MobileCardType;
-  card_number?: number;
-  title?: string;
-  text?: string;
-  illustration_idea?: string;
-  visible_labels?: string;
-  imageUrl?: string;
-  img_context?: string;
-  text_1?: string;
-  text_2?: string;
-  language?: string;
-  code?: string;
-  output_available?: boolean;
-  output?: string;
-  heading?: string;
-  leftOption?: { label: string; heading: string; description: string };
-  rightOption?: { label: string; heading: string; description: string };
-  content?: Array<{ heading: string; text: string }>;
-  question?: string;
-  options?: Array<{ id: number; text: string }> | string[];
-  correctAnswer?: number | string;
-  incorrectMessage?: string;
-  explanation?: string;
-  correctOptions?: string[];
-  sections?: Array<{ heading: string; content: string }>;
-  scenarioType?: string;
-  highlightCardType?: string;
-  pageId?: string;
-  publishedUrl?: string;
-}
+// The card shape, the gate and the rewrite dialog all come from the shared
+// modules so the page cannot drift from what the server enforces.
+import type { MobileCard } from '@/lib/mobileCourseStorage';
+import { HighlightTypePicker } from '@/app/_components/HighlightTypePicker';
+import { checkCard, checkCourse } from '@/lib/mobileCardLimits';
+import { CardIssues, CardIssueSummary } from '@/app/_components/CardIssues';
+import { CardRewriteControl, CardRegenerateButton } from '@/app/_components/CardRewriteControl';
 
 interface MobileChapter {
   id: string;
@@ -291,12 +260,22 @@ function CardView({
   onEdit,
   onEditImage,
   onDelete,
+  endpoint,
+  onRewritten,
+  onUpdate,
 }: {
   card: MobileCard;
   onEdit: (card: MobileCard) => void;
   onEditImage: (src: string, onApply: (url: string) => void) => void;
   onDelete?: () => void;
+  /** Omitted for the dimmed neighbour previews, which are not interactive. */
+  endpoint?: string;
+  onRewritten?: () => Promise<void>;
+  /** Saves a single field edited directly on the card, e.g. the highlight type. */
+  onUpdate?: (card: MobileCard) => void;
 }) {
+  const issues = checkCard(card, 'course');
+  const blocking = issues.some((i) => i.severity === 'error');
   const [selected, setSelected] = useState<number | null>(null);
   const [tfSelected, setTfSelected] = useState<'true' | 'false' | null>(null);
   const [filledBlanks, setFilledBlanks] = useState<string[]>([]);
@@ -384,7 +363,9 @@ function CardView({
   }
 
   return (
-    <div className="relative flex flex-col w-[400px] min-h-[600px] max-h-[700px] rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-xl overflow-hidden shrink-0">
+    <div className={`relative flex flex-col w-[400px] min-h-[600px] max-h-[700px] rounded-2xl border bg-[var(--surface)] shadow-xl overflow-hidden shrink-0 ${
+      blocking ? 'border-red-500' : 'border-[var(--border)]'
+    }`}>
       {/* Card header */}
       <div className="flex items-center justify-between px-4 pt-3.5 pb-0 gap-2 shrink-0">
         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${badgeClass}`}>
@@ -395,20 +376,34 @@ function CardView({
             <span className="text-[10px] text-[var(--text-faint)] font-mono">#{card.card_number}</span>
           )}
           <button
-            className="p-1.5 rounded-lg bg-[var(--card)] border border-[var(--border)] text-[var(--text)] hover:text-[var(--accent)] hover:border-[var(--accent)]/50 hover:bg-[var(--accent)]/5 transition-colors text-sm"
+            className="card-tool"
             onClick={() => card.type === 'img_only' && card.imageUrl
               ? onEditImage(card.imageUrl, () => {})
               : onEdit(card)
             }
-            title="Edit card"
+            data-tip="Edit card" aria-label="Edit card"
           >
-            ✏
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>
+            </svg>
           </button>
+          {endpoint && onRewritten && (
+            <CardRegenerateButton card={card} endpoint={endpoint} onDone={onRewritten} />
+          )}
+          {endpoint && onRewritten && (
+            <CardRewriteControl
+              card={card}
+              product="course"
+              endpoint={endpoint}
+              onAccepted={onRewritten}
+              prominent={blocking}
+            />
+          )}
           {onDelete && (
             <button
-              className="p-1.5 rounded-lg bg-[var(--card)] border border-[var(--border)] text-[var(--text-faint)] hover:text-red-400 hover:border-red-400/50 hover:bg-red-400/5 transition-colors"
+              className="card-tool card-tool-danger"
               onClick={() => { if (window.confirm('Delete this card?')) onDelete(); }}
-              title="Delete card"
+              data-tip="Delete card" aria-label="Delete card"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
@@ -419,8 +414,8 @@ function CardView({
             <a
               href={card.imageUrl}
               download={card.imageUrl.split('/').pop() || 'image.png'}
-              className="p-1.5 rounded-lg bg-[var(--card)] border border-[var(--border)] text-[var(--text-faint)] hover:text-emerald-400 hover:border-emerald-400/50 hover:bg-emerald-400/5 transition-colors"
-              title="Download image"
+              className="card-tool card-tool-good"
+              data-tip="Download image" aria-label="Download image"
               onClick={(e) => e.stopPropagation()}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -430,7 +425,7 @@ function CardView({
           )}
           {card.publishedUrl && (
             <a href={card.publishedUrl} target="_blank" rel="noreferrer"
-              className="p-1.5 rounded-lg bg-[var(--card)] hover:bg-[var(--border)] border border-[var(--border)] text-xs text-[var(--text-dim)]">
+              className="card-tool" data-tip="Open published card" data-tip-align="right" aria-label="Open published card">
               ↗
             </a>
           )}
@@ -495,7 +490,7 @@ function CardView({
                   href={card.imageUrl}
                   download={card.imageUrl.split('/').pop() || 'image.png'}
                   className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                  title="Download image"
+                  title="Download image" aria-label="Download image"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
@@ -528,7 +523,7 @@ function CardView({
                   href={card.imageUrl}
                   download={card.imageUrl.split('/').pop() || 'image.png'}
                   className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                  title="Download image"
+                  title="Download image" aria-label="Download image"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
@@ -844,11 +839,11 @@ function CardView({
                 <p className="text-[15px] text-amber-700 leading-relaxed font-medium tracking-tight">
                   {highlightText}
                 </p>
-                {highlightType && (
-                  <span className="text-[10px] px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-600 border border-amber-500/25 font-semibold uppercase tracking-widest">
-                    {highlightType.replace(/-/g, ' ')}
-                  </span>
-                )}
+                <HighlightTypePicker
+                  value={highlightType}
+                  readOnly={!onUpdate}
+                  onChange={(id) => onUpdate?.({ ...card, highlightCardType: id })}
+                />
               </div>
               <div className="flex justify-end pt-1">
                 <CharBadge count={highlightText.length} min={100} max={130} />
@@ -860,6 +855,7 @@ function CardView({
           </div>
         )}
       </div>
+      <CardIssues issues={issues} />
     </div>
   );
 }
@@ -871,11 +867,17 @@ function CardCarousel({
   onEdit,
   onEditImage,
   onDelete,
+  endpoint,
+  onRewritten,
+  onUpdate,
 }: {
   cards: MobileCard[];
   onEdit: (card: MobileCard) => void;
   onEditImage: (src: string, onApply: (url: string) => void) => void;
   onDelete: (cardId: string) => void;
+  endpoint: string;
+  onRewritten: () => Promise<void>;
+  onUpdate: (card: MobileCard) => void;
 }) {
   const [idx, setIdx] = useState(0);
 
@@ -932,7 +934,15 @@ function CardCarousel({
             zIndex: 10,
           }}
         >
-          <CardView card={cards[idx]} onEdit={onEdit} onEditImage={onEditImage} onDelete={() => onDelete(cards[idx].id)} />
+          <CardView
+            card={cards[idx]}
+            onEdit={onEdit}
+            onEditImage={onEditImage}
+            onDelete={() => onDelete(cards[idx].id)}
+            endpoint={endpoint && `${endpoint}/${cards[idx].id}`}
+            onRewritten={onRewritten}
+            onUpdate={onUpdate}
+          />
         </div>
 
         {/* Next card */}
@@ -1240,7 +1250,11 @@ function CardEditorModal({
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-[var(--text-faint)]">Type</label>
-                <select className="input text-sm" value={draft.highlightCardType || ''} onChange={(e) => upd({ highlightCardType: e.target.value })}>
+                <select
+                  className="input text-sm"
+                  value={draft.highlightCardType || ''}
+                  onChange={(e) => upd({ highlightCardType: (e.target.value || undefined) as MobileCard['highlightCardType'] })}
+                >
                   <option value="">— select —</option>
                   <option value="key-insight">key-insight</option>
                   <option value="point-to-ponder">point-to-ponder</option>
@@ -1436,7 +1450,9 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
       });
       const json = await res.json();
       if (!res.ok) {
-        setPublishResult(`Error: ${json?.error || `HTTP ${res.status}`}`);
+        const first = (json.issues || []).find((i: any) => i.severity === 'error');
+        const detail = first ? `${json.error}: card #${first.cardNumber ?? first.cardId} — ${first.message}` : json?.error || `HTTP ${res.status}`;
+        setPublishResult(`Error: ${detail}`);
       } else if (json.errors?.length > 0) {
         setPublishResult(`Published ${json.published} cards. ${json.errors.length} failed: ${json.errors[0]?.error}`);
       } else {
@@ -1521,7 +1537,9 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
       });
       const json = await res.json();
       if (!res.ok) {
-        setChapterPublishResult((prev) => ({ ...prev, [chapterId]: `Error: ${json?.error || `HTTP ${res.status}`}` }));
+        const first = (json.issues || []).find((i: any) => i.severity === 'error');
+        const detail = first ? `${json.error}: card #${first.cardNumber ?? first.cardId} — ${first.message}` : json?.error || `HTTP ${res.status}`;
+        setChapterPublishResult((prev) => ({ ...prev, [chapterId]: `Error: ${detail}` }));
       } else if (json.errors?.length > 0) {
         setChapterPublishResult((prev) => ({ ...prev, [chapterId]: `Published ${json.published} cards. ${json.errors.length} failed.` }));
       } else {
@@ -1576,6 +1594,9 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
   const chapters = course.chapters || [];
   const currentChapter = chapters[activeChapter];
   const totalCards = chapters.reduce((s, c) => s + (c.cards?.length || 0), 0);
+  // Same checkCourse the publish routes run, so the buttons and the server agree.
+  const chapterGate = checkCourse(course.title || '', currentChapter?.cards || []);
+  const courseGate = checkCourse(course.title || '', chapters.flatMap((c) => c.cards || []));
 
   return (
     <div className="flex gap-0 -mx-6 -my-10 min-h-screen">
@@ -1670,7 +1691,12 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
                 </button>
               </div>
               <div className="flex gap-1.5">
-                <button className="btn-primary flex-1 text-xs" onClick={publish} disabled={!publishCollectionId.trim()}>Publish</button>
+                <button
+                  className="btn-primary flex-1 text-xs"
+                  onClick={publish}
+                  disabled={!publishCollectionId.trim() || courseGate.blocking}
+                  title={courseGate.blocking ? 'Fix the card errors first' : undefined}
+                >Publish</button>
                 <button className="btn-secondary flex-1 text-xs" onClick={() => setShowPublishForm(false)}>Cancel</button>
               </div>
             </div>
@@ -1711,7 +1737,8 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
                     <button
                       className="btn-primary text-xs px-3 py-1.5"
                       onClick={() => publishChapter(currentChapter.id)}
-                      disabled={chapterPublishing === currentChapter.id}
+                      disabled={chapterPublishing === currentChapter.id || chapterGate.blocking}
+                      title={chapterGate.blocking ? 'Fix the card errors first' : undefined}
                     >
                       {chapterPublishing === currentChapter.id ? 'Publishing…' : 'Re-publish chapter'}
                     </button>
@@ -1725,11 +1752,17 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
               </div>
             </div>
 
+            <CardIssueSummary issues={chapterGate.issues} />
+
             {(currentChapter.cards?.length || 0) > 0 ? (
               // key resets carousel index when chapter changes
               <CardCarousel
                 key={currentChapter.id}
                 cards={currentChapter.cards}
+                endpoint={`/api/mobile-course/${course.id}/chapters/${currentChapter.id}/cards`}
+                onRewritten={load}
+                onUpdate={(updated) => saveChapterCards(currentChapter.id,
+                  currentChapter.cards.map((c) => c.id === updated.id ? updated : c))}
                 onEdit={(c) => { setEditCard(c); setEditCardChapterId(currentChapter.id); }}
                 onDelete={(cardId) => saveChapterCards(currentChapter.id, currentChapter.cards.filter((c) => c.id !== cardId))}
                 onEditImage={(src, onApply) => openImageEdit(src, (newUrl) => {

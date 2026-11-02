@@ -29,7 +29,6 @@ interface SheetRow {
 }
 
 type BulkStatus = 'idle' | 'running' | 'done' | 'error';
-type BulkPublishStatus = 'publishing' | 'published' | 'publish-failed';
 
 interface BulkJob {
   rowIdx: number;
@@ -38,9 +37,6 @@ interface BulkJob {
   shortId?: string;
   stages: Array<{ name: string; status: 'start' | 'done' | 'error' }>;
   error?: string;
-  publishStatus?: BulkPublishStatus;
-  publishedUrl?: string;
-  publishError?: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -319,44 +315,9 @@ export default function NewMobileShortPage() {
           );
           patchJob(rowIdx, { status: 'done', shortId: shortId || undefined });
 
-          // Auto-publish to Educative (sheet bulk flow only)
-          if (shortId) {
-            patchJob(rowIdx, { publishStatus: 'publishing' });
-            try {
-              const pubRes = await fetch(`/api/mobile-short/${shortId}/publish`, { method: 'POST' });
-              let pubJson: any = {};
-              let rawBody = '';
-              try {
-                rawBody = await pubRes.text();
-                pubJson = JSON.parse(rawBody);
-              } catch {
-                pubJson = { error: rawBody || `HTTP ${pubRes.status}` };
-              }
-              if (pubRes.ok) {
-                patchJob(rowIdx, {
-                  publishStatus: 'published',
-                  publishedUrl: pubJson.short?.publishedUrl,
-                  publishError: pubJson.sheetError
-                    ? `Sheet write-back failed: ${pubJson.sheetError}`
-                    : undefined,
-                });
-              } else {
-                const detail = pubJson.error || pubJson.message || rawBody || `HTTP ${pubRes.status}`;
-                const errors = Array.isArray(pubJson.errors) && pubJson.errors.length
-                  ? pubJson.errors.map((e: any) => e.error || JSON.stringify(e)).join('; ')
-                  : '';
-                patchJob(rowIdx, {
-                  publishStatus: 'publish-failed',
-                  publishError: errors ? `${detail} — ${errors}` : detail,
-                });
-              }
-            } catch (pubErr: any) {
-              patchJob(rowIdx, {
-                publishStatus: 'publish-failed',
-                publishError: pubErr?.message || 'Network error calling publish endpoint',
-              });
-            }
-          }
+          // No auto-publish. Generation only: each short is reviewed against the
+          // card gate and published from its own page, which is also what writes
+          // the sheet row back.
         } catch (err: any) {
           patchJob(rowIdx, { status: 'error', error: err?.message || 'Generation failed' });
         }
@@ -366,10 +327,7 @@ export default function NewMobileShortPage() {
     setBulkRunning(false);
   }
 
-  const allDone = bulkJobs.length > 0 && bulkJobs.every((j) =>
-    (j.status === 'error') ||
-    (j.status === 'done' && (j.publishStatus === 'published' || j.publishStatus === 'publish-failed' || !j.shortId))
-  );
+  const allDone = bulkJobs.length > 0 && bulkJobs.every((j) => j.status === 'error' || j.status === 'done');
   const selectedCount = sheetRows.filter((r) => selectedRows.has(r.idx) && r.topic.trim()).length;
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -601,58 +559,18 @@ export default function NewMobileShortPage() {
                         </div>
                       )}
 
-                      {/* Publish status row */}
-                      {job?.status === 'done' && (
-                        <div className="flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {job.publishStatus === 'publishing' && (
-                              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 animate-pulse">
-                                Publishing…
-                              </span>
-                            )}
-                            {job.publishStatus === 'published' && (
-                              <>
-                                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400">
-                                  ✓ published
-                                </span>
-                                {job.publishedUrl && (
-                                  <a
-                                    href={job.publishedUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-[10px] text-[var(--accent)] hover:underline"
-                                  >
-                                    View on Educative →
-                                  </a>
-                                )}
-                              </>
-                            )}
-                            {job.publishStatus === 'publish-failed' && (
-                              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">
-                                Publish failed
-                              </span>
-                            )}
-                            {!job.publishStatus && job.shortId && (
-                              <a
-                                href={`/mobile-short/${job.shortId}`}
-                                className="text-[10px] text-[var(--accent)] hover:underline"
-                              >
-                                Open →
-                              </a>
-                            )}
-                          </div>
-                          {/* Error / warning detail — always visible, never tooltip */}
-                          {job.publishError && (
-                            <div className={`rounded px-2 py-1.5 border ${
-                              job.publishStatus === 'publish-failed'
-                                ? 'bg-red-500/10 border-red-500/20'
-                                : 'bg-amber-500/10 border-amber-500/20'
-                            }`}>
-                              <p className={`text-[10px] font-mono leading-relaxed break-all whitespace-pre-wrap ${
-                                job.publishStatus === 'publish-failed' ? 'text-red-400' : 'text-amber-400'
-                              }`}>{job.publishError}</p>
-                            </div>
-                          )}
+                      {/* Generation finished; publishing happens on the short's own page. */}
+                      {job?.status === 'done' && job.shortId && (
+                        <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">
+                            not published
+                          </span>
+                          <a
+                            href={`/mobile-short/${job.shortId}`}
+                            className="text-[10px] text-[var(--accent)] hover:underline"
+                          >
+                            Review &amp; publish &rarr;
+                          </a>
                         </div>
                       )}
 

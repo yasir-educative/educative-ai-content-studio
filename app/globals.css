@@ -30,6 +30,10 @@
   --success-text: #34d399;
   --warning-text: #fbbf24;
   --danger-text:  #f87171;
+  --prose-body:   #cdd2e0;
+  --link:         #a5b4fc;
+  --row-alt:      rgba(255,255,255,0.022);
+  --measure:      56rem;
 }
 
 html[data-theme='light'] {
@@ -51,6 +55,9 @@ html[data-theme='light'] {
   --success-text: #047857;
   --warning-text: #b45309;
   --danger-text:  #b91c1c;
+  --prose-body:   #1f2937;
+  --link:         #4338ca;
+  --row-alt:      rgba(15,23,42,0.025);
 }
 
 html[data-theme='light'] body                             { background: var(--bg); }
@@ -61,10 +68,6 @@ html[data-theme='light'] pre.whitespace-pre-wrap          { background: #edf0f8 
 html[data-theme='light'] .code-window                     { background: #edf0f8; }
 html[data-theme='light'] .code-window-bar                 { background: rgba(0,0,0,0.03); }
 html[data-theme='light'] .nav-link.active                 { color: var(--accent); background: var(--accent-soft); }
-html[data-theme='light'] .article-prose h1,
-html[data-theme='light'] .article-prose h2,
-html[data-theme='light'] .article-prose h3                { color: var(--text); }
-html[data-theme='light'] .article-prose p                 { color: var(--text); }
 html[data-theme='light'] .skeleton-image                  { background: #e4e8f5; border-color: #c8cee0; }
 html[data-theme='light'] .skeleton-shimmer                {
   background: linear-gradient(90deg, transparent 0%, rgba(0,0,0,0.03) 50%, transparent 100%);
@@ -184,34 +187,89 @@ html, body {
 /* ─── Article prose ──────────────────────────────────────────────────────────── */
 
 .article-prose {
+  color: var(--prose-body);
+  line-height: 1.75;
+  font-size: 1.0625rem;
+}
+.article-prose > :first-child { margin-top: 0; }
+.article-prose h1, .article-prose h2, .article-prose h3, .article-prose h4 {
   color: var(--text);
-  line-height: 1.8;
-  font-size: 1.05rem;
-}
-.article-prose h1, .article-prose h2, .article-prose h3 {
-  color: white;
-  margin-top: 1.6em;
-  margin-bottom: 0.6em;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  /* TOC jumps land below the sticky header. */
+  scroll-margin-top: 5rem;
 }
-.article-prose h1 { font-size: 1.85rem; }
-.article-prose h2 { font-size: 1.5rem; }
-.article-prose h3 { font-size: 1.2rem; }
-.article-prose p  { margin: 1em 0; color: #cdd2e0; }
-.article-prose a  { color: #a5b4fc; text-decoration: underline; text-underline-offset: 2px; }
-.article-prose ul { padding-left: 1.4em; margin: 0.8em 0; list-style-type: disc; }
-.article-prose ol { padding-left: 1.4em; margin: 0.8em 0; list-style-type: decimal; }
+.article-prose h1 { font-size: 1.9rem; margin: 2.2em 0 0.6em; }
+/* The rule above an H2 is the main skim cue: it marks where one section ends. */
+.article-prose h2 {
+  font-size: 1.45rem;
+  margin: 2.1em 0 0.6em;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--border-soft);
+}
+.article-prose h3 { font-size: 1.15rem; margin: 1.8em 0 0.45em; }
+.article-prose h4 {
+  font-size: 0.82rem;
+  margin: 1.6em 0 0.4em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 650;
+}
+.article-prose p  { margin: 1.05em 0; }
+.article-prose strong { color: var(--text); font-weight: 650; }
+.article-prose a  { color: var(--link); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.article-prose a:hover { text-decoration-thickness: 2px; }
+.article-prose ul { padding-left: 1.4em; margin: 0.9em 0; list-style-type: disc; }
+.article-prose ol { padding-left: 1.4em; margin: 0.9em 0; list-style-type: decimal; }
 .article-prose ul ul { list-style-type: circle; }
 .article-prose ol ol { list-style-type: lower-alpha; }
-.article-prose li  { margin: 0.3em 0; }
+.article-prose li  { margin: 0.4em 0; padding-left: 0.2em; }
+.article-prose li::marker { color: var(--text-faint); }
+.article-prose hr { border: 0; border-top: 1px solid var(--border); margin: 2.4em 0; }
 .article-prose code { background: var(--panel-2); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.88em; }
-.article-prose pre  { background: #0a0d14; border: 1px solid var(--border); padding: 1rem 1.25rem; border-radius: 0.75rem; overflow-x: auto; font-size: 0.85rem; }
+.article-prose pre  { background: #0a0d14; border: 1px solid var(--border); padding: 1rem 1.25rem; border-radius: 0.75rem; overflow-x: auto; font-size: 0.85rem; line-height: 1.6; margin: 1.5em 0; }
 .article-prose pre code { background: transparent; padding: 0; }
-.article-prose blockquote { border-left: 3px solid var(--accent); margin: 1em 0; padding: 0.2em 1em; color: var(--text-dim); }
-.article-prose table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+.article-prose blockquote { border-left: 3px solid var(--accent); margin: 1.5em 0; padding: 0.2em 1em; color: var(--text-dim); }
+.article-prose table { border-collapse: collapse; width: 100%; margin: 1.5em 0; font-size: 0.94em; }
 .article-prose th, .article-prose td { border: 1px solid var(--border); padding: 0.55rem 0.8rem; }
 .article-prose th { background: var(--panel-2); text-align: left; font-weight: 600; }
+/* Zebra rows make a wide comparison table readable across its row. */
+.article-prose tbody tr:nth-child(even) { background: var(--row-alt); }
+.article-prose figcaption { font-size: 0.82rem; color: var(--text-dim); text-align: center; margin-top: 0.5rem; }
+/* The editor supplies its own heading rhythm; the section rule belongs to the reader only. */
+.ProseMirror h2 { border-top: none; padding-top: 0; }
+
+/* ─── Reader column ───────────────────────────────────────────────────────────
+   Caps the line length. The cap sits on the article element, not on the prose
+   children: the HTML path wraps blocks in <span>s, so a cap there would not
+   reach them. Tables, code and images keep the full width inside the cap. */
+
+.article-reader { max-width: var(--measure); }
+
+/* ─── Table of contents ──────────────────────────────────────────────────────── */
+
+.article-layout { display: block; }
+@media (min-width: 1100px) {
+  .article-layout { display: grid; grid-template-columns: minmax(0, 1fr) 15rem; gap: 1.75rem; align-items: start; }
+}
+.toc { position: sticky; top: 1.5rem; max-height: calc(100vh - 3rem); overflow-y: auto; }
+.toc-link {
+  display: block;
+  padding: 0.3rem 0 0.3rem 0.75rem;
+  border-left: 2px solid var(--border-soft);
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  text-align: left;
+  width: 100%;
+  transition: color 0.12s, border-color 0.12s;
+}
+.toc-link:hover { color: var(--text); }
+.toc-link[data-level='3'] { padding-left: 1.5rem; font-size: 0.76rem; }
+.toc-link[aria-current='true'] { color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
 
 /* ─── Widget visuals ─────────────────────────────────────────────────────────── */
 
@@ -427,4 +485,170 @@ figcaption { margin-top: 0.6rem; text-align: center; font-size: 0.8rem; color: v
   padding-left: 1rem;
   margin: 1.25rem 0;
   color: var(--text-dim);
+}
+
+/* ─── Modal ──────────────────────────────────────────────────────────────────
+   Used by the card rewrite dialog. Tokens, not literals, so it follows the theme. */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 65%);
+}
+.modal-panel {
+  width: 100%;
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: var(--panel);
+  outline: none;
+}
+.modal-header, .modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  flex-shrink: 0;
+  background: var(--panel-2);
+}
+.modal-header { border-bottom: 1px solid var(--border); }
+.modal-footer { border-top: 1px solid var(--border); }
+.modal-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.btn-ghost {
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.5rem;
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.btn-ghost:hover:not(:disabled) { color: var(--text); background: var(--panel-2); }
+.btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ─── Card toolbar ───────────────────────────────────────────────────────────
+   Every action on a mobile card is the same 26px icon button, so the row reads
+   as one control strip instead of mixed buttons and links. */
+
+.card-tool {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text-dim);
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.card-tool:hover:not(:disabled) { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: var(--accent-soft); }
+.card-tool:disabled { opacity: 0.45; cursor: not-allowed; }
+.card-tool-danger:hover:not(:disabled) { color: #f87171; border-color: rgb(248 113 113 / 50%); background: rgb(248 113 113 / 8%); }
+.card-tool-good:hover:not(:disabled)   { color: #34d399; border-color: rgb(52 211 153 / 50%); background: rgb(52 211 153 / 8%); }
+/* A card the gate is blocking: its repair action should be the loudest thing on the card. */
+.card-tool-alert {
+  color: #f87171;
+  border-color: rgb(248 113 113 / 55%);
+  background: rgb(248 113 113 / 10%);
+}
+.card-tool-alert:hover:not(:disabled) { color: #fff; background: #ef4444; border-color: #ef4444; }
+
+/* ─── Highlight type picker ──────────────────────────────────────────────────
+   A segmented control, not a dropdown: there are exactly three variants and the
+   choice is required, so all three stay visible and one tap sets it. */
+
+.hl-picker { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+.hl-option {
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: all 0.12s;
+}
+.hl-option:hover { color: var(--text); border-color: var(--text-faint); }
+.hl-option[aria-pressed='true'] {
+  background: rgb(245 158 11 / 16%);
+  border-color: rgb(245 158 11 / 45%);
+  color: #b45309;
+}
+html[data-theme='dark'] .hl-option[aria-pressed='true'],
+:root:not([data-theme='light']) .hl-option[aria-pressed='true'] { color: #fbbf24; }
+.hl-picker[data-unset='true'] .hl-option { border-color: rgb(248 113 113 / 45%); }
+.hl-unset-note { font-size: 10px; color: #f87171; font-weight: 600; letter-spacing: 0.04em; }
+
+/* ─── Instant tooltips ───────────────────────────────────────────────────────
+   The native `title` attribute waits about a second before the browser shows
+   it, which reads as lag on a toolbar. These appear in 60ms. The tooltip opens
+   downward: the toolbar sits at the top of a card that clips its overflow, so
+   anything above the button would be cut off. */
+
+.card-tool[data-tip]::after,
+.card-tool[data-tip]::before {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.09s ease-out 0.06s;
+  z-index: 60;
+}
+.card-tool[data-tip]::after {
+  content: attr(data-tip);
+  transform: translateX(-50%);
+  padding: 0.3rem 0.5rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 28%);
+}
+/* Arrow, drawn as a small rotated square tucked under the bubble's edge. */
+.card-tool[data-tip]::before {
+  content: '';
+  top: calc(100% + 2px);
+  width: 7px;
+  height: 7px;
+  transform: translateX(-50%) rotate(45deg);
+  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.card-tool[data-tip]:hover::after,
+.card-tool[data-tip]:hover::before,
+.card-tool[data-tip]:focus-visible::after,
+.card-tool[data-tip]:focus-visible::before { opacity: 1; }
+.card-tool[data-tip]:disabled::after,
+.card-tool[data-tip]:disabled::before { opacity: 0; }
+/* An error message is a sentence, not a label: let it wrap instead of running
+   off the card as one long line. */
+.card-tool[data-tip][data-tip-wrap]::after {
+  white-space: normal;
+  width: 230px;
+  text-align: left;
+}
+/* A tooltip near the right edge of a card would overflow it. */
+.card-tool[data-tip][data-tip-align='right']::after { left: auto; right: 0; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .card-tool[data-tip]::after, .card-tool[data-tip]::before { transition: none; }
 }

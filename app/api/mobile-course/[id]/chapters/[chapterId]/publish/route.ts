@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { checkCourse } from '@/lib/mobileCardLimits';
 import { getMobileCourse, saveMobileCourse } from '@/lib/mobileCourseStorage';
 import {
   createLesson,
@@ -174,6 +175,12 @@ export async function POST(
   if (chapterIdx === -1) return Response.json({ error: 'chapter not found' }, { status: 404 });
 
   const chapter = { ...course.chapters[chapterIdx], cards: [...course.chapters[chapterIdx].cards] };
+
+  // Errors block the publish; warnings (under a minimum) are returned for display only.
+  const gate = checkCourse(course.title || '', chapter.cards);
+  if (gate.blocking) {
+    return Response.json({ ok: false, error: 'Some cards break the publishing rules', issues: gate.issues }, { status: 422 });
+  }
   const results: Array<{ cardId: string; cardTitle: string; url: string }> = [];
   const errors: Array<{ cardId: string; cardTitle: string; error: string }> = [];
 
@@ -228,5 +235,5 @@ export async function POST(
     updatedAt: new Date().toISOString(),
   });
 
-  return Response.json({ ok: errors.length === 0, published: results.length, errors, results });
+  return Response.json({ ok: errors.length === 0, published: results.length, errors, results, issues: gate.issues });
 }

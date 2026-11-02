@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getMobileShort, updateMobileShort } from '@/lib/mobileShortsStorage';
 import { writeSheetPublishResult } from '@/lib/sheetsWriter';
+import { checkCards } from '@/lib/mobileCardLimits';
 import {
   createFlashCardShotCollection,
   createLesson,
@@ -311,6 +312,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (!short.cards?.length) return Response.json({ error: 'no cards to publish' }, { status: 400 });
 
+  // The gate decides what may reach Educative. Errors (over a maximum, a missing
+  // required field, an unselected highlight type) block; warnings (under a
+  // minimum) are returned for display and never stop a publish.
+  const gate = checkCards(short.cards, 'short');
+  if (gate.blocking) {
+    return Response.json({
+      ok: false,
+      error: 'Some cards break the publishing rules',
+      issues: gate.issues,
+    }, { status: 422 });
+  }
+
   const results: Array<{ cardId: string; cardTitle: string; url: string }> = [];
   const errors: Array<{ cardId: string; cardTitle: string; error: string }> = [];
 
@@ -442,5 +455,5 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
-  return Response.json({ ok: errors.length === 0, published: results.length, errors, results, short: updated, sheetError });
+  return Response.json({ ok: errors.length === 0, published: results.length, errors, results, short: updated, sheetError, issues: gate.issues });
 }

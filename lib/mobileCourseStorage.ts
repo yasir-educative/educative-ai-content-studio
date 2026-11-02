@@ -5,23 +5,20 @@ import { slugify } from './imageGen';
 
 const IMAGES_DIR = path.join(process.cwd(), 'data', 'images');
 
-export type MobileCardType =
-  | 'text'
-  | 'text_img'
-  | 'img_only'
-  | 'text-with-code'
-  | 'code-with-output'
-  | 'comparisonCards'
-  | 'recapCard'
-  | 'quiz'
-  | 'trueFalseCard'
-  | 'fillInTheBlank'
-  | 'scenarioCard'
-  | 'highlightCard';
+// The canonical list lives in mobileCardTypes so the enums, JSON schemas and the
+// gate all build from one source; re-exported here for existing importers.
+export type { MobileCardType, HighlightCardType } from './mobileCardTypes';
+import type { MobileCardType, HighlightCardType } from './mobileCardTypes';
 
 export interface MobileCard {
   id: string;
   type: MobileCardType;
+  /** Set when the type could not be resolved; the gate treats it as an error. */
+  typeWarning?: string;
+  regeneratedAt?: string;
+  decision?: import('./cardTypeDecider').CardTypeDecision;
+  /** Reason the card cannot be edited or rewritten; the gate skips it entirely. */
+  readOnly?: string;
   card_number?: number;
   title?: string;
   // text, text_img
@@ -59,13 +56,15 @@ export interface MobileCard {
   sections?: Array<{ heading: string; content: string }>;
   scenarioType?: string;
   // highlightCard
-  highlightCardType?: 'key-insight' | 'point-to-ponder' | 'bigger-picture';
+  highlightCardType?: HighlightCardType;
   // publish state
   pageId?: string;
   publishedUrl?: string;
 }
 
 export interface MobileChapter {
+  summary?: string;
+  lessonOutline?: unknown;
   id: string;
   title: string;
   cards: MobileCard[];

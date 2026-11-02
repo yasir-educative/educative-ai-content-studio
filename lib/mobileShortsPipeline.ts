@@ -2,18 +2,24 @@
 // Mirrors the n8n "Mobile shorts - GPT Images" workflow — AI generation only.
 // Collection creation and publishing happen separately via the /publish API route.
 //
-//   1. Topic Detailer  (GPT-4o search)
-//   2. Cards Generator (Gemini 2.5 Pro)
-//   3. JSON Generator  (Gemini 2.5 Pro)
-//   4. Image generation for text_img / img_only cards
+//   1. Topic Detailer (OpenAI search)
+//   2. Card Planner (normal tier, structured output)
+//   3. Card-type Decision (OpenAI Decisions API, gpt-6-luna)
+//   4. Cards Generator (main tier)
+//   5. JSON Generator (normal tier, structured output)
+//   6. Image generation for text_img / img_only cards
 
-import { openaiSearch, generateText, parseJsonLoose } from './ai';
+import { openaiSearch, generateText, generateJSON, parseJsonLoose } from './ai';
 import { generateGptImage, slugify } from './imageGen';
 import type { MobileCard } from './mobileCourseStorage';
-import { normalizeCardType } from './mobileCardTypes';
-import { ensureCardQuality } from './mobileCardQuality';
+import { normalizeCardType, normalizeHighlightCardType, resolveCardType, isCardType, plannerToCardType, shortsPlannerTypes, type MobileCardType } from './mobileCardTypes';
+import { decideCardTypes, type PlannedShortCard } from './cardTypeDecider';
+import { shortsPlannerSchema, SHORTS_CARDS_SCHEMA } from './mobileShortsSchemas';
+import { CARD_LIMITS, COURSE_CARD_LIMITS, checkCard, type CardProduct } from './mobileCardLimits';
+import { finishCards } from './mobileCardRepair';
 import {
   registeredTopicDetailerPrompt,
+  registeredShortsCardPlannerPrompt,
   registeredShortsCardsGeneratorPrompt,
   registeredShortsJsonGeneratorPrompt,
 } from './mobileShortsPromptsRegistry';
@@ -46,7 +52,7 @@ export type MobileShortEmit = (e: MobileShortEvent) => void;
 
 // ── Image prompt builder (exact n8n "Img/textImg prompt" node) ────────────────
 
-function buildShortCardImagePrompt(card: any): string {
+export function buildShortCardImagePrompt(card: any): string {
   const illustrationIdea = String(card.illustration_idea || '');
   const visibleLabels = String(card.visible_labels || '');
   const title = String(card.title || '');
@@ -68,9 +74,9 @@ function buildShortCardImagePrompt(card: any): string {
   return `Technical infographic, portrait 640×1024, white (#FFF) background. Diagram-only — no title, no heading, no paragraphs.\n\nLayout: 24px margins. Top-to-bottom or left-to-right flow. Center-aligned. 4–8 primary elements maximum — not too sparse, not cluttered. Generous whitespace between logical groups. Arrows and connector lines for hierarchy.\n\nStyle: Flat 2D vector only. 2px uniform stroke, 8px rounded corners. Outlined shapes with white or pale tinted fill. Consistent icon size per tier. Absolutely no 3D, no perspective, no shadows, no gradients, no cartoon characters, no hand-drawn or sketch style, no textures.\n\nColors: Only these — #4A90D9 (blue) and #3AAFA9 (teal) as primary. #48BB78 (green) and #E6A817 (amber) sparingly as accent. All text #2D3748. No reds, no grays, no off-palette colors.\n\nText: ${labelsBlock} Capitalize first word of every label, rest lowercase unless acronym. Example: "API gateway" not "api gateway" or "API Gateway". Geometric sans-serif, medium weight. No misspellings.\n\nIllustration idea: "${illustrationIdea}"\nContext (do NOT render as text): "${title} — ${content}"`;
 }
 
-async function generateCardImage(card: any, order: number, shortId: string): Promise<string | null> {
+export async function generateCardImage(card: any, order: number, shortId: string, product: 'short' | 'course' = 'short'): Promise<string | null> {
   try {
-    const subfolder = `mobile-shorts/${slugify(shortId)}`;
+    const subfolder = `${product === 'course' ? 'mobile-courses' : 'mobile-shorts'}/${slugify(shortId)}`;
     const rawPrompt = buildShortCardImagePrompt(card);
     const result = await generateGptImage(card.illustration_idea || '', order, subfolder, {
       size: '1024x1536',
@@ -85,11 +91,14 @@ async function generateCardImage(card: any, order: number, shortId: string): Pro
 
 // ── Raw card → MobileCard mapping ────────────────────────────────────────────
 
-function mapRawCard(raw: any, index: number): MobileCard {
+export function mapRawCard(raw: any, index: number): MobileCard {
   const type = normalizeCardType(raw.type ?? raw.card_type, 'mobileShortsPipeline');
   const card: MobileCard = {
     id: raw.id || `card-${index + 1}`,
     type,
+    decision: raw.decision,
+    typeWarning: raw.typeWarning || (!resolveCardType(raw.type ?? raw.card_type)
+      ? `unknown type "${raw.type ?? raw.card_type}" — defaulted to text` : undefined),
     card_number: Number(raw.card_number || index + 1),
     title: raw.title || raw.card_title || '',
     text: raw.text || raw.content || '',
@@ -115,7 +124,7 @@ function mapRawCard(raw: any, index: number): MobileCard {
     correctOptions: raw.correctOptions,
     sections: raw.sections,
     scenarioType: raw.scenarioType || raw.scenariotype || '',
-    highlightCardType: raw.highlightCardType,
+    highlightCardType: normalizeHighlightCardType(raw.highlightCardType),
   };
   return card;
 }
@@ -128,11 +137,11 @@ function hasListViolation(text: string): boolean {
     .some((l) => l.trim().startsWith('-') || l.trim().startsWith('>') || l.trim().startsWith('|'));
 }
 
-async function enforceTextImgProse(cards: any[]): Promise<any[]> {
+export async function enforceTextImgProse(cards: any[], limits = CARD_LIMITS): Promise<any[]> {
   const violators = cards.filter((c) => c.type === 'text_img' && hasListViolation(c.text || c.content || ''));
   if (violators.length === 0) return cards;
 
-  const prompt = `You are a prose editor fixing TEXT_IMG card content. Each card below has bullet lists or blockquotes, which must be removed. Rewrite ONLY the content/text field of each card as a single prose paragraph of 1-2 sentences (230-260 chars). The prose must state the key insight or consequence — NOT the steps. The diagram already shows the steps. Ask: "What does completing all these steps achieve? Why does it matter?" — write that as prose.
+  const prompt = `You are a prose editor fixing TEXT_IMG card content. Each card below has bullet lists or blockquotes, which must be removed. Rewrite ONLY the content/text field of each card as a single prose paragraph of 1-2 sentences (${limits.text_img![0].target!.join('-')} chars). The prose must state the key insight or consequence — NOT the steps. The diagram already shows the steps. Ask: "What does completing all these steps achieve? Why does it matter?" — write that as prose.
 
 Cards to fix:
 ${JSON.stringify(
@@ -145,7 +154,7 @@ ${JSON.stringify(
 
 Rules:
 - Return a JSON array with objects: { "card_number": N, "new_text": "..." }
-- new_text must be a single prose paragraph, 230-260 chars
+- new_text must be a single prose paragraph, ${limits.text_img![0].target!.join('-')} chars
 - No hyphens at line start, no blockquotes, no tables
 - Describe consequence/insight, not steps
 - Raw JSON only, no markdown fences`;
@@ -164,6 +173,165 @@ Rules:
   } catch {
     return cards;
   }
+}
+
+// ── Character limit enforcement ───────────────────────────────────────────────
+// Prompt maxima are hard caps. Rewrite outside them, then trim prose as a last resort.
+function cardText(c: any): string {
+  return String(c?.text ?? c?.content ?? '');
+}
+
+// Cut at the last sentence end that fits; fall back to the last word boundary.
+export function trimToMax(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const slice = text.slice(0, max);
+  const lastSentence = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('! '), slice.lastIndexOf('? '));
+  if (lastSentence >= max * 0.6) return slice.slice(0, lastSentence + 1).trim();
+  const lastSpace = slice.lastIndexOf(' ');
+  return (lastSpace > 0 ? slice.slice(0, lastSpace) : slice).trim();
+}
+
+// Rewrite titles as complete phrases; failed repairs stay visible to the gate.
+export async function enforceTitleLimits(cards: any[], emit: MobileShortEmit, product: CardProduct = 'short'): Promise<any[]> {
+  let fixed = cards;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const offending = fixed.map((card, index) => ({ card, index }))
+      .filter(({ card }) => checkCard(card, product).some((issue) => issue.path === 'title' && issue.severity === 'error'));
+    if (!offending.length) break;
+    emit({ type: 'log', message: `title limits: rewriting ${offending.length} title(s), attempt ${attempt + 1}` });
+    try {
+      const raw = await generateText(`Rewrite each failing mobile card title as a coherent 2–5-word phrase. Preserve its teaching intent. Return a JSON array of { "card_number": N, "new_title": "..." }. Change no other content.
+Cards: ${JSON.stringify(offending.map(({ card, index }) => ({ card_number: index + 1, title: card.title, text: cardText(card), sections: card.sections })))}`, { tier: 'normal', maxTokens: 2000 });
+      const parsed = parseJsonLoose<any>(raw);
+      const rewrites = new Map<number, string>();
+      for (const item of (Array.isArray(parsed) ? parsed : [])) {
+        if (typeof item?.new_title === 'string' && item.new_title.trim()) rewrites.set(Number(item.card_number) - 1, item.new_title);
+      }
+      fixed = fixed.map((card, index) => {
+        const title = rewrites.get(index);
+        if (!title || !offending.some((item) => item.index === index)) return card;
+        const candidate = { ...card, title };
+        return checkCard(candidate, product).some((issue) => issue.path === 'title') ? card : candidate;
+      });
+    } catch (error: any) {
+      emit({ type: 'log', message: `title limit rewrite failed: ${error?.message || 'unknown error'}` });
+    }
+  }
+  return fixed;
+}
+
+export async function enforceCharLimits(cards: any[], emit: MobileShortEmit, product: CardProduct = 'short'): Promise<any[]> {
+  cards = await enforceTitleLimits(cards, emit, product);
+  const limits = product === 'course' ? COURSE_CARD_LIMITS : CARD_LIMITS;
+  const units = cards.flatMap((card, cardIndex) => card.type === 'scenarioCard'
+    ? (card.sections || []).map((section: any, sectionIndex: number) => ({
+      cardIndex, sectionIndex, text: section.content || '',
+      limit: limits.scenarioCard![sectionIndex === card.sections.length - 1 ? 1 : 0],
+    }))
+    : [{ cardIndex, sectionIndex: -1, text: cardText(card),
+      limit: limits[card.type as MobileCardType]?.find((limit) => limit.field === 'text') }]);
+  // Unique internal numbers let the existing rewrite contract handle sections too.
+  const workCards = units.map((unit, i) => ({ ...cards[unit.cardIndex], text: unit.text, card_number: i + 1, limit: unit.limit }));
+  const offending = workCards.filter((c) => {
+    const lim = c.limit;
+    if (!lim) return false;
+    const len = cardText(c).length;
+    return len < lim.min || len > lim.max;
+  });
+  if (offending.length === 0) return cards;
+
+  emit({
+    type: 'log',
+    message: `char limits: ${offending.length} card(s) out of range, rewriting`,
+  });
+
+  const prompt = `You are a technical editor enforcing strict character limits on mobile learning cards. Rewrite ONLY the text of each card below so it lands inside its required character range. Preserve the meaning, voice, and any markdown. Do not add new facts.
+
+Cards to fix:
+${JSON.stringify(
+  offending.map((c) => {
+    const lim = c.limit;
+    const text = cardText(c);
+    return {
+      card_number: c.card_number,
+      card_type: c.type,
+      current_length: text.length,
+      required_min: lim.min,
+      required_max: lim.max,
+      action: text.length > lim.max ? 'SHORTEN' : 'EXPAND with meaningful depth, not padding',
+      current_text: text,
+    };
+  }),
+  null,
+  2,
+)}
+
+Rules:
+- Return a JSON array of objects: { "card_number": N, "new_text": "..." }
+- Count raw characters including markdown syntax. Stay inside required_min..required_max.
+- text_img cards must remain a single prose paragraph with no lists, blockquotes, or tables.
+- highlightCard text must contain no markdown at all.
+- Raw JSON only, no markdown fences.`;
+
+  let rewrites: Record<number, string> = {};
+  try {
+    const raw = await generateText(prompt, { tier: 'normal', maxTokens: 4000 });
+    const parsed = parseJsonLoose<any>(raw);
+    for (const r of (Array.isArray(parsed) ? parsed : [])) {
+      if (r?.card_number && typeof r?.new_text === 'string') {
+        rewrites[Number(r.card_number)] = r.new_text;
+      }
+    }
+  } catch (e: any) {
+    console.warn('[mobileShortsPipeline] char limit rewrite failed:', e?.message);
+  }
+
+  const fixed = workCards.map((c) => {
+    const lim = c.limit;
+    if (!lim) return c;
+    const rewritten = rewrites[Number(c.card_number)];
+    let text = typeof rewritten === 'string' && rewritten.trim() ? rewritten : cardText(c);
+    // Hard guarantee on the ceiling; an under-length card is left as-is since
+    // truncation cannot fix it and the content is still usable.
+    if (text.length > lim.max) text = trimToMax(text, lim.max);
+    if (text === cardText(c)) return c;
+    return { ...c, text };
+  });
+  return cards.map((card, cardIndex) => {
+    const indices = units.map((unit, i) => unit.cardIndex === cardIndex ? i : -1).filter((i) => i >= 0);
+    if (card.type === 'scenarioCard') {
+      return { ...card, sections: (card.sections || []).map((section: any, i: number) => ({
+        ...section, content: fixed[indices[i]].text,
+      })) };
+    }
+    return indices.length && units[indices[0]].limit ? { ...card, text: fixed[indices[0]].text } : card;
+  });
+}
+
+// Reuse the deck's editorial rules while requesting one canonical schema object.
+export function buildShortCardRegenerationPrompt(
+  input: MobileShortInput,
+  card: MobileCard,
+  neighbours: MobileCard[],
+  type: MobileCardType,
+  note = '',
+): string {
+  return `${registeredShortsCardsGeneratorPrompt({
+    ...input,
+    numCards: 1,
+    isHighlightCardNeeded: type === 'highlightCard' || input.isHighlightCardNeeded,
+    cardPlan: JSON.stringify([{ card_number: card.card_number, title: card.title, card_type: type }]),
+  })}
+
+Single-card regeneration instructions (override the deck output format above):
+Return exactly ONE canonical card object matching the response schema, with type "${type}".
+Put prose in text, not content. Use null for unused fields. Keep the original number and title.
+Rewrite only this card. Preserve its teaching intent and avoid repeating neighbouring cards.
+Current card: ${JSON.stringify(card)}
+Neighbouring cards (context only): ${JSON.stringify(neighbours)}
+Current limit issues to fix: ${JSON.stringify(checkCard(card))}
+Required limits for the requested type: ${JSON.stringify(CARD_LIMITS[type] || [])}
+User note: ${note}`;
 }
 
 // ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -186,14 +354,59 @@ export async function runMobileShortPipeline(
   emit({ type: 'data', name: 'topic-detailer', payload: { topicDetails } });
   emit({ type: 'stage', name: 'topic-detailer', status: 'done' });
 
-  // Stage 2: Cards Generator (Gemini 2.5 Pro)
+  const wanted = Math.min(5, Math.max(1, Math.floor(input.numCards || 5)));
+  emit({ type: 'stage', name: 'card-planner', status: 'start' });
+  const allowed = shortsPlannerTypes(!!input.isHighlightCardNeeded);
+  // The schema already pins the count, but a model can still mis-number or pick a
+  // type outside the enum. Retry rather than failing the run: a short that comes
+  // back wrong twice is repaired below, never abandoned.
+  const planValid = (cards: PlannedShortCard[] | undefined) => Array.isArray(cards) && cards.length === wanted
+    && !cards.some((card, i) => card.card_number !== i + 1 || !allowed.includes(card.proposed_type));
+  let plan: PlannedShortCard[] = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const planned = await generateJSON<{ cards: PlannedShortCard[] }>(
+      registeredShortsCardPlannerPrompt({ ...input, numCards: wanted, topicDetails }),
+      shortsPlannerSchema(wanted, !!input.isHighlightCardNeeded),
+      // Shorts planning is intentionally cheaper than the shared card-planner main-tier default.
+      { name: 'shorts_card_plan', tier: 'normal', maxTokens: 8000 },
+    );
+    if (planValid(planned.cards)) { plan = planned.cards; break; }
+    emit({ type: 'log', message: `card-planner: invalid plan on attempt ${attempt}; retrying` });
+    if (attempt === 3) {
+      // Last resort: keep whatever came back, renumbered, and coerce stray types.
+      plan = (planned.cards || []).slice(0, wanted).map((card, i) => ({
+        ...card, card_number: i + 1,
+        proposed_type: allowed.includes(card.proposed_type) ? card.proposed_type : 'TEXT',
+      }));
+      while (plan.length < wanted) {
+        plan.push({ card_number: plan.length + 1, title: `${input.topic} ${plan.length + 1}`,
+          teaching_goal: input.objective || input.topic, proposed_type: 'TEXT', visual_idea: null });
+      }
+      emit({ type: 'log', message: 'card-planner: using a coerced plan after 3 invalid attempts' });
+    }
+  }
+  emit({ type: 'data', name: 'card-planner', payload: { cards: plan } });
+  emit({ type: 'stage', name: 'card-planner', status: 'done' });
+
+
+  emit({ type: 'stage', name: 'card-type-decision', status: 'start' });
+  const decidedPlan = await decideCardTypes(plan, input, (message) => emit({ type: 'log', message }));
+  emit({ type: 'data', name: 'card-type-decision', payload: { cards: decidedPlan } });
+  emit({ type: 'stage', name: 'card-type-decision', status: 'done' });
+  const cardPlan = JSON.stringify(decidedPlan.map((card) => ({
+    card_number: card.card_number, title: card.title, card_type: card.decision.chosen,
+    teaching_goal: card.teaching_goal, visual_idea: card.visual_idea,
+  })));
+
+
   emit({ type: 'stage', name: 'cards-generator', status: 'start' });
   const cardsRaw = await generateText(
     registeredShortsCardsGeneratorPrompt({
       topic: input.topic,
-      cardPlan: topicDetails,
+      cardPlan,
+      topicDetails,
       isHighlightCardNeeded: input.isHighlightCardNeeded,
-      numCards: input.numCards,
+      numCards: wanted,
       level: input.level,
       objective: input.objective,
       additionalContext: input.additionalContext,
@@ -205,47 +418,60 @@ export async function runMobileShortPipeline(
 
   // Stage 3: JSON Generator — format normalisation, not authoring
   emit({ type: 'stage', name: 'json-generator', status: 'start' });
-  const jsonRaw = await generateText(
-    registeredShortsJsonGeneratorPrompt({
-      cardsOutput: cardsRaw,
-      isHighlightCardNeeded: input.isHighlightCardNeeded,
-    }),
-    { tier: 'normal', maxTokens: 32000 },
-  );
-  emit({ type: 'data', name: 'json-generator', payload: { jsonRaw } });
+  // A missing or duplicated card used to abort the whole run, which is how a deck
+  // came back empty. Retry, then fill any still-missing slot from the plan so the
+  // deck always has exactly `wanted` cards for the repair pass to work on.
+  let parsedCards: any[] = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const parsed = await generateJSON<{ cards: any[] }>(
+      registeredShortsJsonGeneratorPrompt({
+        cardsOutput: cardsRaw,
+        isHighlightCardNeeded: input.isHighlightCardNeeded,
+      }),
+      SHORTS_CARDS_SCHEMA,
+      { name: 'shorts_cards', tier: 'normal', maxTokens: 32000 },
+    );
+    emit({ type: 'data', name: 'json-generator', payload: { jsonRaw: JSON.stringify(parsed) } });
+    const cards = Array.isArray(parsed.cards) ? parsed.cards : [];
+    const byNumber = new Map<number, any>();
+    for (const card of cards) {
+      const n = Number(card?.card_number);
+      if (n >= 1 && n <= wanted && !byNumber.has(n)) byNumber.set(n, card);
+    }
+    if (byNumber.size === wanted) { parsedCards = [...byNumber.values()]; break; }
+    emit({ type: 'log', message: `json-generator: got ${byNumber.size} of ${wanted} cards on attempt ${attempt}` });
+    if (attempt === 3) {
+      // Build the deck from the plan for any slot the model never returned; those
+      // cards are blank on purpose and the repair pass below writes them.
+      parsedCards = decidedPlan.map((planned) => byNumber.get(planned.card_number) ?? {
+        card_number: planned.card_number,
+        type: plannerToCardType[planned.decision.chosen],
+        title: planned.title,
+        text: '',
+        illustration_idea: planned.visual_idea || '',
+      });
+      emit({ type: 'log', message: 'json-generator: filled missing slots from the plan; repair will write them' });
+    }
+  }
   emit({ type: 'stage', name: 'json-generator', status: 'done' });
 
-  // Parse cards
-  let rawCards: any[] = [];
-  try {
-    const parsed = parseJsonLoose(jsonRaw);
-    if (Array.isArray(parsed)) rawCards = parsed;
-    else if (Array.isArray(parsed?.cards)) rawCards = parsed.cards;
-    else if (Array.isArray(parsed?.data)) rawCards = parsed.data;
-  } catch {
-    rawCards = [];
-  }
-  rawCards = rawCards
-    .sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0))
-    .map((c: any, i: number) => ({ ...c, id: c.id || `card-${i + 1}` }));
+  let rawCards = parsedCards.sort((a, b) => a.card_number - b.card_number).map((card, i) => {
+    const plannedCard = decidedPlan.find((item) => item.card_number === card.card_number) ?? decidedPlan[i];
+    const expectedType = plannerToCardType[plannedCard.decision.chosen];
+    if (card.type !== expectedType) {
+      emit({ type: 'log', message: `card ${card.card_number}: corrected type "${card.type}" to plan type "${expectedType}"` });
+      card.type = expectedType;
+    }
+    // Canonical structured output normally bypasses alias repair entirely.
+    if (!isCardType(card.type)) card.type = resolveCardType(card.type) || normalizeCardType(card.type);
+    return { ...card, id: `card-${i + 1}`, decision: plannedCard.decision };
+  });
 
-  // Prose-only formatting first: it rewrites text_img bodies, so running it
-  // after the gate would reintroduce over-length cards the gate had cleared.
+  // Post-process: enforce prose-only content on TEXT_IMG cards
   rawCards = await enforceTextImgProse(rawCards);
 
-  // The gate is last before images, so nothing edits text after it.
-  const { cards: checked } = await ensureCardQuality(
-    rawCards,
-    {
-      numCards: input.numCards,
-      isHighlightCardNeeded: input.isHighlightCardNeeded,
-      topic: input.topic,
-      objective: input.objective,
-      level: input.level,
-    },
-    (m) => emit({ type: 'log', message: m }),
-  );
-  rawCards = checked as any[];
+  // Post-process: enforce character limits on text-bearing cards
+  rawCards = await enforceCharLimits(rawCards, emit);
 
   // Stage 4: Image generation for visual cards
   const imageCards = rawCards.filter(
@@ -264,7 +490,17 @@ export async function runMobileShortPipeline(
     emit({ type: 'stage', name: 'images', status: 'done' });
   }
 
-  const cards: MobileCard[] = rawCards.map((raw: any, i: number) => mapRawCard(raw, i));
+  let cards: MobileCard[] = rawCards.map((raw: any, i: number) => mapRawCard(raw, i));
+
+  // Stage 5: repair anything the gate still rejects, then one technical-accuracy
+  // review. Runs after images so a missing imageUrl counts as a real failure.
+  emit({ type: 'stage', name: 'repair-review', status: 'start' });
+  const finished = await finishCards(cards, 'short',
+    { topic: input.topic, level: input.level, objective: input.objective }, emit);
+  cards = finished.cards;
+  emit({ type: 'data', name: 'repair-review', payload: { issues: finished.issues } });
+  emit({ type: 'stage', name: 'repair-review', status: 'done' });
+
   for (const card of cards) onCard(card);
 
   return { cards };

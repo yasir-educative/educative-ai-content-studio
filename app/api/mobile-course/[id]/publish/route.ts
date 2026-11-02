@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { checkCourse } from '@/lib/mobileCardLimits';
 import { getMobileCourse, updateMobileCourse } from '@/lib/mobileCourseStorage';
 import {
   createLesson,
@@ -344,6 +345,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const results: Array<{ chapterId: string; chapterTitle: string; cardId: string; cardTitle: string; url: string }> = [];
   const errors: Array<{ cardId: string; cardTitle: string; error: string }> = [];
+
+  // Errors block the publish; warnings (under a minimum) are returned for display only.
+  const gate = checkCourse(course.title || '', course.chapters.flatMap((c) => c.cards));
+  if (gate.blocking) {
+    return Response.json({ ok: false, error: 'Some cards break the publishing rules', issues: gate.issues }, { status: 422 });
+  }
+
   const updatedChapters = [...course.chapters];
 
   for (let ci = 0; ci < updatedChapters.length; ci++) {

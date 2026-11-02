@@ -1,21 +1,33 @@
 // Mobile Course Card Generation Pipeline
 // Mirrors the n8n "Mobile Course - GPT Image" workflow:
 //   1. Fetch Educative collection structure (TOC only, or use previewed chapters)
-//   2. Per chapter: fetch lesson content → Card Planner → Cards Generator → Card Text Refiner → JSON Generator
+//   2. Per chapter: structured plan → type decision → generator → structured refiner → course limits
 //   3. Generate portrait AI images for text_img and img_only cards
 
-import { generateText, parseJsonLoose } from './ai';
+import { generateText, generateJSON, parseJsonLoose } from './ai';
 import { fetchCollectionWithContent, fetchLessonContent, CollectionChapterData } from './courseEducative';
 import { generateGptImage, slugify } from './imageGen';
 import type { MobileCard, MobileCardType, MobileChapter } from './mobileCourseStorage';
-import { normalizeCardType } from './mobileCardTypes';
-import { ensureCardQuality } from './mobileCardQuality';
+import { normalizeCardType, normalizeHighlightCardType, isHighlightCardType, coursePlannerToCardType, type CoursePlannerType } from './mobileCardTypes';
 import {
   registeredCardPlannerPrompt,
   registeredCardsGeneratorPrompt,
   registeredCardTextRefinerPrompt,
-  registeredJsonGeneratorPrompt,
 } from './mobileCoursePromptsRegistry';
+
+import { COURSE_PROFILE, chapterContainsCode, decideTypes, type PlannedCourseCard } from './cardTypeDecider';
+import { COURSE_PLANNER_SCHEMA, SHORTS_CARDS_SCHEMA } from './mobileShortsSchemas';
+import { enforceTextImgProse, enforceCharLimits } from './mobileShortsPipeline';
+import { COURSE_CARD_LIMITS, checkCards } from './mobileCardLimits';
+import { finishCards } from './mobileCardRepair';
+
+interface CoursePlanCard {
+  card_number: number;
+  card_type: CoursePlannerType;
+  card_title: string;
+  content_focus: string;
+  illustration_idea: string | null;
+}
 
 export interface PreviewedLesson {
   pageId: string;
@@ -54,6 +66,80 @@ export type MobileCourseEmit = (e: MobileCourseEvent) => void;
 
 function normalizeType(raw: string): MobileCardType {
   return normalizeCardType(raw, 'mobileCoursePipeline');
+}
+
+// The generator writes practice cards in its own shape (quiz_options as strings, answer as text,
+// statement/answers for true-false and blanks). Convert that in code before the refiner sees it:
+// asking the refiner to do the conversion lost quiz options and scenario tabs in a live run.
+export function canonicalizeGeneratorCard(raw: any, index: number): MobileCard {
+  const type = normalizeType(String(raw.card_type || raw.type || 'text'));
+  const out: any = { ...raw, type };
+  const opts = raw.options ?? raw.quiz_options;
+  const answer = raw.correctAnswer ?? raw.correct_answer ?? raw.answer;
+  const prose = typeof raw.content === 'string' ? raw.content : '';
+  if (type === 'quiz' && Array.isArray(opts)) {
+    const options = opts.map((o: any, i: number) => typeof o === 'string'
+      ? { id: i + 1, text: o }
+      : { id: Number(o?.id) || i + 1, text: String(o?.text ?? '') });
+    const key = String(answer ?? '').trim().toLowerCase();
+    const hit = options.find((o: { id: number }) => o.id === Number(answer))
+      || options.find((o: { text: string }) => o.text.trim().toLowerCase() === key);
+    out.options = options;
+    out.correctAnswer = hit?.id;
+    out.incorrectMessage = raw.incorrectMessage || raw.incorrect_message || raw.incorrect_description || '';
+  }
+  if ((type === 'text-with-code' || type === 'code-with-output') && raw.content && typeof raw.content === 'object') {
+    const c = raw.content;
+    out.text_1 = raw.text_1 || c.text_before || c.text_1 || '';
+    out.text_2 = raw.text_2 || c.text_after || c.text_2 || '';
+    out.code = raw.code || c.code || '';
+    out.language = raw.language || c.language || '';
+    out.output = raw.output || c.output || '';
+    out.output_available = raw.output_available ?? c.output_available ?? (out.output ? true : undefined);
+    out.content = undefined;
+  }
+  if (type === 'trueFalseCard') {
+    out.question = raw.question || raw.statement || prose;
+    out.correctAnswer = String(answer ?? '').trim().toLowerCase();
+  }
+  if (type === 'fillInTheBlank') {
+    out.question = raw.question || raw.statement || raw.sentence || prose;
+    out.options = opts;
+    const correct = raw.correctOptions ?? raw.correct_options ?? raw.correct_answers ?? raw.answers ?? answer;
+    out.correctOptions = correct === undefined ? undefined : [].concat(correct);
+  }
+  return mapRawCard(out, index);
+}
+
+const REFINABLE_TEXT = ['title', 'text', 'text_1', 'text_2', 'question', 'incorrectMessage', 'explanation',
+  'heading', 'output', 'illustration_idea', 'visible_labels', 'img_context'] as const;
+
+function filled(items: unknown, keys: string[]): boolean {
+  return Array.isArray(items) && items.every((it: any) => keys.every((k) => String(it?.[k] ?? '').trim()));
+}
+
+// Take the refiner's wording, never its structure: a structured field is accepted only when it keeps the
+// same number of items and none of them is blank. Code, answers, and types always stay as generated.
+export function mergeRefined(base: MobileCard, refined: any): MobileCard {
+  const out: any = { ...base };
+  for (const k of REFINABLE_TEXT) {
+    if (typeof refined?.[k] === 'string' && refined[k].trim()) out[k] = refined[k];
+  }
+  const sameShape = (k: string, keys: string[]) =>
+    filled(refined?.[k], keys) && (refined[k] as unknown[]).length === ((base as any)[k]?.length ?? -1);
+  if (sameShape('sections', ['heading', 'content'])) out.sections = refined.sections;
+  if (sameShape('content', ['heading', 'text'])) out.content = refined.content;
+  if (base.type === 'quiz' && sameShape('options', ['text'])) {
+    out.options = (refined.options as any[]).map((o, i) => ({ id: (base.options as any[])[i].id, text: o.text }));
+  }
+  // The refiner's schema restricts highlightCardType to the enum; use it when the free-text generator's value isn't valid.
+  if (base.type === 'highlightCard' && !isHighlightCardType(base.highlightCardType) && isHighlightCardType(refined?.highlightCardType)) {
+    out.highlightCardType = refined.highlightCardType;
+  }
+  for (const side of ['leftOption', 'rightOption'] as const) {
+    if (filled([refined?.[side]], ['label', 'description'])) out[side] = { ...(base as any)[side], ...refined[side] };
+  }
+  return out;
 }
 
 function mapRawCard(raw: any, index: number): MobileCard {
@@ -136,7 +222,7 @@ function mapRawCard(raw: any, index: number): MobileCard {
     correctOptions: raw.correctOptions || raw.correct_options,
     sections,
     scenarioType: raw.scenarioType || raw.scenario_type || raw.content?.scenario_type || '',
-    highlightCardType: raw.highlightCardType || raw.highlight_card_type || '',
+    highlightCardType: normalizeHighlightCardType(raw.highlightCardType || raw.highlight_card_type),
   };
 }
 
@@ -186,53 +272,6 @@ async function generateCardImage(
   }
 }
 
-// ── TEXT_IMG prose enforcer ───────────────────────────────────────────────────
-
-function hasListViolation(text: string): boolean {
-  return String(text || '')
-    .split('\n')
-    .some((l) => l.trim().startsWith('-') || l.trim().startsWith('>') || l.trim().startsWith('|'));
-}
-
-async function enforceTextImgProse(cards: any[]): Promise<any[]> {
-  const textField = (c: any) => c.content || c.text || '';
-  const violators = cards.filter((c) => c.card_type === 'TEXT_IMG' && hasListViolation(textField(c)));
-  if (violators.length === 0) return cards;
-
-  const prompt = `You are a prose editor fixing TEXT_IMG card content. Each card below has bullet lists or blockquotes that must be removed. Rewrite ONLY the content field of each card as a single prose paragraph of 1-2 sentences (240-280 chars). The prose must state the key insight or consequence — NOT the steps. The diagram already shows the steps. Ask: "What does completing all these steps achieve? Why does it matter?" — write that as prose.
-
-Cards to fix:
-${JSON.stringify(
-  violators.map((c) => ({
-    card_number: c.card_number,
-    current_content: textField(c),
-    illustration_idea: c.illustration_idea,
-  })),
-)}
-
-Rules:
-- Return a JSON array with objects: { "card_number": N, "new_content": "..." }
-- new_content must be a single prose paragraph, 240-280 chars
-- No hyphens at line start, no blockquotes, no tables
-- Describe consequence/insight, not steps
-- Raw JSON only, no markdown fences`;
-
-  try {
-    const raw = await generateText(prompt, { tier: 'normal', maxTokens: 4000, noThinking: true });
-    const parsed = JSON.parse(raw.trim().replace(/^```json\n?|```$/g, ''));
-    const rewrites: Record<number, string> = {};
-    for (const r of (Array.isArray(parsed) ? parsed : [])) {
-      if (r.card_number && r.new_content) rewrites[Number(r.card_number)] = r.new_content;
-    }
-    return cards.map((c) => {
-      const rewritten = c.card_type === 'TEXT_IMG' ? rewrites[Number(c.card_number)] : undefined;
-      return rewritten ? { ...c, content: rewritten } : c;
-    });
-  } catch {
-    return cards;
-  }
-}
-
 // ── Per-chapter processing ────────────────────────────────────────────────────
 
 export async function processChapter(
@@ -246,17 +285,12 @@ export async function processChapter(
 ): Promise<MobileCard[]> {
   // Stage 1: Card Planner
   emit({ type: 'stage', name: `${chapterId}-card-planner`, status: 'start' });
-  const plannerOut = await generateText(
+  const plannerOut = await generateJSON<{ cards: CoursePlanCard[] }>(
     registeredCardPlannerPrompt({ courseTitle, chapterTitle, lessonList: lessonTitles.join(', '), content: content.slice(0, 6000) }),
-    { tier: 'main', maxTokens: 4000, noThinking: true },
+    COURSE_PLANNER_SCHEMA, { name: 'course_card_plan', tier: 'main', maxTokens: 8000 },
   );
-  let cardPlan: any[] = [];
-  try {
-    cardPlan = parseJsonLoose(plannerOut);
-    if (!Array.isArray(cardPlan)) cardPlan = [];
-  } catch {
-    cardPlan = [];
-  }
+  const cardPlan = [...plannerOut.cards].sort((a, b) => a.card_number - b.card_number)
+    .map((card, index) => ({ ...card, card_number: index + 1 }));
   emit({ type: 'data', name: `${chapterId}-card-planner`, payload: cardPlan });
   emit({ type: 'stage', name: `${chapterId}-card-planner`, status: 'done' });
 
@@ -265,10 +299,24 @@ export async function processChapter(
     return [];
   }
 
+  const log = (message: string) => emit({ type: 'log', name: chapterId, message });
+  emit({ type: 'stage', name: `${chapterId}-card-type-decision`, status: 'start' });
+  const plan: PlannedCourseCard[] = cardPlan.map((card) => ({
+    card_number: card.card_number, title: card.card_title, teaching_goal: card.content_focus,
+    proposed_type: card.card_type, visual_idea: card.illustration_idea,
+  }));
+  const decided = await decideTypes(plan, {
+    topic: `${courseTitle}: ${chapterTitle}`, additionalContext: lessonTitles.join(', '),
+    sourceHasCode: chapterContainsCode(content),
+  }, log, COURSE_PROFILE);
+  emit({ type: 'data', name: `${chapterId}-card-type-decision`, payload: { cards: decided } });
+  emit({ type: 'stage', name: `${chapterId}-card-type-decision`, status: 'done' });
+  const fixedPlan = cardPlan.map((card, index) => ({ ...card, card_type: decided[index].decision.chosen }));
+
   // Stage 2: Cards Generator
   emit({ type: 'stage', name: `${chapterId}-cards-generator`, status: 'start' });
   const generatorOut = await generateText(
-    registeredCardsGeneratorPrompt({ planStr: JSON.stringify(cardPlan) }),
+    registeredCardsGeneratorPrompt({ planStr: JSON.stringify(fixedPlan) }),
     { tier: 'main', maxTokens: 8000, noThinking: true },
   );
   let generatedCards: any[] = [];
@@ -282,58 +330,62 @@ export async function processChapter(
   emit({ type: 'stage', name: `${chapterId}-cards-generator`, status: 'done' });
 
   if (!generatedCards.length) {
-    emit({ type: 'log', name: chapterId, message: 'Cards generator returned empty — using plan as fallback' });
+    emit({ type: 'log', name: chapterId, message: 'Cards generator returned empty — skipping chapter' });
     return [];
   }
 
-  // Post-process: enforce prose-only content on TEXT_IMG cards before refiner sees them
-  generatedCards = await enforceTextImgProse(generatedCards);
-
-  // Stage 3: Card Text Refiner
+  // Shapes are converted in code first; the refiner only edits wording (mergeRefined enforces that).
+  const canonical = generatedCards.map((raw, index) => canonicalizeGeneratorCard(raw, index));
   emit({ type: 'stage', name: `${chapterId}-text-refiner`, status: 'start' });
-  const refinerOut = await generateText(
-    registeredCardTextRefinerPrompt({ cards: JSON.stringify(generatedCards) }),
-    { tier: 'normal', maxTokens: 8000, noThinking: true },
-  );
-  let refinedCards: any[] = [];
-  try {
-    refinedCards = parseJsonLoose(refinerOut);
-    if (!Array.isArray(refinedCards)) refinedCards = generatedCards;
-  } catch {
-    refinedCards = generatedCards;
+  // The refiner only rewords cards that are already canonical, so a bad response
+  // is never worth failing the chapter over. Retry, then fall back to the
+  // generator's own wording: `decided` stays the authority on count and type,
+  // and finishCards repairs whatever is left.
+  const refinerPrompt = `${registeredCardTextRefinerPrompt({ cards: JSON.stringify(canonical) })}
+Return an object with a cards array: the same cards in the same canonical shape, with only the wording refined.
+Keep every field's structure: same quiz options in the same order, same scenario sections, same recap items,
+same comparison tabs, unchanged code. Use null for unused fields.
+Keep exactly one card per decided plan item, with its number and fixed canonical type:
+${JSON.stringify(decided.map((card) => ({ card_number: card.card_number, type: coursePlannerToCardType[card.decision.chosen] })))}`;
+  const refinedByNumber = new Map<number, any>();
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    refinedByNumber.clear();
+    try {
+      const refined = await generateJSON<{ cards: any[] }>(
+        refinerPrompt, SHORTS_CARDS_SCHEMA,
+        { name: 'course_refined_cards', tier: 'normal', maxTokens: 16000 },
+      );
+      for (const card of Array.isArray(refined.cards) ? refined.cards : []) {
+        const n = Number(card?.card_number);
+        if (decided.some((item) => item.card_number === n) && !refinedByNumber.has(n)) refinedByNumber.set(n, card);
+      }
+    } catch (error: any) {
+      log(`text-refiner: attempt ${attempt} failed — ${error?.message || error}`);
+    }
+    if (refinedByNumber.size === decided.length) break;
+    log(`text-refiner: refined ${refinedByNumber.size} of ${decided.length} cards on attempt ${attempt}`);
+    if (attempt === 3) log('text-refiner: keeping the generator wording for the cards it did not return');
   }
+  // Built from the plan, not from the refiner's array: a card the refiner dropped
+  // keeps its canonical version instead of shifting every later card up one slot.
+  let finalCards: MobileCard[] = decided.map((planned, index) => {
+    const expected = coursePlannerToCardType[planned.decision.chosen];
+    const base = canonical.find((card) => card.card_number === planned.card_number)
+      ?? mapRawCard({ card_number: planned.card_number, type: expected, title: planned.title, text: '' }, index);
+    const raw = refinedByNumber.get(planned.card_number);
+    if (raw && raw.type !== expected) log(`card ${planned.card_number}: corrected type ${raw.type} to decided ${expected}`);
+    const merged = raw ? mergeRefined({ ...base, type: expected }, raw) : { ...base, type: expected };
+    return { ...merged, card_number: planned.card_number, decision: planned.decision };
+  });
+  emit({ type: 'data', name: `${chapterId}-text-refiner`, payload: { cards: finalCards } });
   emit({ type: 'stage', name: `${chapterId}-text-refiner`, status: 'done' });
 
-  // Stage 4: JSON Generator (format normalization)
-  emit({ type: 'stage', name: `${chapterId}-json-generator`, status: 'start' });
-  const jsonGenOut = await generateText(
-    registeredJsonGeneratorPrompt({ refinedInput: JSON.stringify(refinedCards) }),
-    { tier: 'normal', maxTokens: 8000, noThinking: true },
-  );
-  let finalCards: any[] = [];
-  try {
-    finalCards = parseJsonLoose(jsonGenOut);
-    if (!Array.isArray(finalCards)) finalCards = refinedCards;
-  } catch {
-    finalCards = refinedCards;
-  }
-  emit({ type: 'stage', name: `${chapterId}-json-generator`, status: 'done' });
 
-  // Sort by card_number, then normalize all raw fields to MobileCard shape.
-  finalCards = [...finalCards]
-    .sort((a: any, b: any) => (a.card_number || 0) - (b.card_number || 0))
-    .map((c: any, i: number) => mapRawCard(c, i));
-
-  // Same gate as the shorts pipeline. A chapter has no fixed card count or
-  // highlight toggle, so only the type, blank and length rules apply.
-  const gated = await ensureCardQuality(
-    finalCards,
-    // A chapter has no fixed count or toggle, and its cards were already
-    // refined upstream, so only the mechanical rules apply here.
-    { numCards: finalCards.length, isHighlightCardNeeded: true, skipReview: true },
-    (m) => emit({ type: 'log', message: `${chapterId}: ${m}` }),
-  );
-  finalCards = gated.cards as any[];
+  emit({ type: 'stage', name: `${chapterId}-limits`, status: 'start' });
+  finalCards = await enforceTextImgProse(finalCards, COURSE_CARD_LIMITS);
+  finalCards = await enforceCharLimits(finalCards, emit, 'course');
+  emit({ type: 'data', name: `${chapterId}-limits`, payload: { cards: finalCards } });
+  emit({ type: 'stage', name: `${chapterId}-limits`, status: 'done' });
 
   // Stage 5: Generate images for text_img and img_only cards
   const imageCards = finalCards.filter(
@@ -352,6 +404,22 @@ export async function processChapter(
     emit({ type: 'stage', name: `${chapterId}-images`, status: 'done' });
   }
 
+
+  // Repair anything the gate rejects, then one technical-accuracy review. Runs
+  // after images so a missing imageUrl counts as a real failure.
+  emit({ type: 'stage', name: `${chapterId}-repair-review`, status: 'start' });
+  const finished = await finishCards(finalCards as MobileCard[], 'course',
+    { courseName: courseTitle, chapterTitle, topic: chapterTitle },
+    (event) => emit({ ...event, name: event.name ?? chapterId } as any));
+  finalCards = finished.cards;
+  emit({ type: 'data', name: `${chapterId}-repair-review`, payload: { issues: finished.issues } });
+  emit({ type: 'stage', name: `${chapterId}-repair-review`, status: 'done' });
+
+  emit({ type: 'stage', name: `${chapterId}-gate`, status: 'start' });
+  const gate = checkCards(finalCards, 'course');
+  emit({ type: 'data', name: `${chapterId}-gate`, payload: gate });
+  emit({ type: 'stage', name: `${chapterId}-gate`, status: gate.blocking ? 'error' : 'done' });
+  if (gate.blocking) log('Course cards still need repair before publishing; saved locally with gate issues');
   return finalCards as MobileCard[];
 }
 
@@ -402,9 +470,12 @@ export async function runMobileCoursePipeline(
       const chapter: MobileChapter = {
         id: chapterId,
         title: rawChapter.title || `Chapter ${i + 1}`,
+        summary: rawChapter.summary,
+        lessonOutline: rawChapter.lessons.map((lesson) => lesson.title).filter(Boolean),
         cards: [],
         status: 'processing',
       };
+
 
       emit({ type: 'stage', name: `chapter-${i + 1}`, status: 'start', message: rawChapter.title });
 

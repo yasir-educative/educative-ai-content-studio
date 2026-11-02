@@ -2,44 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-
-type MobileCardType =
-  | 'text' | 'text_img' | 'img_only' | 'text-with-code' | 'code-with-output'
-  | 'comparisonCards' | 'recapCard' | 'quiz' | 'trueFalseCard' | 'fillInTheBlank'
-  | 'scenarioCard' | 'highlightCard';
-
-interface MobileCard {
-  id: string;
-  type: MobileCardType;
-  card_number?: number;
-  title?: string;
-  text?: string;
-  illustration_idea?: string;
-  visible_labels?: string;
-  imageUrl?: string;
-  img_context?: string;
-  text_1?: string;
-  text_2?: string;
-  language?: string;
-  code?: string;
-  output_available?: boolean;
-  output?: string;
-  heading?: string;
-  leftOption?: { label: string; heading: string; description: string };
-  rightOption?: { label: string; heading: string; description: string };
-  content?: Array<{ heading: string; text: string }>;
-  question?: string;
-  options?: Array<{ id: number; text: string }> | string[];
-  correctAnswer?: number | string;
-  incorrectMessage?: string;
-  explanation?: string;
-  correctOptions?: string[];
-  sections?: Array<{ heading: string; content: string }>;
-  scenarioType?: string;
-  highlightCardType?: string;
-  pageId?: string;
-  publishedUrl?: string;
-}
+// The card shape, the gate and the rewrite dialog all come from the shared
+// modules so the page cannot drift from what the server enforces.
+import type { MobileCard, MobileCardType } from '@/lib/mobileCourseStorage';
+import { HighlightTypePicker } from '@/app/_components/HighlightTypePicker';
+import { checkCard, checkCards } from '@/lib/mobileCardLimits';
+import { CardIssues, CardIssueSummary } from '@/app/_components/CardIssues';
+import { CardRewriteControl, CardRegenerateButton } from '@/app/_components/CardRewriteControl';
 
 interface MobileShort {
   id: string;
@@ -283,12 +252,22 @@ function CardView({
   onEdit,
   onEditImage,
   onDelete,
+  shortId,
+  onRewritten,
+  onUpdate,
 }: {
   card: MobileCard;
   onEdit: (card: MobileCard) => void;
   onEditImage: (src: string, onApply: (url: string) => void) => void;
   onDelete?: () => void;
+  /** Omitted for the dimmed neighbour previews, which are not interactive. */
+  shortId?: string;
+  onRewritten?: () => Promise<void>;
+  /** Saves a single field edited directly on the card, e.g. the highlight type. */
+  onUpdate?: (card: MobileCard) => void;
 }) {
+  const issues = checkCard(card, 'short');
+  const blocking = issues.some((i) => i.severity === 'error');
   const [selected, setSelected] = useState<number | null>(null);
   const [tfSelected, setTfSelected] = useState<'true' | 'false' | null>(null);
   const [filledBlanks, setFilledBlanks] = useState<string[]>([]);
@@ -373,7 +352,9 @@ function CardView({
   }
 
   return (
-    <div className="relative flex flex-col w-[400px] min-h-[600px] max-h-[700px] rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-xl overflow-hidden shrink-0">
+    <div className={`relative flex flex-col w-[400px] min-h-[600px] max-h-[700px] rounded-2xl border bg-[var(--surface)] shadow-xl overflow-hidden shrink-0 ${
+      blocking ? 'border-red-500' : 'border-[var(--border)]'
+    }`}>
       {/* Card header */}
       <div className="flex items-center justify-between px-4 pt-3.5 pb-0 gap-2 shrink-0">
         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${badgeClass}`}>
@@ -384,20 +365,38 @@ function CardView({
             <span className="text-[10px] text-[var(--text-faint)] font-mono">#{card.card_number}</span>
           )}
           <button
-            className="p-1.5 rounded-lg bg-[var(--card)] border border-[var(--border)] text-[var(--text)] hover:text-[var(--accent)] hover:border-[var(--accent)]/50 hover:bg-[var(--accent)]/5 transition-colors text-sm"
+            className="card-tool"
             onClick={() => card.type === 'img_only' && card.imageUrl
               ? onEditImage(card.imageUrl, () => {})
               : onEdit(card)
             }
-            title="Edit card"
+            data-tip="Edit card" aria-label="Edit card"
           >
-            ✏
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>
+            </svg>
           </button>
+          {shortId && onRewritten && (
+            <CardRegenerateButton
+              card={card}
+              endpoint={`/api/mobile-short/${shortId}/cards/${card.id}`}
+              onDone={onRewritten}
+            />
+          )}
+          {shortId && onRewritten && (
+            <CardRewriteControl
+              card={card}
+              product="short"
+              endpoint={`/api/mobile-short/${shortId}/cards/${card.id}`}
+              onAccepted={onRewritten}
+              prominent={blocking}
+            />
+          )}
           {onDelete && (
             <button
-              className="p-1.5 rounded-lg bg-[var(--card)] border border-[var(--border)] text-[var(--text-faint)] hover:text-red-400 hover:border-red-400/50 hover:bg-red-400/5 transition-colors"
+              className="card-tool card-tool-danger"
               onClick={() => { if (window.confirm('Delete this card?')) onDelete(); }}
-              title="Delete card"
+              data-tip="Delete card" aria-label="Delete card"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
@@ -408,8 +407,8 @@ function CardView({
             <a
               href={card.imageUrl}
               download={card.imageUrl.split('/').pop() || 'image.png'}
-              className="p-1.5 rounded-lg bg-[var(--card)] border border-[var(--border)] text-[var(--text-faint)] hover:text-emerald-400 hover:border-emerald-400/50 hover:bg-emerald-400/5 transition-colors"
-              title="Download image"
+              className="card-tool card-tool-good"
+              data-tip="Download image" aria-label="Download image"
               onClick={(e) => e.stopPropagation()}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -419,7 +418,7 @@ function CardView({
           )}
           {card.publishedUrl && (
             <a href={card.publishedUrl} target="_blank" rel="noreferrer"
-              className="p-1.5 rounded-lg bg-[var(--card)] hover:bg-[var(--border)] border border-[var(--border)] text-xs text-[var(--text-dim)]">
+              className="card-tool" data-tip="Open published card" data-tip-align="right" aria-label="Open published card">
               ↗
             </a>
           )}
@@ -484,7 +483,7 @@ function CardView({
                   href={card.imageUrl}
                   download={card.imageUrl.split('/').pop() || 'image.png'}
                   className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                  title="Download image"
+                  title="Download image" aria-label="Download image"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
@@ -517,7 +516,7 @@ function CardView({
                   href={card.imageUrl}
                   download={card.imageUrl.split('/').pop() || 'image.png'}
                   className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                  title="Download image"
+                  title="Download image" aria-label="Download image"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
@@ -813,11 +812,11 @@ function CardView({
                   <p className="text-[15px] text-amber-700 leading-relaxed font-medium tracking-tight">
                     {highlightText}
                   </p>
-                  {highlightType && (
-                    <span className="text-[10px] px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-600 border border-amber-500/25 font-semibold uppercase tracking-widest">
-                      {highlightType.replace(/-/g, ' ')}
-                    </span>
-                  )}
+                  <HighlightTypePicker
+                    value={highlightType}
+                    readOnly={!onUpdate}
+                    onChange={(id) => onUpdate?.({ ...card, highlightCardType: id })}
+                  />
                 </div>
                 <div className="flex justify-end pt-1">
                   <CharBadge count={highlightText.length} min={100} max={130} />
@@ -829,6 +828,7 @@ function CardView({
           </div>
         )}
       </div>
+      <CardIssues issues={issues} />
     </div>
   );
 }
@@ -840,11 +840,17 @@ function CardCarousel({
   onEdit,
   onEditImage,
   onDelete,
+  shortId,
+  onRewritten,
+  onUpdate,
 }: {
   cards: MobileCard[];
   onEdit: (card: MobileCard) => void;
   onEditImage: (src: string, onApply: (url: string) => void) => void;
   onDelete: (cardId: string) => void;
+  shortId: string;
+  onRewritten: () => Promise<void>;
+  onUpdate: (card: MobileCard) => void;
 }) {
   const [idx, setIdx] = useState(0);
 
@@ -888,7 +894,15 @@ function CardCarousel({
           className="absolute top-0 transition-all duration-300 ease-in-out"
           style={{ left: '50%', transform: 'translateX(-50%) scale(1)', opacity: 1, zIndex: 10 }}
         >
-          <CardView card={cards[idx]} onEdit={onEdit} onEditImage={onEditImage} onDelete={() => onDelete(cards[idx].id)} />
+          <CardView
+            card={cards[idx]}
+            onEdit={onEdit}
+            onEditImage={onEditImage}
+            onDelete={() => onDelete(cards[idx].id)}
+            shortId={shortId}
+            onRewritten={onRewritten}
+            onUpdate={onUpdate}
+          />
         </div>
 
         {hasNext && (
@@ -1165,14 +1179,12 @@ function CardEditorModal({
                 </div>
                 <textarea className="input w-full h-24 resize-none text-sm" value={draft.text || ''} onChange={(e) => upd({ text: e.target.value })} />
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <label className="text-xs font-medium text-[var(--text-faint)]">Type</label>
-                <select className="input text-sm" value={draft.highlightCardType || ''} onChange={(e) => upd({ highlightCardType: e.target.value })}>
-                  <option value="">— select —</option>
-                  <option value="key-insight">key-insight</option>
-                  <option value="point-to-ponder">point-to-ponder</option>
-                  <option value="bigger-picture">bigger-picture</option>
-                </select>
+                <HighlightTypePicker
+                  value={draft.highlightCardType}
+                  onChange={(id) => upd({ highlightCardType: id })}
+                />
               </div>
             </>
           )}
@@ -1339,6 +1351,13 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
     try {
       const res = await fetch(`/api/mobile-short/${params.id}/publish`, { method: 'POST' });
       const json = await res.json();
+      // 422 is the gate refusing: report the first blocking field, not a generic failure.
+      if (res.status === 422) {
+        const first = (json.issues || []).find((i: any) => i.severity === 'error');
+        setPublishError(first ? `${json.error}: card #${first.cardNumber ?? first.cardId} — ${first.message}` : json.error || 'Publish blocked');
+        await load();
+        return;
+      }
       if (!json.ok && json.errors?.length) {
         setPublishError(json.errors[0]?.error || 'Publish failed');
       }
@@ -1392,6 +1411,9 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
   }
 
   const cards = short.cards || [];
+  // One verdict per render: the buttons and the summary must agree with each other
+  // and with the server, which runs the same checkCards before publishing.
+  const gate = checkCards(cards, 'short');
 
   return (
     <div className="flex gap-0 -mx-6 -my-10 min-h-screen">
@@ -1518,7 +1540,8 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
                 </a>
                 <button
                   onClick={publish}
-                  disabled={publishing}
+                  disabled={publishing || gate.blocking}
+                  title={gate.blocking ? 'Fix the card errors first' : undefined}
                   className="btn-secondary text-xs inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15"/></svg>
@@ -1529,7 +1552,8 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
             {(short.status === 'draft' || short.status === 'failed') && cards.length > 0 && (
               <button
                 onClick={publish}
-                disabled={publishing}
+                disabled={publishing || gate.blocking}
+                title={gate.blocking ? 'Fix the card errors first' : undefined}
                 className="btn-primary text-xs shrink-0 mt-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {publishing ? 'Publishing…' : 'Publish'}
@@ -1537,10 +1561,18 @@ export default function MobileShortDetailPage({ params }: { params: { id: string
             )}
           </div>
 
+          <CardIssueSummary issues={gate.issues} />
+
           {cards.length > 0 ? (
             <CardCarousel
               key={short.id}
               cards={cards}
+              shortId={short.id}
+              onRewritten={load}
+              onUpdate={(updated) => {
+                const current = shortRef.current?.cards || [];
+                saveCards(current.map((c) => c.id === updated.id ? updated : c));
+              }}
               onEdit={(c) => setEditCard(c)}
               onDelete={(cardId) => {
                 const current = shortRef.current?.cards || [];

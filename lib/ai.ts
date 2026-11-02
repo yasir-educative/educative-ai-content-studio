@@ -176,6 +176,30 @@ function escapeControlCharsInStrings(str: string): string {
   return out.join('');
 }
 
+/**
+ * Structured output. The schema is enforced by the API in strict mode, so a
+ * count expressed as minItems/maxItems is a guarantee rather than a request —
+ * that is what makes the card planner's "exactly N cards" reliable.
+ */
+export async function generateJSON<T>(
+  prompt: string,
+  schema: Record<string, unknown>,
+  opts: { model?: string; tier?: ModelTier; maxTokens?: number; system?: string; name: string },
+): Promise<T> {
+  const res = await getClient().responses.create({
+    model: pickModel(opts),
+    input: buildInput(prompt, opts.system),
+    max_output_tokens: opts.maxTokens,
+    text: { format: { type: 'json_schema', name: opts.name, strict: true, schema } },
+  } as any, { signal: getAbortSignal() ?? undefined });
+  const raw = (res as any).output_text ?? '';
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return parseJsonLoose<T>(raw);
+  }
+}
+
 export function parseJsonLoose<T = any>(s: string): T {
   if (!s) throw new Error('empty json string');
   let str = s.trim();
