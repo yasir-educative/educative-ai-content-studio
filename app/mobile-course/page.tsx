@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { ImportMobileCourse } from '@/app/_components/ImportMobileCourse';
 
 type CourseStatus = 'running' | 'draft' | 'published' | 'failed' | 'cancelled';
 type ShortStatus  = 'running' | 'draft' | 'published' | 'failed' | 'cancelled';
@@ -104,6 +105,7 @@ export default function MobileCourseListPage() {
           >
             Refresh
           </button>
+          {isCourses && <ImportMobileCourse onImported={(id) => router.push(`/mobile-course/${id}`)} />}
           {isCourses ? (
             <button className="btn-primary" onClick={() => router.push('/mobile-course/new')}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>

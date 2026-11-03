@@ -41,6 +41,8 @@ export default function EducativeImagesPage() {
   interface Sty { id: string; name: string; body: string; builtin: boolean }
   const [styles, setStyles] = useState<Sty[]>([]);
   const [defaultStyleId, setDefaultStyleId] = useState('');
+  // The style every mobile card illustration is drawn in, courses and shorts alike.
+  const [mobileStyleId, setMobileStyleId] = useState('');
   const [styleId, setStyleId] = useState('');
   const [editing, setEditing] = useState(false);
   const [styleDraft, setStyleDraft] = useState('');
@@ -56,6 +58,7 @@ export default function EducativeImagesPage() {
     const list: Sty[] = j.styles || [];
     setStyles(list);
     setDefaultStyleId(j.defaultId || '');
+    setMobileStyleId(j.mobileDefaultId || '');
     setStyleId((cur) => selectId || (list.some((x) => x.id === cur) ? cur : j.defaultId || list[0]?.id || ''));
   }, []);
 
@@ -193,12 +196,18 @@ export default function EducativeImagesPage() {
                   ? 'Not used — the reference image is styling this generation.'
                   : 'Prepended to every create. Not used when editing.'}
               </p>
+              <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
+                Mobile course and short cards are drawn in{' '}
+                <span className="text-[var(--text-dim)]">{styles.find((x) => x.id === mobileStyleId)?.name || 'the mobile card style'}</span>.
+              </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <select className="input text-xs py-1 min-w-[13rem]" value={styleId}
                 onChange={(e) => { setStyleId(e.target.value); setEditing(false); }} disabled={busy}>
                 {styles.map((st) => (
-                  <option key={st.id} value={st.id}>{st.name}{st.id === defaultStyleId ? ' (default)' : ''}</option>
+                  <option key={st.id} value={st.id}>
+                    {st.name}{st.id === defaultStyleId ? ' (default)' : ''}{st.id === mobileStyleId ? ' (mobile cards)' : ''}
+                  </option>
                 ))}
               </select>
               {!editing && (
@@ -217,6 +226,13 @@ export default function EducativeImagesPage() {
                   {styleId !== defaultStyleId && (
                     <button className="btn-secondary text-xs py-1 px-3" onClick={() => persistStyle('PUT', { id: styleId })} disabled={styleBusy}>
                       Make default
+                    </button>
+                  )}
+                  {styleId !== mobileStyleId && (
+                    <button className="btn-secondary text-xs py-1 px-3"
+                      title="Draw every mobile course and mobile short card illustration in this style"
+                      onClick={() => persistStyle('PUT', { id: styleId, scope: 'mobile' })} disabled={styleBusy}>
+                      Use for mobile cards
                     </button>
                   )}
                   {activeStyle && !activeStyle.builtin && (

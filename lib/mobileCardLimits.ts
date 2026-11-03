@@ -76,7 +76,7 @@ export function checkCard(card: MobileCard, product: CardProduct = 'short'): Lim
   if (card.type === 'text_img' || card.type === 'img_only') {
     text('imageUrl', card.imageUrl, 'Image');
     text('illustration_idea', card.illustration_idea, 'Illustration idea');
-    const labels = (card.visible_labels || '').split(',').filter((label) => label.trim());
+    const labels = String(card.visible_labels || '').split(',').filter((label) => label.trim());
     count('visible_labels', labels, 'Visible labels', 0, 6);
     if (card.type === 'img_only') text('img_context', card.img_context, 'Image context');
   }

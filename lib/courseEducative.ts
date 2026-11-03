@@ -426,6 +426,144 @@ function buildChpPutBody(raw: any, updatedCategories: any[]): Record<string, any
   };
 }
 
+// --- Table of contents (CHP) editing ---
+//
+// The TOC is one big object: every save rewrites the whole categories array, so
+// anything that moves a page or a chapter reads it, edits the array, writes it
+// back. These three helpers are that read/edit/write, exported so callers can
+// splice at an exact index instead of only appending.
+
+export interface ChpPage {
+  author_id: number | null;
+  collection_id: number | null;
+  page_id: number | null;
+  id: number | null;
+  title: string;
+  is_preview: boolean;
+  parentIndex: any;
+  editMode: boolean;
+  is_recovered: boolean;
+  type: string;
+  can_edit: boolean;
+  is_standalone_module: boolean;
+  is_cloned: boolean;
+  brief_summary: string;
+}
+
+export interface ChpCategory {
+  id: string;
+  title: string;
+  summary: string;
+  pages: ChpPage[];
+  editMode: boolean;
+  type: string;
+}
+
+// Numeric IDs stay numbers: that is the type Educative returned, and the PUT
+// is rejected when a page id arrives as a string.
+function normalizeCategories(raw: any): ChpCategory[] {
+  return pickCategories(raw).map((c: any) => ({
+    id: String(c?.id ?? ''),
+    title: c?.title ?? '',
+    summary: c?.summary ?? '',
+    pages: (c?.pages || []).map((p: any) => {
+      const pid = p?.page_id ?? p?.id ?? null;
+      const cid = p?.collection_id ?? null;
+      const auid = p?.author_id ?? null;
+      return {
+        author_id: auid != null ? Number(auid) : null,
+        collection_id: cid != null ? Number(cid) : null,
+        page_id: pid != null ? Number(pid) : null,
+        id: pid != null ? Number(pid) : null,
+        title: p?.title ?? '',
+        is_preview: !!p?.is_preview,
+        parentIndex: p?.parentIndex ?? null,
+        editMode: !!p?.editMode,
+        is_recovered: !!p?.is_recovered,
+        type: p?.type ?? '',
+        can_edit: !!p?.can_edit,
+        is_standalone_module: !!p?.is_standalone_module,
+        is_cloned: !!p?.is_cloned,
+        brief_summary: p?.brief_summary ?? '',
+      };
+    }),
+    editMode: !!c?.editMode,
+    type: c?.type ?? 'COLLECTION_CATEGORY',
+  }));
+}
+
+/** The current table of contents, ready to splice. */
+export async function fetchCollectionCategories(
+  authorId: string,
+  collectionId: string,
+): Promise<ChpCategory[]> {
+  const env = readEnv();
+  const aid = authorId || env.authorId;
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
+  return normalizeCategories(raw);
+}
+
+/**
+ * Write the table of contents back.
+ *
+ * This replaces the whole TOC, so pass the full array — a short array deletes
+ * every chapter missing from it. Re-read with fetchCollectionCategories
+ * immediately before editing so a concurrent change is not overwritten.
+ */
+export async function saveCollectionCategories(
+  authorId: string,
+  collectionId: string,
+  categories: ChpCategory[],
+): Promise<void> {
+  const env = readEnv();
+  const aid = authorId || env.authorId;
+  const raw = await fetchCollectionRaw(aid, collectionId, pickAuth(aid, env));
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}`, {
+    method: 'PUT',
+    headers: {
+      Cookie: `flask-auth=${pickAuth(aid, env)}`,
+      'X-Etag': 'overwrite',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(buildChpPutBody(raw, categories)),
+  });
+  if (!res.ok) throw new Error(`Educative Save CHP failed: ${res.status} ${await res.text()}`);
+}
+
+/** A TOC entry for a lesson page that already exists in the collection. */
+export function makeChpPage(
+  authorId: string,
+  collectionId: string,
+  pageId: string,
+  title: string,
+): ChpPage {
+  const numPageId = Number(pageId);
+  return {
+    author_id: Number(authorId),
+    collection_id: Number(collectionId),
+    page_id: numPageId,
+    id: numPageId,
+    title,
+    is_preview: false,
+    parentIndex: null,
+    editMode: false,
+    is_recovered: false,
+    type: 'collection_lesson',
+    can_edit: false,
+    is_standalone_module: false,
+    is_cloned: false,
+    brief_summary: '',
+  };
+}
+
+/** An empty chapter, with an id no existing chapter is using. */
+export function makeChpCategory(title: string, existing: ChpCategory[]): ChpCategory {
+  const nextId = existing.length
+    ? String(Math.max(...existing.map((c) => Number(c.id) || 0)) + 1)
+    : '1';
+  return { id: nextId, title, summary: '', pages: [], editMode: false, type: 'COLLECTION_CATEGORY' };
+}
+
 // Fetch the CHP, append the lesson to the correct chapter, then save the full CHP body.
 // Mirrors n8n: Fetch CHP1 → Extract CHP metadata → Update Categories → Save CHP.
 export async function addPageToChapter(
@@ -447,53 +585,8 @@ export async function addPageToChapter(
   const numPageId = Number(pageId);
 
   // 2. Extract + update categories
-  // Normalize existing pages: keep numeric IDs as numbers (preserves the type the API returned).
-  const categories: any[] = pickCategories(raw).map((c: any) => ({
-    id: String(c?.id ?? ''),
-    title: c?.title ?? '',
-    summary: c?.summary ?? '',
-    pages: (c?.pages || []).map((p: any) => {
-      const pid = p?.page_id ?? p?.id ?? null;
-      const cid2 = p?.collection_id ?? null;
-      const auid = p?.author_id ?? null;
-      return {
-        author_id: auid != null ? Number(auid) : null,
-        collection_id: cid2 != null ? Number(cid2) : null,
-        page_id: pid != null ? Number(pid) : null,
-        id: pid != null ? Number(pid) : null,
-        title: p?.title ?? '',
-        is_preview: !!p?.is_preview,
-        parentIndex: p?.parentIndex ?? null,
-        editMode: !!p?.editMode,
-        is_recovered: !!p?.is_recovered,
-        type: p?.type ?? '',
-        can_edit: !!p?.can_edit,
-        is_standalone_module: !!p?.is_standalone_module,
-        is_cloned: !!p?.is_cloned,
-        brief_summary: p?.brief_summary ?? '',
-      };
-    }),
-    editMode: !!c?.editMode,
-    type: c?.type ?? 'COLLECTION_CATEGORY',
-  }));
-
-  // New page entry — all IDs as numbers to match Educative's internal format.
-  const newPage = {
-    author_id: numAid,
-    collection_id: numCid,
-    page_id: numPageId,
-    id: numPageId,
-    title: lessonTitle || chapterTitle,
-    is_preview: false,
-    parentIndex: null,
-    editMode: false,
-    is_recovered: false,
-    type: 'collection_lesson',
-    can_edit: false,
-    is_standalone_module: false,
-    is_cloned: false,
-    brief_summary: '',
-  };
+  const categories = normalizeCategories(raw);
+  const newPage = makeChpPage(String(numAid), String(numCid), String(numPageId), lessonTitle || chapterTitle);
 
   const idx = categories.findIndex(
     (c: any) => (c.title || '').toLowerCase() === chapterTitle.toLowerCase(),
@@ -503,17 +596,7 @@ export async function addPageToChapter(
     categories[idx].pages.push(newPage);
   } else {
     // Chapter doesn't exist yet — create it
-    const newId = categories.length
-      ? String(Math.max(...categories.map((c: any) => Number(c.id) || 0)) + 1)
-      : '1';
-    categories.push({
-      id: newId,
-      title: chapterTitle,
-      summary: '',
-      pages: [newPage],
-      editMode: false,
-      type: 'COLLECTION_CATEGORY',
-    });
+    categories.push({ ...makeChpCategory(chapterTitle, categories), pages: [newPage] });
   }
 
   // 3. Build and send the full CHP PUT body
@@ -1192,6 +1275,19 @@ function extractTextFromComponents(components: any[]): string {
       lines.push(`\`\`\`${comp.content.language || ''}\n${comp.content.code}\n\`\`\``);
     } else if (comp.type === 'Markdown' && comp.content?.markdown) {
       lines.push(comp.content.markdown);
+    } else if (comp.type === 'DrawIOWidget') {
+      // The diagram itself is an image, but its caption names what it teaches.
+      const caption = String(comp.content?.caption || comp.content?.title || '').trim();
+      if (caption) lines.push(`[diagram: ${caption}]`);
+    } else if (comp.type === 'SpoilerEditor' || comp.type === 'Spoiler') {
+      const inner = extractTextFromComponents(comp.content?.components || []);
+      const heading = String(comp.content?.title || comp.content?.heading || '').trim();
+      if (heading || inner) lines.push([heading, inner].filter(Boolean).join('\n'));
+    } else if (comp.type === 'Quiz' && Array.isArray(comp.content?.questions)) {
+      for (const q of comp.content.questions) {
+        const prompt = String(q?.questionText || q?.question || '').replace(/<[^>]+>/g, ' ').trim();
+        if (prompt) lines.push(`[quiz] ${prompt}`);
+      }
     }
   }
   return lines.join('\n\n');
@@ -1213,10 +1309,13 @@ export async function fetchLessonContent(
     if (!res.ok) return '';
     const json: any = await res.json();
     const body = json?.body || json;
-    const title = body?.page_title || '';
+    const title = body?.page_title || body?.summary?.title || '';
     let text = title ? `## ${title}\n\n` : '';
     try {
-      const raw = body?.page_content;
+      // Some collections return the page wrapped in page_content, others return
+      // the content object itself. Reading only the wrapped shape left the
+      // source text silently empty for a whole collection.
+      const raw = body?.page_content ?? body;
       const content = typeof raw === 'string' ? JSON.parse(raw) : raw;
       text += extractTextFromComponents(content?.components || []);
     } catch {}
@@ -1294,6 +1393,19 @@ export interface CollectionChapterRef {
   id: string;
   title: string;
   lessons: CollectionLessonRef[];
+}
+
+/** One published page, raw. Returns null when the page is gone. */
+export async function fetchRemotePage(authorId: string, collectionId: string, pageId: string): Promise<any | null> {
+  const env = readEnv();
+  const aid = authorId || env.authorId;
+  const res = await educativeFetch(`${EDUCATIVE_BASE}/api/author/${aid}/collection/${collectionId}/page/${pageId}`, {
+    headers: { Cookie: `flask-auth=${pickAuth(aid, env)}` },
+  });
+  if (res.status === 404 || res.status === 410) return null;
+  if (!res.ok) throw new Error(`Educative read page failed: ${res.status}`);
+  const json: any = await res.json();
+  return json?.body || json;
 }
 
 export async function fetchCollectionStructure(

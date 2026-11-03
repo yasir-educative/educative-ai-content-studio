@@ -50,34 +50,17 @@ export interface MobileShortEvent {
 
 export type MobileShortEmit = (e: MobileShortEvent) => void;
 
-// ── Image prompt builder (exact n8n "Img/textImg prompt" node) ────────────────
+// ── Image prompt builder ─────────────────────────────────────────────────────
 
-export function buildShortCardImagePrompt(card: any): string {
-  const illustrationIdea = String(card.illustration_idea || '');
-  const visibleLabels = String(card.visible_labels || '');
-  const title = String(card.title || '');
-  const hasLabels = visibleLabels.trim().length > 0;
+// Shared with the course pipeline: a short card and a course card are drawn by
+// the same rules, in the style the author chose.
+import { buildMobileCardImagePrompt } from './mobileCardImagePrompt';
+export { buildMobileCardImagePrompt as buildShortCardImagePrompt } from './mobileCardImagePrompt';
 
-  if (card.type === 'img_only') {
-    const imgContext = String(card.img_context || '');
-    const labelsBlock = hasLabels
-      ? `Render these labels, each exactly once: "${visibleLabels}". Add short annotations (2–8 words) where they clarify.`
-      : `Derive labels and annotations from the illustration idea and context. Label every key element with short phrases (2–8 words).`;
-    return `Self-contained technical infographic, portrait 640×1024, white (#FFF) background. No external text — viewer must fully understand the concept from this diagram and annotations alone.\n\nLayout: 24px margins. Top-to-bottom or left-to-right flow. Center-aligned. 5–10 primary elements — rich but not cluttered. Generous whitespace. Arrows, connector lines, numbered steps for hierarchy.\n\nStyle: Flat 2D vector only. 2px uniform stroke, 8px rounded corners. Outlined shapes with white or pale tinted fill. Consistent icon size per tier. No 3D, no perspective, no shadows, no gradients, no cartoon characters, no hand-drawn or sketch style.\n\nColors: Only these — #4A90D9 (blue), #3AAFA9 (teal) as primary. #48BB78 (green), #E6A817 (amber) sparingly as accent. All text #2D3748. No reds, no grays, no off-palette colors.\n\nAnnotations: Callouts, labeled arrows, step numbers on elements. Enough detail for zero prior knowledge. Every annotation carries weight.\n\nText: ${labelsBlock} Capitalize first word of every label, rest lowercase unless acronym. Example: "API gateway" not "api gateway" or "API Gateway". Geometric sans-serif, medium weight. No paragraphs, no title. No misspellings.\n\nIllustration idea: "${illustrationIdea}"\nContext (do NOT render as text): "${title} — ${imgContext}"`;
-  }
-
-  // text_img
-  const content = String(card.text || '');
-  const labelsBlock = hasLabels
-    ? `Render ONLY these labels, each exactly once: "${visibleLabels}". Short clarifying labels (2–5 words) on connectors allowed.`
-    : `Derive concise labels (2–5 words each) from the illustration idea and context. Label every key element.`;
-  return `Technical infographic, portrait 640×1024, white (#FFF) background. Diagram-only — no title, no heading, no paragraphs.\n\nLayout: 24px margins. Top-to-bottom or left-to-right flow. Center-aligned. 4–8 primary elements maximum — not too sparse, not cluttered. Generous whitespace between logical groups. Arrows and connector lines for hierarchy.\n\nStyle: Flat 2D vector only. 2px uniform stroke, 8px rounded corners. Outlined shapes with white or pale tinted fill. Consistent icon size per tier. Absolutely no 3D, no perspective, no shadows, no gradients, no cartoon characters, no hand-drawn or sketch style, no textures.\n\nColors: Only these — #4A90D9 (blue) and #3AAFA9 (teal) as primary. #48BB78 (green) and #E6A817 (amber) sparingly as accent. All text #2D3748. No reds, no grays, no off-palette colors.\n\nText: ${labelsBlock} Capitalize first word of every label, rest lowercase unless acronym. Example: "API gateway" not "api gateway" or "API Gateway". Geometric sans-serif, medium weight. No misspellings.\n\nIllustration idea: "${illustrationIdea}"\nContext (do NOT render as text): "${title} — ${content}"`;
-}
-
-export async function generateCardImage(card: any, order: number, shortId: string, product: 'short' | 'course' = 'short'): Promise<string | null> {
+export async function generateCardImage(card: any, order: number, shortId: string, product: 'short' | 'course' = 'short', styleBody?: string): Promise<string | null> {
   try {
     const subfolder = `${product === 'course' ? 'mobile-courses' : 'mobile-shorts'}/${slugify(shortId)}`;
-    const rawPrompt = buildShortCardImagePrompt(card);
+    const rawPrompt = buildMobileCardImagePrompt(card, styleBody);
     const result = await generateGptImage(card.illustration_idea || '', order, subfolder, {
       size: '1024x1536',
       rawPrompt,
@@ -103,7 +86,9 @@ export function mapRawCard(raw: any, index: number): MobileCard {
     title: raw.title || raw.card_title || '',
     text: raw.text || raw.content || '',
     illustration_idea: raw.illustration_idea || '',
-    visible_labels: raw.visible_labels || '',
+    // Generators return the labels either as a comma-separated string or as an
+    // array; everything downstream splits a string, so settle it here.
+    visible_labels: Array.isArray(raw.visible_labels) ? raw.visible_labels.join(', ') : (raw.visible_labels || ''),
     img_context: raw.img_context || '',
     imageUrl: raw.imageUrl || '',
     text_1: raw.text_1 || '',
@@ -181,12 +166,56 @@ function cardText(c: any): string {
   return String(c?.text ?? c?.content ?? '');
 }
 
-// Cut at the last sentence end that fits; fall back to the last word boundary.
+/** End of the last complete sentence in `text`, or -1. */
+function lastSentenceEnd(text: string): number {
+  let end = -1;
+  // A sentence can be closed by a quote or bracket, and is ended by whitespace
+  // or by the end of the block — a full stop before a newline counts, which is
+  // how a markdown card normally finishes a paragraph.
+  const re = /[.!?]["')\]]?(?=\s|$)/g;
+  for (let m = re.exec(text); m; m = re.exec(text)) end = m.index + m[0].length;
+  return end;
+}
+
+/**
+ * Does `text` stop in the middle of a sentence?
+ *
+ * Only prose can: a table row, a heading and a short bullet are fragments by
+ * design and carry no full stop, so a card that ends on one is finished. What
+ * this catches is the real failure — a paragraph that runs out of characters
+ * and stops on "and".
+ */
+export function endsMidSentence(text: string): boolean {
+  const last = text.trimEnd().split('\n').pop()?.trim() || '';
+  if (!last || last.endsWith('|') || /^#{1,6}\s/.test(last)) return false;
+  const body = last.replace(/^([-*+]|\d+[.)]|>)\s*/, '').trim();
+  if (!body || /[.!?:;)"'\]`*_]$/.test(body)) return false;
+  return body.split(/\s+/).length > 8;
+}
+
+/**
+ * Cut `text` to at most `max` characters without ending mid-sentence.
+ *
+ * A card is markdown, so the cheapest thing to lose is a whole block — the
+ * closing note, the last table, a bullet list. Dropping one leaves every
+ * sentence that remains intact, which is what a reader sees; a cut made inside
+ * a sentence is what they see first. Only when one block is left does this fall
+ * back to cutting the prose, and then at a sentence end.
+ */
 export function trimToMax(text: string, max: number): string {
   if (text.length <= max) return text;
+
+  const blocks = text.split(/\n\s*\n/);
+  if (blocks.length > 1) {
+    const kept = [...blocks];
+    while (kept.length > 1 && kept.join('\n\n').trim().length > max) kept.pop();
+    const joined = kept.join('\n\n').trim();
+    if (kept.length > 1 || joined.length <= max) return trimToMax(joined, max);
+  }
+
   const slice = text.slice(0, max);
-  const lastSentence = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('! '), slice.lastIndexOf('? '));
-  if (lastSentence >= max * 0.6) return slice.slice(0, lastSentence + 1).trim();
+  const sentence = lastSentenceEnd(slice);
+  if (sentence > 0) return slice.slice(0, sentence).trim();
   const lastSpace = slice.lastIndexOf(' ');
   return (lastSpace > 0 ? slice.slice(0, lastSpace) : slice).trim();
 }
@@ -232,12 +261,20 @@ export async function enforceCharLimits(cards: any[], emit: MobileShortEmit, pro
       limit: limits[card.type as MobileCardType]?.find((limit) => limit.field === 'text') }]);
   // Unique internal numbers let the existing rewrite contract handle sections too.
   const workCards = units.map((unit, i) => ({ ...cards[unit.cardIndex], text: unit.text, card_number: i + 1, limit: unit.limit }));
-  const offending = workCards.filter((c) => {
+  // A rewrite that lands in range but stops mid-sentence is the failure this
+  // whole step used to produce, so it counts as unfinished work too.
+  const unusable = (c: any, text = cardText(c)) => {
     const lim = c.limit;
-    if (!lim) return false;
-    const len = cardText(c).length;
-    return len < lim.min || len > lim.max;
-  });
+    if (!lim) return '';
+    if (text.length > lim.max) return `${text.length} characters, over the ${lim.max} maximum`;
+    if (text.length < lim.min) return `${text.length} characters, under the ${lim.min} minimum`;
+    if (endsMidSentence(text)) {
+      return 'it stops mid-sentence; the last sentence has no closing punctuation';
+    }
+    return '';
+  };
+
+  let offending = workCards.filter((c) => unusable(c));
   if (offending.length === 0) return cards;
 
   emit({
@@ -245,13 +282,14 @@ export async function enforceCharLimits(cards: any[], emit: MobileShortEmit, pro
     message: `char limits: ${offending.length} card(s) out of range, rewriting`,
   });
 
-  const prompt = `You are a technical editor enforcing strict character limits on mobile learning cards. Rewrite ONLY the text of each card below so it lands inside its required character range. Preserve the meaning, voice, and any markdown. Do not add new facts.
+  const rewrites: Record<number, string> = {};
+  const buildPrompt = (batch: any[]) => `You are a technical editor enforcing strict character limits on mobile learning cards. Rewrite ONLY the text of each card below so it lands inside its required character range. Preserve the meaning, voice, and any markdown. Do not add new facts.
 
 Cards to fix:
 ${JSON.stringify(
-  offending.map((c) => {
+  batch.map((c) => {
     const lim = c.limit;
-    const text = cardText(c);
+    const text = rewrites[Number(c.card_number)] ?? cardText(c);
     return {
       card_number: c.card_number,
       card_type: c.type,
@@ -259,6 +297,7 @@ ${JSON.stringify(
       required_min: lim.min,
       required_max: lim.max,
       action: text.length > lim.max ? 'SHORTEN' : 'EXPAND with meaningful depth, not padding',
+      rejected_because: unusable(c, text),
       current_text: text,
     };
   }),
@@ -269,21 +308,42 @@ ${JSON.stringify(
 Rules:
 - Return a JSON array of objects: { "card_number": N, "new_text": "..." }
 - Count raw characters including markdown syntax. Stay inside required_min..required_max.
+- Finish what you start. The text must end on a complete sentence, with its closing
+  punctuation. Never stop mid-sentence, mid-clause or mid-word to hit the character count,
+  and never leave a bullet, a table row or a note half-written.
+- To SHORTEN, drop a whole sentence, bullet or table row, or say the same thing in fewer
+  words. Cutting the tail off the last sentence is not shortening.
 - text_img cards must remain a single prose paragraph with no lists, blockquotes, or tables.
 - highlightCard text must contain no markdown at all.
 - Raw JSON only, no markdown fences.`;
 
-  let rewrites: Record<number, string> = {};
-  try {
-    const raw = await generateText(prompt, { tier: 'normal', maxTokens: 4000 });
-    const parsed = parseJsonLoose<any>(raw);
-    for (const r of (Array.isArray(parsed) ? parsed : [])) {
-      if (r?.card_number && typeof r?.new_text === 'string') {
-        rewrites[Number(r.card_number)] = r.new_text;
-      }
+  // Two attempts: the second is told exactly why the first was rejected. A
+  // rewrite that is still wrong is kept only when it is no worse than what it
+  // replaced, so a bad attempt cannot make a card worse than the generator left it.
+  for (let attempt = 1; attempt <= 2 && offending.length; attempt++) {
+    if (attempt > 1) {
+      emit({ type: 'log', message: `char limits: ${offending.length} card(s) still unusable, asking again` });
     }
-  } catch (e: any) {
-    console.warn('[mobileShortsPipeline] char limit rewrite failed:', e?.message);
+    try {
+      const raw = await generateText(buildPrompt(offending), { tier: 'normal', maxTokens: 4000 });
+      const parsed = parseJsonLoose<any>(raw);
+      for (const r of (Array.isArray(parsed) ? parsed : [])) {
+        const n = Number(r?.card_number);
+        if (!n || typeof r?.new_text !== 'string' || !r.new_text.trim()) continue;
+        const card = workCards.find((c) => Number(c.card_number) === n);
+        if (!card) continue;
+        const current = rewrites[n] ?? cardText(card);
+        // Keep the attempt unless it is worse than what we already have.
+        if (!unusable(card, r.new_text) || unusable(card, current)) rewrites[n] = r.new_text;
+      }
+    } catch (e: any) {
+      console.warn('[mobileShortsPipeline] char limit rewrite failed:', e?.message);
+      break;
+    }
+    offending = offending.filter((c) => unusable(c, rewrites[Number(c.card_number)] ?? cardText(c)));
+  }
+  if (offending.length) {
+    emit({ type: 'log', message: `char limits: ${offending.length} card(s) trimmed to fit after ${2} attempts` });
   }
 
   const fixed = workCards.map((c) => {
@@ -294,6 +354,12 @@ Rules:
     // Hard guarantee on the ceiling; an under-length card is left as-is since
     // truncation cannot fix it and the content is still usable.
     if (text.length > lim.max) text = trimToMax(text, lim.max);
+    // Whatever the length, never ship a sentence that stops halfway. Ending
+    // short is a warning the author can see; ending mid-clause reads as broken.
+    if (endsMidSentence(text)) {
+      const end = lastSentenceEnd(text);
+      if (end > 0) text = text.slice(0, end).trim();
+    }
     if (text === cardText(c)) return c;
     return { ...c, text };
   });

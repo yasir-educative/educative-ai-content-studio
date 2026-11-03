@@ -19,6 +19,21 @@ export interface MobileCard {
   decision?: import('./cardTypeDecider').CardTypeDecision;
   /** Reason the card cannot be edited or rewritten; the gate skips it entirely. */
   readOnly?: string;
+  /** Whatever we could not parse, kept so an unknown page is never lost. */
+  rawRemoteContent?: unknown;
+  /**
+   * An Educative FlashCard kind this app does not author, kept so the card can
+   * still be read. These stay readOnly: our builders cannot reproduce the
+   * animation or diagram, so saving one would quietly destroy it.
+   */
+  remoteKind?: 'text-with-animation' | 'd2-card';
+  lottieUrl?: string;
+  lottieName?: string;
+  d2Code?: string;
+  d2Url?: string;
+  /** Hash of the page as last read from or written to Educative. */
+  remoteHash?: string;
+  remoteSyncedAt?: string;
   card_number?: number;
   title?: string;
   // text, text_img
@@ -63,6 +78,8 @@ export interface MobileCard {
 }
 
 export interface MobileChapter {
+  /** The chapter's category id in the published collection, once known. */
+  remoteCategoryId?: string;
   summary?: string;
   lessonOutline?: unknown;
   id: string;
@@ -77,6 +94,8 @@ export type MobileCourseStatus = 'running' | 'draft' | 'published' | 'failed' | 
 
 export interface MobileCourse {
   id: string;
+  /** 'imported' runs were read back from a published collection. */
+  origin?: 'generated' | 'imported';
   createdAt: string;
   updatedAt: string;
   status: MobileCourseStatus;

@@ -10,7 +10,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "check:gate": "npx tsx --tsconfig tsconfig.json scripts/check-card-gate.ts"
+    "check:gate": "npx tsx --tsconfig tsconfig.json scripts/check-card-gate.ts",
+    "check:roundtrip": "npx tsx --tsconfig tsconfig.json scripts/check-card-roundtrip.ts",
+    "check:additions": "npx tsx --tsconfig tsconfig.json scripts/check-course-additions.ts"
   },
   "dependencies": {
     "@langchain/core": "^1.1.42",

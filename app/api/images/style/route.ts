@@ -21,8 +21,8 @@ export async function POST(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
-    const { id } = await req.json();
-    await setDefaultStyle(String(id || ''));
+    const { id, scope } = await req.json();
+    await setDefaultStyle(String(id || ''), scope === 'mobile' ? 'mobile' : 'educative');
     return NextResponse.json(listStyles());
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Failed to set default' }, { status: 400 });

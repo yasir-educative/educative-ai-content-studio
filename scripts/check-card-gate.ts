@@ -1,6 +1,6 @@
 import { checkCard, checkCards } from '@/lib/mobileCardLimits';
 import { shortsProfile, chooseTypes, COURSE_PROFILE } from '@/lib/cardTypeDecider';
-import { enforceCharLimits, trimToMax } from '@/lib/mobileShortsPipeline';
+import { enforceCharLimits, endsMidSentence, trimToMax } from '@/lib/mobileShortsPipeline';
 
 async function main() {
 let fail = 0;
@@ -90,6 +90,27 @@ t('no over-max error survives the trim',
   !capped.some((c: any) => checkCard(c, 'short').some((i) => i.path === 'text' && i.message.includes('>'))));
 t('trimToMax cuts at a sentence boundary when one fits',
   trimToMax('One. Two. Three. ' + 'x'.repeat(200), 40).endsWith('.'));
+
+// A markdown card loses a whole block before it loses the end of a sentence.
+// This is the real card that shipped reading "> **Note:** Ranking and".
+{
+  const card = '**YouTube design** is a balancing problem under constant load.\n\n'
+    + '- Scale pushes sharding, queues, and CDNs\n- Low latency favors cache and precompute\n'
+    + '- Availability can weaken strict consistency\n- Replication and redundancy raise cost\n\n'
+    + '| Tradeoff | Why |\n|----------|----------|\n'
+    + '| Consistency vs latency | Global updates are slower |\n'
+    + '| Cost vs resilience | Extra copies and capacity help |\n\n'
+    + '> **Note:** In 2026, fairness tuning in ranking increasingly limits overexposure loops for already dominant creators.';
+  const cut = trimToMax(card, 450);
+  t('a long markdown card drops its last block, not its last sentence',
+    cut.length <= 450 && cut.length >= 350 && cut.endsWith('|') && !cut.includes('Note:'));
+  t('the trimmed card does not end mid-sentence', !endsMidSentence(cut));
+}
+t('prose that runs out mid-clause is caught',
+  endsMidSentence('One signal is never enough. Ranking blends watch history, subscriptions, engagement, freshness, and policy filters before final'));
+t('a table row is not mid-sentence', !endsMidSentence('| Cost vs resilience | Extra copies and capacity help |'));
+t('a short bullet is not mid-sentence', !endsMidSentence('- Scale pushes sharding, queues, and CDNs'));
+t('a finished sentence is not mid-sentence', !endsMidSentence('Ranking blends many signals before it ranks.'));
 
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

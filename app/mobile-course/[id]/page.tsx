@@ -9,6 +9,7 @@ import { HighlightTypePicker } from '@/app/_components/HighlightTypePicker';
 import { checkCard, checkCourse } from '@/lib/mobileCardLimits';
 import { CardIssues, CardIssueSummary } from '@/app/_components/CardIssues';
 import { CardRewriteControl, CardRegenerateButton } from '@/app/_components/CardRewriteControl';
+import { CourseUpdateDialog } from '@/app/_components/CourseUpdateDialog';
 
 interface MobileChapter {
   id: string;
@@ -263,11 +264,16 @@ function CardView({
   endpoint,
   onRewritten,
   onUpdate,
+  onMedia,
+  mediaBusy,
 }: {
   card: MobileCard;
   onEdit: (card: MobileCard) => void;
   onEditImage: (src: string, onApply: (url: string) => void) => void;
   onDelete?: () => void;
+  /** Replaces an Educative-authored diagram or photo with an image of our own. */
+  onMedia?: (card: MobileCard, mode: 'd2' | 'recreate' | 'fresh') => void;
+  mediaBusy?: boolean;
   /** Omitted for the dimmed neighbour previews, which are not interactive. */
   endpoint?: string;
   onRewritten?: () => Promise<void>;
@@ -377,20 +383,23 @@ function CardView({
           )}
           <button
             className="card-tool"
+            disabled={!!card.readOnly}
             onClick={() => card.type === 'img_only' && card.imageUrl
               ? onEditImage(card.imageUrl, () => {})
               : onEdit(card)
             }
-            data-tip="Edit card" aria-label="Edit card"
+            data-tip={card.readOnly || 'Edit card'}
+            data-tip-wrap={card.readOnly ? 'true' : undefined}
+            aria-label={card.readOnly || 'Edit card'}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
               <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>
             </svg>
           </button>
-          {endpoint && onRewritten && (
+          {endpoint && onRewritten && !card.readOnly && (
             <CardRegenerateButton card={card} endpoint={endpoint} onDone={onRewritten} />
           )}
-          {endpoint && onRewritten && (
+          {endpoint && onRewritten && !card.readOnly && (
             <CardRewriteControl
               card={card}
               product="course"
@@ -399,6 +408,38 @@ function CardView({
               prominent={blocking}
             />
           )}
+          {onMedia && (() => {
+            // Same rule the refresh uses: D2 from its source, a hosted raster
+            // from the picture, a Lottie from the card's own words.
+            const mode: 'd2' | 'recreate' | 'fresh' | null = card.d2Code || card.remoteKind === 'd2-card'
+              ? 'd2'
+              : card.lottieUrl || card.remoteKind === 'text-with-animation'
+                ? 'fresh'
+                : /^https?:\/\//.test(String(card.imageUrl || '')) ? 'recreate' : null;
+            if (!mode) return null;
+            const tip = mode === 'd2' ? 'Draw the D2 diagram as an image'
+              : mode === 'fresh' ? 'Replace the animation with a generated illustration'
+                : 'Recreate this image in the card style';
+            const warning = mode === 'd2'
+              ? 'Draw this D2 diagram as an image?\n\nThe card becomes editable, and saving it later replaces the diagram on the page with the new image.'
+              : mode === 'fresh'
+                ? 'Replace this animation with a generated illustration?\n\nThe animation cannot be recovered from the card, and saving it later removes it from the page.'
+                : 'Redraw this image in the card style?\n\nThe original is replaced on the card; the page keeps it until you save.';
+            return (
+            <button
+              className="card-tool"
+              disabled={mediaBusy}
+              onClick={() => { if (window.confirm(warning)) onMedia(card, mode); }}
+              data-tip={mediaBusy ? 'Working…' : tip}
+              data-tip-wrap="true"
+              aria-label="Replace this card's media with a generated image"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
+              </svg>
+            </button>
+            );
+          })()}
           {onDelete && (
             <button
               className="card-tool card-tool-danger"
@@ -457,10 +498,52 @@ function CardView({
         {card.type === 'text' && card.text && (
           <>
             <Md text={card.text} />
-            <div className="flex justify-end pt-1">
-              <CharBadge count={card.text.length} min={350} max={450} />
-            </div>
+            {/* A char badge is meaningless for a kind we do not author. */}
+            {!card.remoteKind && (
+              <div className="flex justify-end pt-1">
+                <CharBadge count={card.text.length} min={350} max={450} />
+              </div>
+            )}
           </>
+        )}
+
+        {/* ── imported kinds we can show but not author ─────────────────── */}
+        {card.remoteKind === 'text-with-animation' && (
+          <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--panel-2)] p-3 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                className="text-[var(--accent)] shrink-0" aria-hidden="true">
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">Lottie animation</p>
+            </div>
+            <p className="text-[11px] text-[var(--text-faint)] break-words">
+              {card.lottieName || 'Animation file'}
+            </p>
+            {card.lottieUrl && (
+              <a href={card.lottieUrl} target="_blank" rel="noreferrer"
+                className="text-[11px] text-[var(--accent)] hover:underline">
+                Open the animation file →
+              </a>
+            )}
+          </div>
+        )}
+
+        {card.remoteKind === 'd2-card' && (
+          <details className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--panel-2)] p-3">
+            <summary className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-dim)] cursor-pointer">
+              D2 diagram source
+            </summary>
+            <pre className="mt-2 text-[10px] leading-relaxed whitespace-pre-wrap break-words max-h-48 overflow-y-auto text-[var(--text-dim)]">
+              {card.d2Code || '(no source on the page)'}
+            </pre>
+            {card.d2Url && (
+              <a href={card.d2Url} target="_blank" rel="noreferrer"
+                className="text-[11px] text-[var(--accent)] hover:underline">
+                Open the diagram file →
+              </a>
+            )}
+          </details>
         )}
 
         {/* ── text_img ─────────────────────────────────────────────────── */}
@@ -855,6 +938,11 @@ function CardView({
           </div>
         )}
       </div>
+      {card.readOnly && (
+        <p className="px-4 py-2.5 text-[11px] text-amber-500 border-t border-[var(--border)] bg-[var(--panel-2)]">
+          Read-only · {card.readOnly}
+        </p>
+      )}
       <CardIssues issues={issues} />
     </div>
   );
@@ -870,6 +958,8 @@ function CardCarousel({
   endpoint,
   onRewritten,
   onUpdate,
+  onMedia,
+  mediaBusy,
 }: {
   cards: MobileCard[];
   onEdit: (card: MobileCard) => void;
@@ -878,6 +968,8 @@ function CardCarousel({
   endpoint: string;
   onRewritten: () => Promise<void>;
   onUpdate: (card: MobileCard) => void;
+  onMedia?: (card: MobileCard, mode: 'd2' | 'recreate' | 'fresh') => void;
+  mediaBusy?: boolean;
 }) {
   const [idx, setIdx] = useState(0);
 
@@ -942,6 +1034,8 @@ function CardCarousel({
             endpoint={endpoint && `${endpoint}/${cards[idx].id}`}
             onRewritten={onRewritten}
             onUpdate={onUpdate}
+            onMedia={onMedia}
+            mediaBusy={mediaBusy}
           />
         </div>
 
@@ -1015,13 +1109,27 @@ function CardEditorModal({
   card,
   onSave,
   onClose,
+  onSaveToEducative,
 }: {
   card: MobileCard;
   onSave: (updated: MobileCard) => void;
   onClose: () => void;
+  /** Present only when this card already occupies a published page. */
+  onSaveToEducative?: (updated: MobileCard) => Promise<string>;
 }) {
+  const [pushing, setPushing] = useState(false);
+  const [pushErr, setPushErr] = useState('');
   const [draft, setDraft] = useState<MobileCard>({ ...card });
   const upd = (patch: Partial<MobileCard>) => setDraft((d) => ({ ...d, ...patch }));
+
+  // The JSON textareas hold raw strings so half-typed JSON does not snap back;
+  // both save buttons have to fold them in first.
+  const flush = (): MobileCard => {
+    let out = { ...draft };
+    if (draft.type === 'recapCard') { try { out = { ...out, content: JSON.parse(recapRaw) }; } catch {} }
+    if (draft.type === 'scenarioCard') { try { out = { ...out, sections: JSON.parse(sectionsRaw) }; } catch {} }
+    return out;
+  };
 
   // Local raw-string state for JSON fields so typing intermediate (invalid) JSON
   // doesn't cause the textarea to snap back to the last valid value.
@@ -1288,24 +1396,35 @@ function CardEditorModal({
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-[var(--border)] bg-[var(--card)]">
-          <button className="btn-secondary text-sm" onClick={onClose}>Cancel</button>
-          <button
-            className="btn-primary text-sm"
-            onClick={() => {
-              // Flush any pending JSON edits before saving (user may not have blurred)
-              let flushed = { ...draft };
-              if (draft.type === 'recapCard') {
-                try { flushed = { ...flushed, content: JSON.parse(recapRaw) }; } catch {}
-              }
-              if (draft.type === 'scenarioCard') {
-                try { flushed = { ...flushed, sections: JSON.parse(sectionsRaw) }; } catch {}
-              }
-              onSave(flushed);
-            }}
-          >
-            Save changes
-          </button>
+        <div className="px-6 py-4 border-t border-[var(--border)] bg-[var(--card)] space-y-2">
+          {pushErr && <p className="text-xs text-red-500" role="alert">{pushErr}</p>}
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-[11px] text-[var(--text-faint)] min-w-0">
+              {onSaveToEducative
+                ? 'Saving to Educative updates the existing lesson page; it never creates a second one.'
+                : 'Saved locally. Publish the chapter to put it on Educative.'}
+            </p>
+            <div className="flex gap-2 shrink-0">
+              <button className="btn-secondary text-sm" disabled={pushing} onClick={onClose}>Cancel</button>
+              <button className="btn-secondary text-sm" disabled={pushing} onClick={() => onSave(flush())}>
+                Save locally
+              </button>
+              {onSaveToEducative && (
+                <button
+                  className="btn-primary text-sm"
+                  disabled={pushing}
+                  onClick={async () => {
+                    setPushing(true);
+                    setPushErr('');
+                    try { setPushErr(await onSaveToEducative(flush())); }
+                    finally { setPushing(false); }
+                  }}
+                >
+                  {pushing ? 'Saving to Educative…' : 'Save to Educative'}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1397,6 +1516,12 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
   const [regenLog, setRegenLog] = useState<string>('');
   const [chapterPublishing, setChapterPublishing] = useState<string | null>(null);
   const [chapterPublishResult, setChapterPublishResult] = useState<Record<string, string>>({});
+  // Which chapter the update dialog is scoped to, and what it is being asked
+  // for. `undefined` scope means the whole course.
+  const [update, setUpdate] = useState<{ chapter?: number; intent: 'gaps' | 'refresh' | 'new-chapter' } | null>(null);
+  const [mediaCardId, setMediaCardId] = useState<string | null>(null);
+  const [publishingAdds, setPublishingAdds] = useState(false);
+  const [addResult, setAddResult] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1553,6 +1678,48 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
     }
   }
 
+  /** Replace a card's Educative-authored diagram or photo with a generated image. */
+  async function convertMedia(chapterId: string, card: MobileCard, mode: 'd2' | 'recreate' | 'fresh') {
+    setMediaCardId(card.id);
+    setAddResult(null);
+    try {
+      const res = await fetch(
+        `/api/mobile-course/${params.id}/chapters/${chapterId}/cards/${card.id}/media`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) },
+      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) setAddResult(`Error: ${json.error || `HTTP ${res.status}`}`);
+      else await load();
+    } catch (e: any) {
+      setAddResult(`Error: ${e?.message}`);
+    } finally {
+      setMediaCardId(null);
+    }
+  }
+
+  /** Publish the cards added since the last publish, each at its own position. */
+  async function publishAdditions() {
+    setPublishingAdds(true);
+    setAddResult(null);
+    try {
+      const res = await fetch(`/api/mobile-course/${params.id}/publish-additions`, { method: 'POST' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const first = (json.issues || [])[0];
+        setAddResult(`Error: ${json.error || `HTTP ${res.status}`}${first ? ` — ${first.message}` : ''}`);
+      } else if (json.errors?.length) {
+        setAddResult(`Published ${json.published}. ${json.errors.length} failed: ${json.errors[0]?.error}`);
+      } else {
+        setAddResult(`Published ${json.published} new card${json.published === 1 ? '' : 's'}`);
+      }
+      await load();
+    } catch (e: any) {
+      setAddResult(`Error: ${e?.message}`);
+    } finally {
+      setPublishingAdds(false);
+    }
+  }
+
   function openImageEdit(src: string, onApply: (url: string) => void) {
     setImageEdit({ src, prompt: '', loading: false, editedUrl: null, onApply });
   }
@@ -1597,6 +1764,10 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
   // Same checkCourse the publish routes run, so the buttons and the server agree.
   const chapterGate = checkCourse(course.title || '', currentChapter?.cards || []);
   const courseGate = checkCourse(course.title || '', chapters.flatMap((c) => c.cards || []));
+  const allCards = chapters.flatMap((c) => c.cards || []);
+  // Cards added to a course that is already live: everything else there has a page.
+  const unpublished = allCards.filter((c) => !c.pageId && !c.readOnly);
+  const hasPublishedCards = allCards.some((c) => c.pageId);
 
   return (
     <div className="flex gap-0 -mx-6 -my-10 min-h-screen">
@@ -1663,6 +1834,35 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
         </nav>
 
         <div className="p-3 border-t border-[var(--border)] space-y-2">
+          {hasPublishedCards && (
+            <button className="btn-secondary w-full text-xs" onClick={() => setUpdate({ intent: 'gaps' })}>
+              Update course…
+            </button>
+          )}
+          {hasPublishedCards && (
+            <button
+              className="btn-secondary w-full text-xs"
+              onClick={() => setUpdate({ intent: 'refresh' })}
+              title="Review the cards you already have: content, lengths, and generated illustrations in place of Lottie, D2 and uploaded pictures"
+            >
+              Update cards…
+            </button>
+          )}
+          {hasPublishedCards && unpublished.length > 0 && (
+            <button
+              className="btn-primary w-full text-xs"
+              onClick={publishAdditions}
+              disabled={publishingAdds || courseGate.blocking}
+              title={courseGate.blocking ? 'Fix the card errors first' : 'Create a lesson for each new card, in place'}
+            >
+              {publishingAdds
+                ? 'Publishing additions…'
+                : `Publish ${unpublished.length} new card${unpublished.length === 1 ? '' : 's'}`}
+            </button>
+          )}
+          {addResult && (
+            <p className={`text-xs ${addResult.startsWith('Error') ? 'text-red-400' : 'text-emerald-600'}`}>{addResult}</p>
+          )}
           {(course.status === 'draft' || course.status === 'published') && !publishing && !showPublishForm && (
             <button className="btn-primary w-full text-xs" onClick={() => {
               setPublishCollectionId(course.targetCollectionId || '');
@@ -1720,12 +1920,42 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
                 <h2 className="font-semibold text-xl text-[var(--text)] tracking-tight">{currentChapter.title}</h2>
                 <p className="text-xs text-[var(--text-faint)] mt-1">
                   {currentChapter.cards?.length || 0} cards · use ← → to navigate
+                  {hasPublishedCards && currentChapter.cards?.some((c) => !c.pageId && !c.readOnly) && (
+                    <span className="ml-2 text-amber-600">
+                      · {currentChapter.cards.filter((c) => !c.pageId && !c.readOnly).length} not published
+                    </span>
+                  )}
                   {(currentChapter as any).regeneratedAt && (
                     <span className="ml-2 text-amber-600">· regenerated</span>
                   )}
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {hasPublishedCards && (
+                  <>
+                    <button
+                      className="btn-secondary text-xs px-3 py-1.5"
+                      onClick={() => setUpdate({ chapter: activeChapter, intent: 'gaps' })}
+                      title="Analyse this chapter against the web course and plan what it needs"
+                    >
+                      Update chapter…
+                    </button>
+                    <button
+                      className="btn-secondary text-xs px-3 py-1.5"
+                      onClick={() => setUpdate({ chapter: activeChapter, intent: 'refresh' })}
+                      title="Review every card here: content, lengths, and a generated illustration in place of any Lottie, D2 or uploaded picture"
+                    >
+                      Update cards…
+                    </button>
+                    <button
+                      className="btn-secondary text-xs px-3 py-1.5"
+                      onClick={() => setUpdate({ chapter: activeChapter, intent: 'new-chapter' })}
+                      title="Plan a new chapter to go directly after this one"
+                    >
+                      Add chapter after…
+                    </button>
+                  </>
+                )}
                 {currentChapter.status === 'processing' && (
                   <span className="text-xs text-amber-600 animate-pulse">Generating…</span>
                 )}
@@ -1765,6 +1995,8 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
                   currentChapter.cards.map((c) => c.id === updated.id ? updated : c))}
                 onEdit={(c) => { setEditCard(c); setEditCardChapterId(currentChapter.id); }}
                 onDelete={(cardId) => saveChapterCards(currentChapter.id, currentChapter.cards.filter((c) => c.id !== cardId))}
+                onMedia={(card, mode) => convertMedia(currentChapter.id, card, mode)}
+                mediaBusy={!!mediaCardId}
                 onEditImage={(src, onApply) => openImageEdit(src, (newUrl) => {
                   const updCards = currentChapter.cards.map((k) =>
                     k.imageUrl === src ? { ...k, imageUrl: newUrl } : k
@@ -1799,6 +2031,33 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
             setEditCardChapterId(null);
           }}
           onClose={() => { setEditCard(null); setEditCardChapterId(null); }}
+          onSaveToEducative={editCard.pageId && !editCard.readOnly ? async (updated) => {
+            // Store the edit first, so the route builds the page from what the
+            // author just typed rather than the last saved version.
+            const ch = chapters.find((c) => c.id === editCardChapterId);
+            if (!ch) return 'Chapter not found';
+            await saveChapterCards(editCardChapterId, ch.cards.map((k) => (k.id === updated.id ? updated : k)));
+            const res = await fetch(
+              `/api/mobile-course/${course.id}/chapters/${editCardChapterId}/cards/${updated.id}/publish`,
+              { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) },
+            );
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) return json.error || `Save failed (${res.status})`;
+            await load();
+            setEditCard(null);
+            setEditCardChapterId(null);
+            return '';
+          } : undefined}
+        />
+      )}
+
+      {update && (
+        <CourseUpdateDialog
+          course={course}
+          scopeChapter={update.chapter}
+          intent={update.intent}
+          onClose={() => setUpdate(null)}
+          onApplied={load}
         />
       )}
 

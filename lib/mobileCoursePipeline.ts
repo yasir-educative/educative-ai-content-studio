@@ -226,41 +226,25 @@ function mapRawCard(raw: any, index: number): MobileCard {
   };
 }
 
-// ── Image prompt builder (exact n8n template) ─────────────────────────────────
+// ── Image prompt builder ─────────────────────────────────────────────────────
 
-function buildCardImagePrompt(card: any): string {
-  const illustrationIdea = String(card.illustration_idea || '');
-  const visibleLabels = String(card.visible_labels || '');
-  const title = String(card.title || '');
-  const hasLabels = visibleLabels.trim().length > 0;
-
-  if (card.type === 'img_only') {
-    const imgContext = String(card.img_context || '');
-    const labelsBlock = hasLabels
-      ? `Render these labels, each exactly once: "${visibleLabels}". Add short annotations (2–8 words) where they clarify.`
-      : `Derive labels and annotations from the illustration idea and context. Label every key element with short phrases (2–8 words).`;
-    return `Self-contained technical infographic, portrait 640×1024, white (#FFF) background. No external text — viewer must fully understand the concept from this diagram and annotations alone.\n\nLayout: 24px margins. Top-to-bottom or left-to-right flow. Center-aligned. 5–10 primary elements — rich but not cluttered. Generous whitespace. Arrows, connector lines, numbered steps for hierarchy.\n\nStyle: Flat 2D vector only. 2px uniform stroke, 8px rounded corners. Outlined shapes with white or pale tinted fill. Consistent icon size per tier. No 3D, no perspective, no shadows, no gradients, no cartoon characters, no hand-drawn or sketch style.\n\nColors: Only these — #4A90D9 (blue), #3AAFA9 (teal) as primary. #48BB78 (green), #E6A817 (amber) sparingly as accent. All text #2D3748. No reds, no grays, no off-palette colors.\n\nAnnotations: Callouts, labeled arrows, step numbers on elements. Enough detail for zero prior knowledge. Every annotation carries weight.\n\nText: ${labelsBlock} Capitalize first word of every label, rest lowercase unless acronym. Example: "API gateway" not "api gateway" or "API Gateway". Geometric sans-serif, medium weight. No paragraphs, no title. No misspellings.\n\nIllustration idea: "${illustrationIdea}"\nContext (do NOT render as text): "${title} — ${imgContext}"`;
-  }
-
-  // text_img
-  const content = String(card.text || '');
-  const labelsBlock = hasLabels
-    ? `Render ONLY these labels, each exactly once: "${visibleLabels}". Short clarifying labels (2–5 words) on connectors allowed.`
-    : `Derive concise labels (2–5 words each) from the illustration idea and context. Label every key element.`;
-  return `Technical infographic, portrait 640×1024, white (#FFF) background. Diagram-only — no title, no heading, no paragraphs.\n\nLayout: 24px margins. Top-to-bottom or left-to-right flow. Center-aligned. 4–8 primary elements maximum — not too sparse, not cluttered. Generous whitespace between logical groups. Arrows and connector lines for hierarchy.\n\nStyle: Flat 2D vector only. 2px uniform stroke, 8px rounded corners. Outlined shapes with white or pale tinted fill. Consistent icon size per tier. Absolutely no 3D, no perspective, no shadows, no gradients, no cartoon characters, no hand-drawn or sketch style, no textures.\n\nColors: Only these — #4A90D9 (blue) and #3AAFA9 (teal) as primary. #48BB78 (green) and #E6A817 (amber) sparingly as accent. All text #2D3748. No reds, no grays, no off-palette colors.\n\nText: ${labelsBlock} Capitalize first word of every label, rest lowercase unless acronym. Example: "API gateway" not "api gateway" or "API Gateway". Geometric sans-serif, medium weight. No misspellings.\n\nIllustration idea: "${illustrationIdea}"\nContext (do NOT render as text): "${title} — ${content}"`;
-}
+// Shared with the shorts pipeline, and drawn in the style the author chose.
+import { buildMobileCardImagePrompt } from './mobileCardImagePrompt';
+export { buildMobileCardImagePrompt as buildCardImagePrompt } from './mobileCardImagePrompt';
 
 // ── Image generation ──────────────────────────────────────────────────────────
 
-async function generateCardImage(
+export async function generateCardImage(
   card: any,
   order: number,
   courseId: string,
   chapterId: string,
+  /** Style text to draw in; the chosen mobile style when left out. */
+  styleBody?: string,
 ): Promise<string | null> {
   try {
     const subfolder = `mobile-courses/${slugify(courseId)}/${slugify(chapterId)}`;
-    const rawPrompt = buildCardImagePrompt(card);
+    const rawPrompt = buildMobileCardImagePrompt(card, styleBody);
     const result = await generateGptImage(card.illustration_idea || '', order, subfolder, {
       size: '1024x1536',
       rawPrompt,
