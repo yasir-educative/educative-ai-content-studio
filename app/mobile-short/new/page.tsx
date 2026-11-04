@@ -15,6 +15,7 @@ interface ShortFormData {
   additionalContext: string;
   numCards: number;
   includeHighlight: boolean;
+  includeScenario: boolean;
 }
 
 interface SheetRow {
@@ -26,6 +27,7 @@ interface SheetRow {
   status: string;
   numCards: number;
   includeHighlight: boolean;
+  includeScenario: boolean;
 }
 
 type BulkStatus = 'idle' | 'running' | 'done' | 'error';
@@ -114,6 +116,8 @@ export default function NewMobileShortPage() {
     additionalContext: '',
     numCards: 5,
     includeHighlight: true,
+    // Scenario cards are opt-in: no sheet column feeds this, so it starts off.
+    includeScenario: false,
   });
   const [stages, setStages] = useState<Array<{ name: string; status: 'start' | 'done' | 'error' }>>([]);
   const [singleError, setSingleError] = useState('');
@@ -148,6 +152,7 @@ export default function NewMobileShortPage() {
           additionalContext: form.additionalContext.trim() || undefined,
           numCards: form.numCards,
           isHighlightCardNeeded: form.includeHighlight,
+          isScenarioCardNeeded: form.includeScenario,
         },
         (s) => setStages((prev) => {
           const idx = prev.findIndex((x) => x.name === s.name);
@@ -237,6 +242,8 @@ export default function NewMobileShortPage() {
         numCards: numCardsCol >= 0 && cells[numCardsCol] ? parseNumCards(cells[numCardsCol]) : 5,
         // Absent column or blank cell means no highlight card — never default to true.
         includeHighlight: highlightCol >= 0 ? parseHighlight(cells[highlightCol] || '') : false,
+        // No sheet column for scenarios; the author turns them on per row.
+        includeScenario: false,
       }));
 
       setSheetRows(rows);
@@ -261,7 +268,7 @@ export default function NewMobileShortPage() {
     else setSelectedRows(new Set(sheetRows.map((r) => r.idx)));
   }
 
-  function updateRow(idx: number, patch: Partial<Pick<SheetRow, 'numCards' | 'includeHighlight'>>) {
+  function updateRow(idx: number, patch: Partial<Pick<SheetRow, 'numCards' | 'includeHighlight' | 'includeScenario'>>) {
     setSheetRows((prev) => prev.map((r) => r.idx === idx ? { ...r, ...patch } : r));
   }
 
@@ -308,6 +315,7 @@ export default function NewMobileShortPage() {
               additionalContext: row.additionalContext.trim() || undefined,
               numCards: row.numCards,
               isHighlightCardNeeded: row.includeHighlight,
+              isScenarioCardNeeded: row.includeScenario,
               sheetUrl: sheetUrl.trim() || undefined,
               rowIdx,
             },
@@ -403,6 +411,11 @@ export default function NewMobileShortPage() {
                 <input type="checkbox" className="mt-0.5 shrink-0 accent-[var(--accent)]"
                   checked={form.includeHighlight} onChange={(e) => upd({ includeHighlight: e.target.checked })} />
                 <span className="text-sm text-[var(--text-dim)] leading-snug">Add Highlight Card</span>
+              </label>
+              <label className="flex items-start gap-2 cursor-pointer select-none">
+                <input type="checkbox" className="mt-0.5 shrink-0 accent-[var(--accent)]"
+                  checked={form.includeScenario} onChange={(e) => upd({ includeScenario: e.target.checked })} />
+                <span className="text-sm text-[var(--text-dim)] leading-snug">Add Scenario Card</span>
               </label>
             </div>
           </div>
@@ -632,6 +645,16 @@ export default function NewMobileShortPage() {
                             onChange={(e) => updateRow(row.idx, { includeHighlight: e.target.checked })}
                           />
                           <span className="text-[10px] text-[var(--text-faint)]">Highlight</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            className="accent-[var(--accent)]"
+                            checked={row.includeScenario}
+                            disabled={bulkRunning || !!job}
+                            onChange={(e) => updateRow(row.idx, { includeScenario: e.target.checked })}
+                          />
+                          <span className="text-[10px] text-[var(--text-faint)]">Scenario</span>
                         </label>
                       </div>
                     </div>

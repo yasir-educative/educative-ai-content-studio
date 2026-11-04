@@ -12,7 +12,10 @@
     "lint": "next lint",
     "check:gate": "npx tsx --tsconfig tsconfig.json scripts/check-card-gate.ts",
     "check:roundtrip": "npx tsx --tsconfig tsconfig.json scripts/check-card-roundtrip.ts",
-    "check:additions": "npx tsx --tsconfig tsconfig.json scripts/check-course-additions.ts"
+    "check:additions": "npx tsx --tsconfig tsconfig.json scripts/check-course-additions.ts",
+    "check:jira": "npx tsx --tsconfig tsconfig.json scripts/check-jira-post.ts",
+    "check:styles": "npx tsx --tsconfig tsconfig.json scripts/check-image-styles.ts",
+    "check:queries": "npx tsx --tsconfig tsconfig.json scripts/check-query-focus.ts"
   },
   "dependencies": {
     "@langchain/core": "^1.1.42",

@@ -9,15 +9,21 @@ type Persona = {
   name: string;
   body: string;
   builtin: boolean;
+  imageStyleId?: string;
   createdAt: string;
   updatedAt: string;
 };
+
+type Style = { id: string; name: string; previewUrl?: string; referenceUrl?: string };
 
 export default function PersonaEditorPage({ params }: { params: { slug: string } }) {
   const router = useRouter();
   const [data, setData] = useState<Persona | null>(null);
   const [name, setName] = useState('');
   const [body, setBody] = useState('');
+  // The style this persona's illustrations are drawn in; '' means the default.
+  const [styleId, setStyleId] = useState('');
+  const [styles, setStyles] = useState<Style[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -35,10 +41,18 @@ export default function PersonaEditorPage({ params }: { params: { slug: string }
       setData(json);
       setName(json.name);
       setBody(json.body);
+      setStyleId(json.imageStyleId || '');
     } finally {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    fetch('/api/images/style', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => setStyles(j.styles || []))
+      .catch(() => {});
+  }, []);
   useEffect(() => { load(); }, [params.slug]);
 
   async function save() {
@@ -49,13 +63,14 @@ export default function PersonaEditorPage({ params }: { params: { slug: string }
       const res = await fetch(`/api/personas/${params.slug}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ body, name }),
+        body: JSON.stringify({ body, name, imageStyleId: styleId }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'save failed');
       setData(json);
       setName(json.name);
       setBody(json.body);
+      setStyleId(json.imageStyleId || '');
       setMsg('Saved');
     } catch (e: any) {
       setErr(e?.message || String(e));
@@ -93,7 +108,7 @@ export default function PersonaEditorPage({ params }: { params: { slug: string }
   if (err && !data) return <div className="max-w-5xl mx-auto p-6 text-sm text-red-400">{err}</div>;
   if (!data) return null;
 
-  const dirty = body !== data.body || name !== data.name;
+  const dirty = body !== data.body || name !== data.name || styleId !== (data.imageStyleId || '');
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-4">
@@ -132,6 +147,28 @@ export default function PersonaEditorPage({ params }: { params: { slug: string }
             />
           </div>
         )}
+        <div>
+          <label className="text-xs font-semibold block mb-1">Image style</label>
+          <div className="flex items-start gap-3 flex-wrap">
+            <select className="input min-w-[16rem]" value={styleId} onChange={(e) => setStyleId(e.target.value)}>
+              <option value="">Pipeline default</option>
+              {styles.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            {(() => {
+              const chosen = styles.find((s) => s.id === styleId);
+              return chosen?.previewUrl
+                ? <img src={chosen.previewUrl} alt={`${chosen.name} sample`}
+                    className="w-16 h-16 rounded-lg object-cover border border-[var(--border)] bg-white" />
+                : null;
+            })()}
+          </div>
+          <div className="text-xs text-[var(--text-faint)] mt-1">
+            Illustrations in a blog written by this persona are drawn in this style. Left on
+            &ldquo;Pipeline default&rdquo; they use whatever Blogs and newsletters is set to under
+            {' '}<Link href="/images" className="underline hover:text-[var(--text)]">Style configuration</Link>.
+          </div>
+        </div>
+
         <div>
           <label className="text-xs font-semibold block mb-1">Voice prompt</label>
           <textarea

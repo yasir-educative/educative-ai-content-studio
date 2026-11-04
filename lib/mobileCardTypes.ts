@@ -52,13 +52,18 @@ export const plannerToCardType: Record<PlannerCardType, MobileCardType> = {
 // Shorts exclude quizzes; derive the menu from the shared planner enum.
 export const SHORTS_PLANNER_TYPES = PLANNER_CARD_TYPES.filter((type) => type !== 'QUIZ_MCQ');
 export type ShortsPlannerType = (typeof SHORTS_PLANNER_TYPES)[number];
-export function shortsPlannerTypes(highlight: boolean): ShortsPlannerType[] {
-  return SHORTS_PLANNER_TYPES.filter((type) => highlight || type !== 'HIGHLIGHT');
+export function shortsPlannerTypes(highlight: boolean, scenario: boolean): ShortsPlannerType[] {
+  return SHORTS_PLANNER_TYPES.filter((type) =>
+    (highlight || type !== 'HIGHLIGHT') && (scenario || type !== 'SCENARIO'));
 }
 
 export const COURSE_PLANNER_TYPES = ['text', 'highlight', 'text_img', 'img_only', 'text_code',
   'code_output', 'compare', 'scenario', 'quiz', 'true_false', 'fill_in_the_blanks', 'recap'] as const;
 export type CoursePlannerType = (typeof COURSE_PLANNER_TYPES)[number];
+/** Scenario cards are opt-in per run, the same way highlights are in shorts. */
+export function coursePlannerTypes(scenario: boolean): CoursePlannerType[] {
+  return COURSE_PLANNER_TYPES.filter((type) => scenario || type !== 'scenario');
+}
 export const coursePlannerToCardType: Record<CoursePlannerType, MobileCardType> = {
   text: 'text', highlight: 'highlightCard', text_img: 'text_img', img_only: 'img_only',
   text_code: 'text-with-code', code_output: 'code-with-output', compare: 'comparisonCards',
@@ -215,4 +220,93 @@ export function isHighlightCardType(x: unknown): x is HighlightCardType {
 export function normalizeHighlightCardType(x: unknown): HighlightCardType | undefined {
   const id = String(x || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
   return isHighlightCardType(id) ? id : undefined;
+}
+
+// ── Scenario variants ─────────────────────────────────────────────────────────
+// A scenario card is three tabs, and the tab headings are not free text: each
+// variant owns its own three, in order. Picking the variant is therefore the
+// only decision — the headings follow from it, here and nowhere else, so the
+// prompts, the schema, the editor and the publish payload cannot drift apart.
+
+export const SCENARIO_CARD_TYPES = [
+  {
+    id: 'how-would-you-fix',
+    label: 'How would you fix?',
+    meaning: 'Broken code or a broken decision, and the repair.',
+    headings: ['What went wrong', "Why it's wrong", 'The fix'],
+  },
+  {
+    id: 'whats-going-on',
+    label: "What's going on?",
+    meaning: 'A situation to read correctly before acting.',
+    headings: ['The Context', 'What it Implies', 'Key Takeaway'],
+  },
+  {
+    id: 'what-would-you-do',
+    label: 'What would you do?',
+    meaning: 'A judgement call with a cost on either side.',
+    headings: ['The Situation', 'Risks and Impact', 'Recommended approach'],
+  },
+] as const;
+export const SCENARIO_CARD_TYPE_IDS = SCENARIO_CARD_TYPES.map((type) => type.id);
+export type ScenarioCardType = (typeof SCENARIO_CARD_TYPES)[number]['id'];
+
+export function isScenarioCardType(x: unknown): x is ScenarioCardType {
+  return SCENARIO_CARD_TYPES.some((type) => type.id === x);
+}
+
+/** The three headings a variant owns, in tab order. */
+export function scenarioHeadings(id: unknown): readonly string[] | undefined {
+  return SCENARIO_CARD_TYPES.find((type) => type.id === id)?.headings;
+}
+
+/** The guide both generator prompts show, so neither can invent a fourth variant. */
+export const scenarioCardTypeGuide = () => SCENARIO_CARD_TYPES
+  .map((type) => `- \`${type.id}\`: ${type.meaning} Tabs: ${type.headings.map((h) => `"${h}"`).join(', ')}`)
+  .join('\n');
+
+function foldHeading(s: unknown): string {
+  return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * The variant whose headings a card already carries, if any.
+ *
+ * An imported card, or one generated before the variants were fixed, has the
+ * headings but no id. The headings identify the variant, so read it back rather
+ * than making the author pick something the card already says.
+ */
+export function scenarioTypeFromHeadings(sections: unknown): ScenarioCardType | undefined {
+  const headings = (Array.isArray(sections) ? sections : []).map((s: any) => foldHeading(s?.heading));
+  if (headings.length !== 3) return undefined;
+  return SCENARIO_CARD_TYPES.find((type) =>
+    type.headings.every((h, i) => foldHeading(h) === headings[i]))?.id;
+}
+
+// Model output varies ("How Would You Fix", "how_would_you_fix"); fall back to
+// whatever the card's own headings say before giving up.
+export function normalizeScenarioCardType(x: unknown, sections?: unknown): ScenarioCardType | undefined {
+  const id = String(x || '').trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/[?'"]/g, '');
+  return isScenarioCardType(id) ? id : scenarioTypeFromHeadings(sections);
+}
+
+/**
+ * Force a scenario card's tab headings to match its variant.
+ *
+ * Content is never touched. Run at every boundary — generation, editing,
+ * publishing — so a heading the model invented cannot reach a reader.
+ */
+export function applyScenarioHeadings<T extends {
+  type?: unknown;
+  scenarioType?: unknown;
+  sections?: Array<{ heading?: string; content?: string }>;
+}>(card: T): T {
+  if (card?.type !== 'scenarioCard') return card;
+  const headings = scenarioHeadings(card.scenarioType);
+  if (!headings || !Array.isArray(card.sections)) return card;
+  const sections = card.sections.map((section, i) =>
+    i < headings.length && section?.heading !== headings[i]
+      ? { ...section, heading: headings[i] }
+      : section);
+  return sections.some((s, i) => s !== card.sections![i]) ? { ...card, sections } : card;
 }

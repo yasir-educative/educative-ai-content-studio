@@ -44,6 +44,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       mobileIndex,
       instruction: String(body.instruction || '').slice(0, 4000),
       intent: body.intent === 'new-chapter' || body.intent === 'refresh' ? body.intent : 'gaps',
+      // Which halves of a refresh to run. Both, as before, when unspecified.
+      refresh: body.refresh
+        ? { text: !!body.refresh.text, media: !!body.refresh.media }
+        : undefined,
       web,
     });
     return Response.json({ ok: true, plan });

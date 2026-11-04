@@ -11,6 +11,7 @@ import {
   registeredPsbDraftPrompt,
   registeredFsbDraftPrompt,
   registeredQueriesPolishPrompt,
+  registeredQueriesChangesPrompt,
 } from './queryPromptsRegistry';
 import { fetchImageAsDataUrl, fetchLessonMarkdown } from './educativeLesson';
 import { extractSllId, fenzoLessonToMarkdown, fetchFenzoLesson, resolveTarget } from './fenzoLesson';
@@ -21,8 +22,20 @@ import type { JiraIssueDetail } from './jira';
 
 
 
+/** One edit the content team would have to make. Shown to the author, never posted. */
+export interface ContentChange {
+  /** Where in the material, named so it can be found. */
+  where: string;
+  /** What to change it to. */
+  change: string;
+  /** Why the query calls for it. */
+  why?: string;
+}
+
 export interface AnalysisResult {
   reply: string;
+  /** Edits the material needs. Empty when nothing needs changing. */
+  changes: ContentChange[];
   /** "content" when the content team can fix it by editing a lesson. */
   category: 'content' | 'not-content';
   usedLesson: boolean;
@@ -35,6 +48,57 @@ export interface AnalysisResult {
   lessonTitle?: string;
   lessonUrl?: string;
   warning?: string;
+}
+
+/** A ticket field by name, however the board spells it. */
+export function fieldValue(issue: JiraIssueDetail, ...names: string[]): string {
+  const want = names.map((n) => n.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const hit = issue.fields.find((f) => want.includes(f.name.toLowerCase().replace(/[^a-z0-9]/g, '')));
+  return hit?.value.trim() || '';
+}
+
+/**
+ * The part of the lesson a query is actually about.
+ *
+ * Query tickets carry "Feedback Source" and "Widget Type", which name the exact
+ * widget the reader was looking at when they complained. Without them a draft
+ * is written against the whole lesson and comes back generic, so pull the
+ * widget's own text out of the material and put it in front of the model.
+ */
+export function focusBlock(issue: JiraIssueDetail, lessonMarkdown?: string): string {
+  const source = fieldValue(issue, 'Feedback Source', 'FeedbackSource', 'Source');
+  const widget = fieldValue(issue, 'Widget Type', 'WidgetType', 'Widget');
+  if (!source && !widget) return '';
+
+  const lines = [
+    '# What this query is about',
+    'The ticket names the exact place the reader was looking at. Answer about that, not about the lesson in general.',
+    source && `- Feedback source: ${source}`,
+    widget && `- Widget type: ${widget}`,
+  ].filter(Boolean) as string[];
+
+  const extract = widget && lessonMarkdown ? widgetExcerpt(lessonMarkdown, widget) : '';
+  if (extract) {
+    lines.push('', `The ${widget} from the material:`, extract);
+  } else if (widget) {
+    lines.push('', `No "${widget}" is present in the material below. Say what is actually there instead of describing it as if it were.`);
+  }
+  return `\n${lines.join('\n')}\n`;
+}
+
+/** The labelled widget blocks in the material whose type matches `widget`. */
+export function widgetExcerpt(markdown: string, widget: string): string {
+  const key = widget.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!key) return '';
+  const blocks: string[] = [];
+  const re = /\[widget type="([^"]+)"\]([\s\S]*?)\[\/widget\]/g;
+  for (let m = re.exec(markdown); m; m = re.exec(markdown)) {
+    const type = m[1].toLowerCase().replace(/[^a-z0-9]/g, '');
+    // "Quiz" should match "QuizWidget", and "Code Exercise" should match "CodeExercise".
+    if (type.includes(key) || key.includes(type)) blocks.push(m[0]);
+    if (blocks.length >= 3) break;
+  }
+  return blocks.join('\n\n').slice(0, 6000);
 }
 
 function ticketText(issue: JiraIssueDetail): string {
@@ -163,10 +227,12 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
       ? '\n# Classification\nNOT CONTENT — an account, subscription, access or platform-feature matter. Follow the not-about-content rules.'
       : '';
 
+  const focus = focusBlock(issue, lesson?.markdown);
+
   const prompt = (isFenzo ? registeredFsbDraftPrompt : registeredPsbDraftPrompt)({
     ticket,
     lesson: lessonBlock,
-    classification,
+    classification: `${classification}${focus}`,
   });
 
   const withImages = imageUrls.length
@@ -179,8 +245,27 @@ export async function analyzeQuery(issue: JiraIssueDetail): Promise<AnalysisResu
       : await generateText(withImages, { tier: 'normal', maxTokens: 1200 })
   ).trim();
 
+  // The edits the content team would have to make. Never sent to the learner:
+  // the reply answers them, this says what to change and where.
+  let changes: ContentChange[] = [];
+  if (category === 'content' && lesson) {
+    try {
+      const raw = await generateText(
+        registeredQueriesChangesPrompt({ ticket, lesson: lessonBlock, reply, focus }),
+        { tier: 'normal', maxTokens: 900 },
+      );
+      const parsed = parseJsonLoose<{ changes?: ContentChange[] }>(raw);
+      changes = (Array.isArray(parsed?.changes) ? parsed!.changes : [])
+        .filter((c) => c && typeof c.where === 'string' && typeof c.change === 'string' && c.where.trim() && c.change.trim())
+        .slice(0, 6);
+    } catch {
+      // Advisory only: a reply without a change list is still usable.
+    }
+  }
+
   return {
     reply,
+    changes,
     category,
     usedLesson: !!lesson,
     needsLesson,

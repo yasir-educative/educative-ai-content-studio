@@ -552,7 +552,8 @@ export async function uploadImageMultipart(
   const env = readEnv(authOverride);
   try {
     const formData = new FormData();
-    formData.append('file-0', new Blob([buffer as unknown as ArrayBuffer], { type: 'image/png' }), filename);
+    // The blob's type must match the bytes; images are JPEG now, not PNG.
+    formData.append('file-0', new Blob([buffer as unknown as ArrayBuffer], { type: imageTypeFor(filename).imageType.replace('data:', '') }), filename);
     const res = await fetch(`${EDUCATIVE_BASE}${uploadUrl}`, {
       method: 'POST',
       headers: { Cookie: `flask-auth=${env.flaskAuth}`, 'X-Etag': 'overwrite' },
@@ -571,13 +572,21 @@ export async function uploadImageMultipart(
 
 // Build an Educative Image block using the path returned after upload.
 // path format: /api/page/{page_id}/image/download/{image_id}
+/** The image's own type, so a JPEG is not announced to Educative as a PNG. */
+function imageTypeFor(imagePath: string): { name: string; imageType: string } {
+  const ext = (imagePath.split('?')[0].split('.').pop() || 'png').toLowerCase();
+  const mime = ext === 'jpg' || ext === 'jpeg' ? 'jpeg' : ext === 'webp' ? 'webp' : 'png';
+  return { name: `image.${mime === 'jpeg' ? 'jpg' : mime}`, imageType: `data:image/${mime}` };
+}
+
 export function makeEducativeImageBlock(imagePath: string, caption: string, sizeInBytes = 0): any {
+  const kind = imageTypeFor(imagePath);
   return {
     type: 'Image',
     mode: 'edit',
     content: {
       path: imagePath,
-      metadata: { width: 1536, height: 1024, sizeInBytes, name: 'image.png' },
+      metadata: { width: 1536, height: 1024, sizeInBytes, name: kind.name },
       caption: caption || '',
       borderColor: '#000000',
       version: 3,
@@ -585,7 +594,7 @@ export function makeEducativeImageBlock(imagePath: string, caption: string, size
       redirectionUrl: '',
       comp_id: uid('img'),
       width: 668,
-      imageType: 'data:image/png',
+      imageType: kind.imageType,
     },
     iteration: 23,
     hash: 0,

@@ -1,10 +1,11 @@
 import { generateJSON } from './ai';
 import { SHORTS_CARD_SCHEMA } from './mobileShortsSchemas';
 import { cardsGeneratorPrompt as shortPrompt } from './mobileShortsPrompts';
-import { cardsGeneratorPrompt as coursePrompt } from './mobilePrompts';
+import { cardsGeneratorPrompt as coursePrompt, CARD_FORMATTING_RULES } from './mobilePrompts';
 import { enforceCharLimits, enforceTextImgProse, mapRawCard } from './mobileShortsPipeline';
 import { CARD_LIMITS, COURSE_CARD_LIMITS, checkCard, type CardProduct } from './mobileCardLimits';
-import { SHORTS_PLANNER_TYPES, isHighlightCardType, plannerToCardType, type MobileCardType } from './mobileCardTypes';
+import { applyScenarioHeadings, SHORTS_PLANNER_TYPES, isHighlightCardType, isScenarioCardType,
+  plannerToCardType, type MobileCardType } from './mobileCardTypes';
 import type { MobileCard } from './mobileCourseStorage';
 
 export type RewriteContext = {
@@ -36,6 +37,15 @@ export async function rewriteCard({ product, card, type = card.type, note = '', 
 # Hard length limits for this card — these override every length mentioned above
 ${lengthRule || 'No character limits apply to this card type.'}${lastLength}
 
+${['text', 'text_img', 'text-with-code', 'code-with-output', 'comparisonCards', 'recapCard', 'scenarioCard'].includes(type) ? `
+# Structure — a rewrite follows the same rules as a first draft
+${CARD_FORMATTING_RULES}
+
+Keep the structure the card already has where it was right for the content: a card that earned
+its bullets keeps them, a bold key term stays bold, a comparison table stays a table. Do not
+flatten a structured card into one block of prose to make it fit — shorten the items instead.
+Equally, do not add structure a flat card never needed.
+` : ''}
 Return exactly ONE canonical card object matching the response schema. Use type "${type}".
 Rewrite this card's teaching intent with the supplied context; avoid repeating neighbours.
 Context: ${JSON.stringify(context)}
@@ -45,7 +55,14 @@ Product: ${product}. Required limits: ${JSON.stringify(limits)}
 Repair ALL errors. Exact failing fields, lengths and limits: ${JSON.stringify(issues)}
 Previous candidate: ${JSON.stringify(candidate)}
 Keep id and number. ${repairTitle ? 'Rewrite the failing title to 2–5 words; this overrides the fixed-plan title instruction.' : 'Keep the original title exactly.'} Use null for unused fields.
-Image URLs are managed separately. Do not invent a URL.`, SHORTS_CARD_SCHEMA, { name: 'rewrite_card', tier: 'normal', maxTokens: 8000 });
+Image URLs are managed separately. Do not invent a URL.${type === 'text_img' || type === 'img_only' ? `
+This card has a picture. The words and the picture teach one concept between them and never
+repeat each other: the picture owns the structure, the components and the order; the words own
+the reasoning — why it matters, what it costs, when it fails. Write the words so they stand
+alone as a complete thought, and never point at the picture ("as shown above", "the diagram
+below", "see the figure"). Do not caption or describe it.${card.illustration_idea ? `
+The picture shows: ${String(card.illustration_idea).slice(0, 600)}
+Say something the picture cannot.` : ''}` : ''}`, SHORTS_CARD_SCHEMA, { name: 'rewrite_card', tier: 'normal', maxTokens: 8000 });
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid generated card');
     const [fixed] = await enforceTextImgProse([{ ...raw, type, card_number: card.card_number || 1 }], product === 'course' ? COURSE_CARD_LIMITS : CARD_LIMITS);
     candidate = mapRawCard(fixed, Math.max(0, (card.card_number || 1) - 1));
@@ -66,6 +83,12 @@ Image URLs are managed separately. Do not invent a URL.`, SHORTS_CARD_SCHEMA, { 
     if (type === 'highlightCard' && !isHighlightCardType(candidate.highlightCardType)
       && isHighlightCardType(card.highlightCardType)) {
       candidate.highlightCardType = card.highlightCardType;
+    }
+    if (type === 'scenarioCard') {
+      if (!isScenarioCardType(candidate.scenarioType) && isScenarioCardType(card.scenarioType)) {
+        candidate.scenarioType = card.scenarioType;
+      }
+      Object.assign(candidate, applyScenarioHeadings(candidate));
     }
     if (type === 'text_img' || type === 'img_only') {
       candidate.imageUrl = card.imageUrl || '';

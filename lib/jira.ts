@@ -616,10 +616,49 @@ function textToAdf(text: string): any[] {
     });
 }
 
+/** A file to attach to the issue, carried as base64 so it survives JSON. */
+export interface JiraAttachment {
+  filename: string;
+  contentType?: string;
+  /** base64, with or without a `data:` prefix. */
+  data: string;
+}
+
+/**
+ * Attach files to an issue.
+ *
+ * Jira attaches files to the issue, never to a comment, so these land in the
+ * ticket's Attachments list and the comment names them. The endpoint rejects
+ * anything without the no-check token, and sets its own multipart boundary.
+ */
+export async function uploadAttachments(
+  c: JiraConfig,
+  key: string,
+  files: JiraAttachment[],
+): Promise<Array<{ id: string; filename: string }>> {
+  if (!files.length) return [];
+  const form = new FormData();
+  for (const file of files) {
+    const base64 = String(file.data || '').replace(/^data:[^;]*;base64,/, '');
+    if (!base64) throw new Error(`${file.filename || 'attachment'} is empty`);
+    const bytes = Buffer.from(base64, 'base64');
+    form.append('file', new Blob([new Uint8Array(bytes)], { type: file.contentType || 'application/octet-stream' }),
+      file.filename || 'attachment');
+  }
+  const out = await jiraFetch(c, `/issue/${encodeURIComponent(key)}/attachments`, {
+    method: 'POST',
+    headers: { 'X-Atlassian-Token': 'no-check' },
+    body: form,
+  });
+  return (Array.isArray(out) ? out : []).map((a: any) => ({ id: String(a?.id || ''), filename: String(a?.filename || '') }));
+}
+
 export interface PostUpdateArgs {
   key: string;
-  /** The drafted reply, posted below the instruction line. */
+  /** The drafted reply. Empty posts no comment, which is how a status-only update is made. */
   reply: string;
+  /** Files to attach to the issue. Only sent with a comment. */
+  attachments?: JiraAttachment[];
   /** Who to @-mention. Omit for no mention. */
   mentionAccountId?: string;
   mentionName?: string;
@@ -632,10 +671,27 @@ export interface PostUpdateArgs {
 export async function postUpdate(
   c: JiraConfig,
   args: PostUpdateArgs,
-): Promise<{ commented: boolean; transitioned: boolean; status?: string; warning?: string }> {
+): Promise<{ commented: boolean; transitioned: boolean; attached?: number; status?: string; warning?: string }> {
   if (!isConfigured(c)) throw new Error('Jira is not configured yet');
   if (!args.key) throw new Error('issue key is required');
-  if (!args.reply?.trim()) throw new Error('nothing to post');
+  const reply = args.reply?.trim() || '';
+  const files = (args.attachments || []).filter((f) => f?.data);
+  if (!reply && !args.transitionId) throw new Error('nothing to post: write a comment or pick a status');
+
+  // Status on its own. Nothing else ran, so a rejected transition is the whole
+  // failure and is thrown rather than reported as a warning beside a comment.
+  if (!reply) {
+    await jiraFetch(c, `/issue/${encodeURIComponent(args.key)}/transitions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transition: { id: String(args.transitionId) } }),
+    });
+    return { commented: false, transitioned: true };
+  }
+
+  // Attachments go up first so the comment can name them. A failure here stops
+  // the post: a comment promising files that are not there is worse than none.
+  const attached = await uploadAttachments(c, args.key, files);
 
   const instruction = args.instruction?.trim() || 'please respond with the following:';
   const lead: any = { type: 'paragraph', content: [] };
@@ -649,13 +705,19 @@ export async function postUpdate(
     lead.content.push({ type: 'text', text: instruction });
   }
 
+  // Jira has no way to embed an issue attachment in a comment body, so the
+  // comment names the files and the reader finds them on the ticket.
+  const attachmentNote = attached.length
+    ? textToAdf(`Attached: ${attached.map((a) => a.filename).join(', ')}`)
+    : [];
+
   await jiraFetch(c, `/issue/${encodeURIComponent(args.key)}/comment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ body: { type: 'doc', version: 1, content: [lead, ...textToAdf(args.reply)] } }),
+    body: JSON.stringify({ body: { type: 'doc', version: 1, content: [lead, ...textToAdf(reply), ...attachmentNote] } }),
   });
 
-  if (!args.transitionId) return { commented: true, transitioned: false };
+  if (!args.transitionId) return { commented: true, transitioned: false, attached: attached.length };
 
   // The comment is the valuable part, so a rejected transition is reported
   // rather than thrown — it must not look as though nothing was posted.
@@ -665,9 +727,9 @@ export async function postUpdate(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ transition: { id: String(args.transitionId) } }),
     });
-    return { commented: true, transitioned: true };
+    return { commented: true, transitioned: true, attached: attached.length };
   } catch (e: any) {
-    return { commented: true, transitioned: false, warning: `Comment posted, but the status change failed: ${e?.message || e}` };
+    return { commented: true, transitioned: false, attached: attached.length, warning: `Comment posted, but the status change failed: ${e?.message || e}` };
   }
 }
 

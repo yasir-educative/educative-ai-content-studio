@@ -20,6 +20,7 @@ export interface MobileShort {
   objective?: string;
   additionalContext?: string;
   isHighlightCardNeeded?: boolean;
+  isScenarioCardNeeded?: boolean;
   numCards?: number;
   sheetUrl?: string;
   rowIdx?: number;

@@ -69,6 +69,7 @@ export function startMobileCourseRun(input: MobileCourseInput): MobileCourseRunH
     collectionId: input.collectionId,
     authorId: input.authorId,
     targetCollectionId: input.targetCollectionId,
+    isScenarioCardNeeded: input.isScenarioCardNeeded,
     chapters: [],
     stageOutputs: {},
   };

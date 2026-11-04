@@ -11,17 +11,19 @@ import {
   checkSize,
   IMAGE_SIZES,
 } from '@/lib/educativeImageStyle';
+import { STYLE_SCOPES } from '@/lib/imageStyleScopes';
 
 export default function EducativeImagesPage() {
+  // The two halves of this page are exclusive: make an image, or configure the
+  // styles every pipeline draws in.
+  const [view, setView] = useState<'images' | 'styles'>('images');
   const [mode, setMode] = useState<'create' | 'edit'>('create');
   const [refFile, setRefFile] = useState<File | null>(null);
   const [refPreview, setRefPreview] = useState<string>('');
   // Set when editing a result in place: the server re-reads it from disk.
   const [sourceUrl, setSourceUrl] = useState('');
-  // Style reference: saved server-side, reused until replaced or removed.
-  const [refImage, setRefImage] = useState<{ url: string } | null>(null);
+  // Whether this generation uses the selected style's reference picture.
   const [useRef, setUseRef] = useState(true);
-  const [refBusy, setRefBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [instructions, setInstructions] = useState('');
   const [model, setModel] = useState<string>(IMAGE_MODELS[0]);
@@ -36,13 +38,15 @@ export default function EducativeImagesPage() {
   const [result, setResult] = useState<{ url: string; filename: string; size: string; styleApplied?: boolean; styleName?: string | null; usedReference?: boolean; usedSubject?: boolean; format?: string; requestedFormat?: string } | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [zoomed, setZoomed] = useState(false);
+  // Any sample or reference picture, opened full size.
+  const [lightbox, setLightbox] = useState<{ url: string; caption: string } | null>(null);
 
-  // Styles: many saved, one default, one picked for this generation.
-  interface Sty { id: string; name: string; body: string; builtin: boolean }
+  // Styles: many saved, one picked per pipeline, one picked for this generation.
+  interface Sty { id: string; name: string; body: string; builtin: boolean; referenceUrl?: string; previewUrl?: string }
   const [styles, setStyles] = useState<Sty[]>([]);
-  const [defaultStyleId, setDefaultStyleId] = useState('');
-  // The style every mobile card illustration is drawn in, courses and shorts alike.
-  const [mobileStyleId, setMobileStyleId] = useState('');
+  // Which style each pipeline draws in, keyed by scope.
+  const [scopeDefaults, setScopeDefaults] = useState<Record<string, string>>({});
+  const defaultStyleId = scopeDefaults.educative || '';
   const [styleId, setStyleId] = useState('');
   const [editing, setEditing] = useState(false);
   const [styleDraft, setStyleDraft] = useState('');
@@ -50,17 +54,61 @@ export default function EducativeImagesPage() {
   const [styleBusy, setStyleBusy] = useState(false);
   const [styleErr, setStyleErr] = useState('');
 
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLightbox(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightbox]);
+
   const activeStyle = styles.find((x) => x.id === styleId) || null;
   // One source of style per generation: a reference in use replaces the text.
-  const styleOverridden = mode === 'create' && !!refImage && useRef;
 
   const applyStyles = useCallback((j: any, selectId?: string) => {
     const list: Sty[] = j.styles || [];
     setStyles(list);
-    setDefaultStyleId(j.defaultId || '');
-    setMobileStyleId(j.mobileDefaultId || '');
+    setScopeDefaults({
+      educative: j.defaultId || '',
+      blog: j.blogDefaultId || '',
+      mobile: j.mobileDefaultId || '',
+      course: j.courseDefaultId || '',
+    });
     setStyleId((cur) => selectId || (list.some((x) => x.id === cur) ? cur : j.defaultId || list[0]?.id || ''));
   }, []);
+
+  /** Draw, or discard, the sample image shown for a style. */
+  const [previewBusy, setPreviewBusy] = useState('');
+  async function drawPreview(id: string, remove = false) {
+    setPreviewBusy(id); setStyleErr('');
+    try {
+      const res = await fetch(remove ? `/api/images/style/preview?id=${encodeURIComponent(id)}` : '/api/images/style/preview', {
+        method: remove ? 'DELETE' : 'POST',
+        ...(remove ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j?.error || 'Failed');
+      applyStyles(j, styleId);
+    } catch (e: any) { setStyleErr(e?.message || String(e)); } finally { setPreviewBusy(''); }
+  }
+
+  /** Save or remove a style's reference picture; the list comes back updated. */
+  async function setStyleReference(id: string, file: File | null) {
+    setStyleBusy(true); setStyleErr('');
+    try {
+      let res: Response;
+      if (file) {
+        const fd = new FormData();
+        fd.append('id', id);
+        fd.append('image', file);
+        res = await fetch('/api/images/style', { method: 'POST', body: fd });
+      } else {
+        res = await fetch(`/api/images/style?reference=1&id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      }
+      const j = await res.json();
+      if (!res.ok) throw new Error(j?.error || 'Failed');
+      applyStyles(j, styleId);
+    } catch (e: any) { setStyleErr(e?.message || String(e)); } finally { setStyleBusy(false); }
+  }
 
   useEffect(() => {
     fetch('/api/images/style', { cache: 'no-store' })
@@ -81,36 +129,13 @@ export default function EducativeImagesPage() {
       if (!res.ok) throw new Error(j?.error || 'Failed');
       // A saved edit to the builtin returns a new id, so select what came back.
       applyStyles(j, method === 'POST' ? j.style?.id : method === 'DELETE' ? j.defaultId : undefined);
+      // The written style changed, so whatever sample it had no longer shows it.
+      if (method === 'POST' && body?.id && j.style?.id === body.id) {
+        fetch(`/api/images/style/preview?id=${encodeURIComponent(body.id)}`, { method: 'DELETE' })
+          .then((r) => r.json()).then((k) => applyStyles(k, body.id)).catch(() => {});
+      }
       setEditing(false);
     } catch (e: any) { setStyleErr(e?.message || String(e)); } finally { setStyleBusy(false); }
-  }
-
-  useEffect(() => {
-    fetch('/api/images/reference', { cache: 'no-store' })
-      .then((r) => r.json())
-      .then((j) => setRefImage(j.reference || null))
-      .catch(() => {});
-  }, []);
-
-  async function uploadReference(f: File | null) {
-    if (!f) return;
-    setRefBusy(true); setErr('');
-    try {
-      const fd = new FormData();
-      fd.append('image', f);
-      const r = await fetch('/api/images/reference', { method: 'POST', body: fd });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error || 'Failed to save reference');
-      setRefImage(j.reference); setUseRef(true);
-    } catch (e: any) { setErr(e?.message || String(e)); } finally { setRefBusy(false); }
-  }
-
-  async function removeReference() {
-    setRefBusy(true);
-    try {
-      await fetch('/api/images/reference', { method: 'DELETE' });
-      setRefImage(null);
-    } finally { setRefBusy(false); }
   }
 
   function pickFile(f: File | null) {
@@ -141,14 +166,14 @@ export default function EducativeImagesPage() {
         fd.append('width', String(width));
         fd.append('height', String(height));
         fd.append('image', refFile);
-        fd.append('useReference', useRef && refImage ? '1' : '0');
+        fd.append('useReference', useRef && activeStyle?.referenceUrl ? '1' : '0');
         fd.append('styleId', styleId);
         res = await fetch('/api/images/generate', { method: 'POST', body: fd });
       } else {
         res = await fetch('/api/images/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode, sourceUrl, useReference: useRef && !!refImage, styleId, instructions, model, quality, format, compression, width, height }),
+          body: JSON.stringify({ mode, sourceUrl, useReference: useRef && !!activeStyle?.referenceUrl, styleId, instructions, model, quality, format, compression, width, height }),
         });
       }
       const json = await res.json();
@@ -167,38 +192,113 @@ export default function EducativeImagesPage() {
         <Link href="/" className="text-xs text-[var(--text-faint)] hover:text-[var(--text)] block mb-2 transition-colors">
           ← Home
         </Link>
-        <h1 className="text-2xl font-bold tracking-tight">Educative Image Generator</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Images</h1>
         <p className="text-sm text-[var(--text-dim)] mt-1">
-          The house visual style is fixed and always sent. Describe only what the image should show.
+          {view === 'styles'
+            ? 'Which style each pipeline draws in, and the styles themselves.'
+            : 'Make one image by hand. Pipelines use the styles set under Style configuration.'}
         </p>
       </div>
 
-      {/* Mode */}
-      <div className="card p-1 flex gap-1">
-        {([['create', 'Create'], ['edit', 'Edit an image']] as const).map(([m, label]) => (
-          <button key={m} onClick={() => { setMode(m); setErr(''); }}
-            className={`flex-1 text-sm py-2 rounded-lg transition-colors ${mode === m ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : 'text-[var(--text-dim)] hover:text-[var(--text)]'}`}>
+      {/* Page navigation, deliberately unlike the Create/Edit switch below it:
+          these are two different screens, not two settings of one. */}
+      <div className="flex gap-6 border-b border-[var(--border)] -mt-1">
+        {([['images', 'Images'], ['styles', 'Style configuration']] as const).map(([v, label]) => (
+          <button key={v} onClick={() => { setView(v); setErr(''); }}
+            className={`text-base pb-2.5 -mb-px border-b-2 transition-colors ${
+              view === v
+                ? 'border-[var(--accent)] text-[var(--text)] font-semibold'
+                : 'border-transparent text-[var(--text-faint)] hover:text-[var(--text-dim)]'}`}>
             {label}
           </button>
         ))}
       </div>
 
-      {/* Styles — many saved, one default, picked per generation */}
-      {mode === 'create' && (
-        <div className={`card p-5 space-y-3 transition-opacity ${styleOverridden ? 'opacity-55' : ''}`}>
+      {view === 'styles' && (<>
+      {/* Per-pipeline style configuration */}
+      <div className="card p-5 space-y-3">
+        <div>
+          <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">Pipeline styles</label>
+          <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
+            Each pipeline draws in the style chosen here. A style with a reference picture is drawn from the
+            picture instead of its written style — one picture per style, kept until it is replaced or removed.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {STYLE_SCOPES.map(({ scope, label, hint }) => {
+            const chosen = styles.find((x) => x.id === scopeDefaults[scope]);
+            return (
+              <div key={scope} className="rounded-xl border border-[var(--border)] p-3 space-y-2.5">
+                <div>
+                  <p className="text-sm text-[var(--text)] font-medium">{label}</p>
+                  <p className="text-[11px] text-[var(--text-faint)]">{hint}</p>
+                </div>
+                <select
+                  className="input text-xs py-1 w-full"
+                  value={scopeDefaults[scope] || ''}
+                  disabled={styleBusy}
+                  onChange={(e) => persistStyle('PUT', { id: e.target.value, scope })}
+                >
+                  {styles.map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
+                </select>
+
+                {/* What this pipeline's images will look like. */}
+                <div className="flex items-start gap-2.5">
+                  {chosen?.previewUrl ? (
+                    <img src={chosen.previewUrl} alt={`${chosen.name} sample`} title="Click to view full size"
+                      onClick={() => setLightbox({ url: chosen.previewUrl!, caption: `${chosen.name} — sample` })}
+                      className="w-20 h-20 rounded-lg object-cover border border-[var(--border)] bg-white shrink-0 cursor-zoom-in hover:border-[var(--accent)] transition-colors" />
+                  ) : (
+                    <div className="w-20 h-20 rounded-lg border border-dashed border-[var(--border)] shrink-0 flex items-center justify-center text-center px-1">
+                      <span className="text-[9px] text-[var(--text-faint)] leading-tight">No sample yet</span>
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <button
+                      className="text-[11px] rounded border border-[var(--border)] px-2 py-1 text-[var(--text-dim)] hover:text-[var(--text)] transition-colors disabled:opacity-50 block"
+                      disabled={!chosen || !!previewBusy || styleBusy}
+                      onClick={() => chosen && drawPreview(chosen.id)}
+                    >
+                      {previewBusy === chosen?.id ? 'Drawing…' : chosen?.previewUrl ? 'Redraw sample' : 'Draw sample'}
+                    </button>
+                    {chosen?.referenceUrl ? (
+                      <span className="flex items-center gap-1.5">
+                        <img src={chosen.referenceUrl} alt="" title="Click to view full size"
+                          onClick={() => setLightbox({ url: chosen.referenceUrl!, caption: `${chosen.name} — reference` })}
+                          className="w-5 h-5 rounded object-cover border border-[var(--border)] cursor-zoom-in hover:border-[var(--accent)] transition-colors" />
+                        <span className="text-[10px] text-[var(--text-faint)]">reference</span>
+                        <button
+                          className="text-[10px] text-[var(--text-faint)] hover:text-red-400"
+                          disabled={styleBusy}
+                          onClick={() => { if (confirm(`Remove the reference picture from "${chosen.name}"?`)) setStyleReference(chosen.id, null); }}
+                        >remove</button>
+                      </span>
+                    ) : (
+                      <label className="text-[11px] rounded border border-[var(--border)] px-2 py-1 cursor-pointer text-[var(--text-dim)] hover:text-[var(--text)] transition-colors block w-fit">
+                        Add reference
+                        <input type="file" accept="image/*" className="hidden" disabled={!chosen || styleBusy}
+                          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f && chosen) setStyleReference(chosen.id, f); }} />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {styleErr && <p className="text-[11px] text-red-500">{styleErr}</p>}
+      </div>
+
+      {/* The styles themselves: read one, edit it, add one, delete one. */}
+      {(
+        <div className="card p-5 space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
-                Visual style <span className="text-[var(--text-faint)] normal-case tracking-normal">(optional)</span>
+                Edit a style
               </label>
               <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
-                {styleOverridden
-                  ? 'Not used — the reference image is styling this generation.'
-                  : 'Prepended to every create. Not used when editing.'}
-              </p>
-              <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
-                Mobile course and short cards are drawn in{' '}
-                <span className="text-[var(--text-dim)]">{styles.find((x) => x.id === mobileStyleId)?.name || 'the mobile card style'}</span>.
+                A style is prepended to every image created in it. Where it has a reference picture, the picture is sent instead.
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -206,7 +306,7 @@ export default function EducativeImagesPage() {
                 onChange={(e) => { setStyleId(e.target.value); setEditing(false); }} disabled={busy}>
                 {styles.map((st) => (
                   <option key={st.id} value={st.id}>
-                    {st.name}{st.id === defaultStyleId ? ' (default)' : ''}{st.id === mobileStyleId ? ' (mobile cards)' : ''}
+                    {st.name}{st.id === defaultStyleId ? ' (default)' : ''}{st.referenceUrl ? ' • reference' : ''}
                   </option>
                 ))}
               </select>
@@ -226,13 +326,6 @@ export default function EducativeImagesPage() {
                   {styleId !== defaultStyleId && (
                     <button className="btn-secondary text-xs py-1 px-3" onClick={() => persistStyle('PUT', { id: styleId })} disabled={styleBusy}>
                       Make default
-                    </button>
-                  )}
-                  {styleId !== mobileStyleId && (
-                    <button className="btn-secondary text-xs py-1 px-3"
-                      title="Draw every mobile course and mobile short card illustration in this style"
-                      onClick={() => persistStyle('PUT', { id: styleId, scope: 'mobile' })} disabled={styleBusy}>
-                      Use for mobile cards
                     </button>
                   )}
                   {activeStyle && !activeStyle.builtin && (
@@ -264,6 +357,44 @@ export default function EducativeImagesPage() {
             <p className="text-[11px] text-[var(--text-faint)]">Saving edits to the house style creates a copy; the original stays available.</p>
           )}
           {styleErr && <p className="text-xs text-red-400">{styleErr}</p>}
+
+          {/* What this style looks like. Every style can have one, including a
+              style saved a moment ago — the same subject each time, so two
+              samples differ only by their style. */}
+          {activeStyle && !editing && (
+            <div className="flex items-start gap-3 pt-1">
+              {activeStyle.previewUrl ? (
+                <img src={activeStyle.previewUrl} alt={`${activeStyle.name} sample`} title="Click to view full size"
+                  onClick={() => setLightbox({ url: activeStyle.previewUrl!, caption: `${activeStyle.name} — sample` })}
+                  className="w-32 h-32 rounded-lg object-cover border border-[var(--border)] bg-white shrink-0 cursor-zoom-in hover:border-[var(--accent)] transition-colors" />
+              ) : (
+                <div className="w-32 h-32 rounded-lg border border-dashed border-[var(--border)] shrink-0 flex items-center justify-center px-2">
+                  <span className="text-[10px] text-[var(--text-faint)] text-center leading-tight">No sample drawn yet</span>
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <p className="text-[11px] text-[var(--text-faint)] max-w-sm">
+                  A sample image drawn in this style. Every style draws the same subject, so putting two side by
+                  side shows the difference between the styles and nothing else.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button className="btn-secondary text-xs py-1 px-3"
+                    disabled={!!previewBusy || styleBusy}
+                    onClick={() => drawPreview(activeStyle.id)}>
+                    {previewBusy === activeStyle.id ? 'Drawing…' : activeStyle.previewUrl ? 'Redraw sample' : 'Draw sample'}
+                  </button>
+                  {activeStyle.previewUrl && (
+                    <button className="text-[11px] text-[var(--text-faint)] hover:text-red-400 px-1"
+                      disabled={!!previewBusy || styleBusy}
+                      onClick={() => drawPreview(activeStyle.id, true)}>
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {showPrompt && (
             <textarea readOnly={!editing} value={editing ? styleDraft : (activeStyle?.body || '')}
               onChange={(e) => setStyleDraft(e.target.value)} spellCheck={false}
@@ -272,21 +403,55 @@ export default function EducativeImagesPage() {
         </div>
       )}
 
+      </>)}
+
+      {view === 'images' && (<>
+      {/* One setting of the Images screen, so it reads as a small control
+          rather than a second set of tabs. */}
+      <div className="flex items-center gap-2.5">
+        <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">I want to</span>
+        <div className="inline-flex rounded-lg border border-[var(--border)] p-0.5 bg-[var(--panel-2)]">
+          {([['create', 'Make a new image'], ['edit', 'Change an existing one']] as const).map(([m, label]) => (
+            <button key={m} onClick={() => { setMode(m); setErr(''); }}
+              className={`text-xs px-3 py-1 rounded-md transition-colors ${
+                mode === m
+                  ? 'bg-[var(--panel)] text-[var(--text)] font-medium shadow-sm'
+                  : 'text-[var(--text-faint)] hover:text-[var(--text-dim)]'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Both optional, and set before anything is written */}
       <div className="grid gap-4 lg:grid-cols-2 items-start">
-        {/* Style reference — persists until replaced or removed */}
+        {/* Which style this one image is drawn in. Editing styles lives under
+            Image style configuration; here you only choose and switch. */}
         <div className="card p-5 space-y-2">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <label className="text-xs font-medium text-[var(--text-dim)] uppercase tracking-wide">
-                Style reference <span className="text-[var(--text-faint)] normal-case tracking-normal">(optional)</span>
+                Style{mode === 'edit' && <span className="text-[var(--text-faint)] normal-case tracking-normal"> — not used when editing</span>}
               </label>
-              <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
-                Optional. Its style is matched, not its subject, and it replaces the written style while in use.
-                Saved and reused until you replace or remove it.
+              <select
+                className="input text-xs py-1 mt-1 min-w-[13rem]"
+                value={styleId}
+                disabled={busy || mode === 'edit'}
+                onChange={(e) => setStyleId(e.target.value)}
+              >
+                {styles.map((st) => (
+                  <option key={st.id} value={st.id}>
+                    {st.name}{st.id === defaultStyleId ? ' (default)' : ''}{st.referenceUrl ? ' • reference' : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-[var(--text-faint)] mt-1">
+                {activeStyle?.referenceUrl
+                  ? <>This style has a reference picture. Its style is matched, not its subject, and it replaces the written style while in use.</>
+                  : <>This style has no reference picture. Add one under Image style configuration.</>}
               </p>
             </div>
-            {refImage && (
+            {activeStyle?.referenceUrl && (
               <label className="flex items-center gap-2 text-xs cursor-pointer shrink-0">
                 <input type="checkbox" className="accent-emerald-500" checked={useRef}
                   onChange={(e) => setUseRef(e.target.checked)} disabled={busy} />
@@ -294,34 +459,22 @@ export default function EducativeImagesPage() {
               </label>
             )}
           </div>
-          <div className="flex items-start gap-3 flex-wrap">
-            <label className={`flex-1 min-w-[14rem] rounded-xl border-2 border-dashed px-4 py-4 text-center cursor-pointer transition-colors border-[var(--border)] hover:border-[var(--text-faint)] ${busy || refBusy ? 'opacity-50 pointer-events-none' : ''}`}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/'));
-                if (f) uploadReference(f);
-              }}
-              onPaste={(e) => {
-                const f = Array.from(e.clipboardData.files).find((x) => x.type.startsWith('image/'));
-                if (f) uploadReference(f);
-              }}
-            >
-              <input type="file" accept="image/*" className="hidden" disabled={busy || refBusy}
-                onChange={(e) => uploadReference(e.target.files?.[0] || null)} />
-              <p className="text-xs text-[var(--text-dim)]">
-                {refBusy ? 'Saving…' : refImage
-                  ? <>Replace the reference — <span className="text-[var(--accent)] underline">choose</span>, drag or paste</>
-                  : <>Set a style reference — <span className="text-[var(--accent)] underline">choose a file</span>, drag or paste</>}
-              </p>
-            </label>
-            {refImage && (
-              <div className="relative shrink-0">
-                <img src={refImage.url} alt="Style reference"
-                  className={`h-24 rounded-lg border object-contain bg-white ${useRef ? 'border-[var(--accent)]' : 'border-[var(--border)] opacity-40'}`} />
-                <button onClick={removeReference} disabled={busy || refBusy} title="Remove reference"
-                  className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[var(--panel)] border border-[var(--border)] text-xs leading-none hover:text-red-400">×</button>
-              </div>
+          <div className="flex items-start gap-3">
+            {activeStyle?.previewUrl && (
+              <figure className="shrink-0">
+                <img src={activeStyle.previewUrl} alt={`${activeStyle.name} sample`} title="Click to view full size"
+                  onClick={() => setLightbox({ url: activeStyle.previewUrl!, caption: `${activeStyle.name} — sample` })}
+                  className="h-24 rounded-lg border border-[var(--border)] object-contain bg-white cursor-zoom-in hover:border-[var(--accent)] transition-colors" />
+                <figcaption className="text-[10px] text-[var(--text-faint)] mt-0.5">sample</figcaption>
+              </figure>
+            )}
+            {activeStyle?.referenceUrl && (
+              <figure className="shrink-0">
+                <img src={activeStyle.referenceUrl} alt="Style reference" title="Click to view full size"
+                  onClick={() => setLightbox({ url: activeStyle.referenceUrl!, caption: `${activeStyle.name} — reference` })}
+                  className={`h-24 rounded-lg border object-contain bg-white cursor-zoom-in ${useRef ? 'border-[var(--accent)]' : 'border-[var(--border)] opacity-40'}`} />
+                <figcaption className="text-[10px] text-[var(--text-faint)] mt-0.5">reference</figcaption>
+              </figure>
             )}
           </div>
         </div>
@@ -547,6 +700,36 @@ export default function EducativeImagesPage() {
             <img src={result.url} alt="Generated" className="w-full block" />
           </button>
           <p className="text-[11px] text-[var(--text-faint)]">Click the image to view it full size.</p>
+        </div>
+      )}
+
+      </>)}
+
+      {/* Sample and reference pictures, full size */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 flex flex-col items-center justify-center gap-3 p-4 cursor-zoom-out"
+          role="dialog"
+          aria-modal="true"
+          aria-label={lightbox.caption}
+          onClick={() => setLightbox(null)}
+        >
+          <img
+            src={lightbox.url}
+            alt={lightbox.caption}
+            className="max-w-full max-h-[80vh] object-contain rounded-lg bg-white"
+            onClick={(e) => e.stopPropagation()}
+          />
+          {/* Explicit light styling: this sits on the dark overlay, not on a
+              themed surface, so the themed classes are unreadable here. */}
+          <p className="text-xs text-white/80">{lightbox.caption}</p>
+          <button
+            onClick={(e) => { e.stopPropagation(); setLightbox(null); }}
+            className="absolute top-4 right-4 text-xs font-medium py-1.5 px-3 rounded-lg bg-white/15 text-white border border-white/50 hover:bg-white/25 transition-colors backdrop-blur-sm"
+            aria-label="Close"
+          >
+            ✕ Close
+          </button>
         </div>
       )}
 

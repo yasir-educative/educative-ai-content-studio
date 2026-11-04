@@ -13,14 +13,20 @@ const jsonPrompt = registerPrompt('shorts-json-generator',    shortsJsonGenerato
 
 const plannerPrompt = registerPrompt('shorts-card-planner', shortsCardPlannerPrompt, 'mobile-short');
 export const registeredShortsCardPlannerPrompt = (
-  args: Omit<Parameters<typeof shortsCardPlannerPrompt>[0], 'typeRules'> & { isHighlightCardNeeded?: boolean },
-) => plannerPrompt({ ...args, typeRules: cardTypeRules(!!args.isHighlightCardNeeded) });
+  args: Omit<Parameters<typeof shortsCardPlannerPrompt>[0], 'typeRules'>
+    & { isHighlightCardNeeded?: boolean; isScenarioCardNeeded?: boolean },
+) => plannerPrompt({ ...args, typeRules: cardTypeRules(!!args.isHighlightCardNeeded, !!args.isScenarioCardNeeded) });
 
 // Dynamic instructions must be variables: template capture cannot evaluate boolean branches per run.
 function highlightInstructions(enabled?: boolean): string {
   return enabled ? 'HIGHLIGHT is allowed at most once, only if assigned in the fixed plan.' : 'HIGHLIGHT is disabled. Never add a highlight card.';
 }
+function scenarioInstructions(enabled?: boolean): string {
+  return enabled ? 'SCENARIO is allowed only if assigned in the fixed plan.' : 'SCENARIO is disabled. Never add a scenario card.';
+}
 export const registeredShortsCardsGeneratorPrompt = (args: Parameters<typeof cardsGeneratorPrompt>[0]) =>
-  cardsPrompt({ ...args, highlightInstructions: highlightInstructions(args.isHighlightCardNeeded) });
+  cardsPrompt({ ...args, highlightInstructions: highlightInstructions(args.isHighlightCardNeeded),
+    scenarioInstructions: scenarioInstructions(args.isScenarioCardNeeded) });
 export const registeredShortsJsonGeneratorPrompt = (args: Parameters<typeof shortsJsonGeneratorPrompt>[0]) =>
-  jsonPrompt({ ...args, highlightInstructions: highlightInstructions(args.isHighlightCardNeeded) });
+  jsonPrompt({ ...args, highlightInstructions: highlightInstructions(args.isHighlightCardNeeded),
+    scenarioInstructions: scenarioInstructions(args.isScenarioCardNeeded) });

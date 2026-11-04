@@ -42,7 +42,7 @@ interface CourseRef {
   id: string;
   title: string;
   collectionId?: string;
-  chapters: Array<{ title: string; cards: Array<{ title?: string; type: string; readOnly?: string; pageId?: string }> }>;
+  chapters: Array<{ id: string; title: string; cards: Array<{ title?: string; type: string; readOnly?: string; pageId?: string }> }>;
 }
 
 type Step = 'source' | 'mapping' | 'plan';
@@ -52,16 +52,6 @@ const UPDATE_HINTS = [
   'no new quizzes',
   'keep the chapter under 25 cards',
   'prefer rewrites over new cards',
-];
-const NEW_CHAPTER_HINTS = [
-  'around 10 cards',
-  'one diagram card',
-  'end with a quiz and a recap',
-];
-const REFRESH_HINTS = [
-  'fix wrong or stale facts only',
-  'tighten the wording, keep the meaning',
-  'leave the quizzes alone',
 ];
 
 const MEDIA_LABEL: Record<string, string> = {
@@ -94,18 +84,12 @@ export function CourseUpdateDialog({
   onClose,
   onApplied,
   scopeChapter,
-  intent = 'gaps',
 }: {
   course: CourseRef;
   onClose: () => void;
   onApplied: () => Promise<void>;
   /** Work on this one chapter only; the chapter picker is then hidden. */
   scopeChapter?: number;
-  /**
-   * 'new-chapter' plans one chapter to follow the scoped one, and nothing else.
-   * 'refresh' works only on the cards already there: content, lengths, pictures.
-   */
-  intent?: 'gaps' | 'refresh' | 'new-chapter';
 }) {
   const [step, setStep] = useState<Step>('source');
   const [sourceId, setSourceId] = useState(course.collectionId || '');
@@ -129,13 +113,80 @@ export function CourseUpdateDialog({
   const [picker, setPicker] = useState<Record<number, string>>({});
   const [chapterFilter, setChapterFilter] = useState('');
   const [result, setResult] = useState('');
+  // Web chapter index currently being turned into a mobile chapter.
+  const [adding, setAdding] = useState<number | null>(null);
+  const [added, setAdded] = useState<number[]>([]);
+  // Decided before anything runs. Any combination is valid, including all
+  // three off, which is simply a no-op the buttons refuse.
+  const [doAnalysis, setDoAnalysis] = useState(true);
+  const [doRewrite, setDoRewrite] = useState(false);
+  const [doImages, setDoImages] = useState(false);
+  const [sweepLog, setSweepLog] = useState('');
 
   const chosen = plans.flatMap((p) => p.proposals).filter((p) => accepted[p.id]);
   const newCards = chosen.filter((p) => p.kind !== 'rewrite' && p.kind !== 'media')
     .reduce((n, p) => n + p.cards.length, 0);
   const rewrites = chosen.filter((p) => p.kind === 'rewrite' || p.kind === 'media').length;
   const running = !!busy;
+  const nothingChosen = !doAnalysis && !doRewrite && !doImages;
+  /** Analyse when asked, otherwise go straight to the sweeps. */
+  const go = (withWeb: boolean) => (doAnalysis ? analyse(withWeb) : runWithoutAnalysis(withWeb));
+  const goLabel = doAnalysis ? 'Analyse' : 'Run';
   const validSource = /^\d+$/.test(sourceId.trim());
+
+  /**
+   * Build a mobile chapter from a web chapter that has none.
+   *
+   * This is the ordinary generation pipeline, not an analysis: the chapter is
+   * planned and its cards written exactly as a generated course's would be.
+   */
+  async function addWebChapter(chapterIndex: number, title: string) {
+    if (adding !== null) return;
+    if (!confirm(`Generate a mobile chapter from "${title}"? It runs the normal card pipeline and is placed where the web course has it. Nothing is published.`)) return;
+    setAdding(chapterIndex);
+    setError('');
+    setLog((l) => [...l, `Generating "${title}"…`]);
+    try {
+      const res = await fetch(`/api/mobile-course/${course.id}/chapters/from-web`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceCollectionId: sourceId.trim(),
+          chapterIndex,
+          // Where the pairing says it belongs: after the mobile chapter that
+          // matches the nearest earlier web chapter, not at the end.
+          pairs: matches.flatMap((m) => m.selection.map((s) => [s.chapterIndex, m.mobileIndex] as [number, number])),
+        }),
+      });
+      if (!res.body) throw new Error('No response from the server');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let failed = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const event = JSON.parse(line.slice(6));
+          if (event.type === 'error') failed = event.message || 'Generation failed';
+          else if (event.type === 'stage' && event.status === 'start') setLog((l) => [...l, `  ${event.name}`]);
+          else if (event.type === 'log' && event.message) setLog((l) => [...l, `  ${event.message}`]);
+        }
+      }
+      if (failed) throw new Error(failed);
+      setAdded((a) => [...a, chapterIndex]);
+      setLog((l) => [...l, `Added "${title}".`]);
+      await onApplied();
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setAdding(null);
+    }
+  }
 
   function toggleChapter(i: number) {
     setSelected((s) => (s.includes(i) ? s.filter((x) => x !== i) : [...s, i].sort((a, b) => a - b)));
@@ -206,7 +257,6 @@ export function CourseUpdateDialog({
         const json = await post('analyze', {
           mobileIndex,
           instruction,
-          intent,
           ...(withWeb ? {
             sourceCollectionId: sourceId.trim(),
             webCourseTitle: webTitle,
@@ -225,6 +275,67 @@ export function CourseUpdateDialog({
     }
   }
 
+  /** Drain one of the chapter sweep routes, reporting progress as it goes. */
+  async function runSweep(path: 'rewrite' | 'images', chapterId: string, label: string) {
+    const res = await fetch(`/api/mobile-course/${course.id}/chapters/${chapterId}/${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+    });
+    if (!res.body) throw new Error('No response from the server');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let summary = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const part of parts) {
+        if (!part.startsWith('data: ')) continue;
+        const event = JSON.parse(part.slice(6));
+        if (event.type === 'card' && event.status === 'start') {
+          setBusy(`${label}: ${event.done + 1} of ${event.total} — ${event.title}`);
+        } else if (event.type === 'done') {
+          summary = `${label}: ${event.done} of ${event.total}${event.failed ? `, ${event.failed} failed` : ''}`;
+        }
+      }
+    }
+    return summary;
+  }
+
+  /** The two sweeps, over every chapter in scope. Independent of the analysis. */
+  async function runSweeps(indexes: number[]) {
+    if (!doRewrite && !doImages) return;
+    const lines: string[] = [];
+    for (const i of indexes) {
+      const chapter = course.chapters[i];
+      if (!chapter) continue;
+      if (doRewrite) lines.push(`${chapter.title} — ${await runSweep('rewrite', chapter.id, 'Rewriting')}`);
+      if (doImages) lines.push(`${chapter.title} — ${await runSweep('images', chapter.id, 'Redrawing')}`);
+      setSweepLog(lines.join('\n'));
+    }
+    setSweepLog(lines.join('\n'));
+  }
+
+  /** Run the sweeps on their own, when no analysis was asked for. */
+  async function runWithoutAnalysis(withWeb: boolean) {
+    const indexes = withWeb ? matches.map((m) => m.mobileIndex) : selected;
+    setError('');
+    setSweepLog('');
+    setResult('');
+    setStep('plan');
+    try {
+      await runSweeps(indexes);
+      setResult('Done. Nothing is on Educative yet.');
+      await onApplied();
+    } catch (e: any) {
+      setError(e?.message || 'Failed');
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function execute() {
     if (!chosen.length) return;
     setError('');
@@ -233,8 +344,11 @@ export function CourseUpdateDialog({
     try {
       const json = await post('augment', { proposals: chosen });
       setLog(json.logs || []);
-      setResult(`${json.added} card${json.added === 1 ? '' : 's'} added, ${json.rewritten} rewritten. Nothing is on Educative yet.`);
       if (json.errors?.length) setError(json.errors.map((e: any) => `${e.id}: ${e.error}`).join('; '));
+      // The sweeps run after the plan, so a card the analysis just added is
+      // swept too rather than being left as the only one untouched.
+      await runSweeps([...new Set(chosen.map((p) => p.chapter_index))].sort((a, b) => a - b));
+      setResult(`${json.added} card${json.added === 1 ? '' : 's'} added, ${json.rewritten} rewritten. Nothing is on Educative yet.`);
       await onApplied();
     } catch (e: any) {
       setError(e?.message || 'Writing the cards failed');
@@ -251,29 +365,31 @@ export function CourseUpdateDialog({
           : 'Select at least one chapter.')}
         {step === 'mapping' && `${matches.reduce((n, m) => n + selectedLessons(m), 0)} web lesson${
           matches.reduce((n, m) => n + selectedLessons(m), 0) === 1 ? '' : 's'} selected across ${matches.length} chapter${matches.length === 1 ? '' : 's'}, from "${webTitle}"`}
-        {step === 'plan' && `${newCards} new card${newCards === 1 ? '' : 's'}, ${rewrites} rewrite${rewrites === 1 ? '' : 's'} selected · published only when you publish the additions`}
+        {step === 'plan' && (doAnalysis
+          ? `${newCards} new card${newCards === 1 ? '' : 's'}, ${rewrites} rewrite${rewrites === 1 ? '' : 's'} selected · published only when you publish the additions`
+          : 'Sweeps only — no card is added · published only when you publish')}
       </span>
       <div className="flex gap-2">
         <button className="btn-secondary text-xs" onClick={onClose} disabled={running}>Close</button>
         {step === 'source' && (validSource ? (
           <>
-            <button className="btn-secondary text-xs" onClick={() => analyse(false)} disabled={running || !selected.length}>
+            <button className="btn-secondary text-xs" onClick={() => go(false)} disabled={running || !selected.length || nothingChosen}>
               Skip the comparison
             </button>
-            <button className="btn-primary text-xs" onClick={mapToWebCourse} disabled={running || !selected.length}>
+            <button className="btn-primary text-xs" onClick={mapToWebCourse} disabled={running || !selected.length || nothingChosen}>
               Pair with the web course
             </button>
           </>
         ) : (
-          <button className="btn-primary text-xs" onClick={() => analyse(false)} disabled={running || !selected.length}>
-            Analyse {selected.length} chapter{selected.length === 1 ? '' : 's'}
+          <button className="btn-primary text-xs" onClick={() => go(false)} disabled={running || !selected.length || nothingChosen}>
+            {goLabel} {selected.length} chapter{selected.length === 1 ? '' : 's'}
           </button>
         ))}
         {step === 'mapping' && (
           <>
             <button className="btn-secondary text-xs" onClick={() => setStep('source')} disabled={running}>Back</button>
-            <button className="btn-primary text-xs" onClick={() => analyse(true)} disabled={running}>
-              Analyse {matches.length} chapter{matches.length === 1 ? '' : 's'}
+            <button className="btn-primary text-xs" onClick={() => go(true)} disabled={running || nothingChosen}>
+              {goLabel} {matches.length} chapter{matches.length === 1 ? '' : 's'}
             </button>
           </>
         )}
@@ -291,15 +407,9 @@ export function CourseUpdateDialog({
 
   return (
     <Modal
-      title={intent === 'new-chapter'
-        ? `Add a chapter after ${course.chapters[scopeChapter ?? 0]?.title || 'this one'}`
-        : intent === 'refresh'
-          ? (scopeChapter === undefined
-            ? 'Update the cards in this course'
-            : `Update the cards in ${course.chapters[scopeChapter]?.title || 'this chapter'}`)
-          : scopeChapter === undefined
-            ? 'Update this course'
-            : `Update ${course.chapters[scopeChapter]?.title || 'this chapter'}`}
+      title={scopeChapter === undefined
+        ? 'Update this course'
+        : `Update ${course.chapters[scopeChapter]?.title || 'this chapter'}`}
       onClose={onClose}
       closeDisabled={running}
       className="max-w-3xl"
@@ -379,20 +489,59 @@ export function CourseUpdateDialog({
                     </span>
                   </p>
                   <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
-                    {intent === 'new-chapter'
-                      ? 'A new chapter will be planned and placed directly after this one. Nothing in it is changed.'
-                      : intent === 'refresh'
-                        ? 'Every card here is reviewed for correctness, wording and length. Lottie, D2 and uploaded pictures are replaced by generated illustrations — the originals are not kept. No card is added.'
-                        : 'Only this chapter is analysed. Its cards may gain additions and rewrites.'}
+                    Only this chapter is worked on.
                   </p>
+
                 </div>
               )}
+            </section>
+
+            {/* Decided before anything runs: analysis, and the two sweeps. */}
+            <section className="rounded-lg border border-[var(--border)] overflow-hidden">
+              <header className="flex items-baseline gap-2 px-3 py-2 bg-[var(--border)]/20 border-b border-[var(--border)]">
+                <span className="text-[10px] font-mono text-[var(--text-faint)]">2</span>
+                <h3 className="text-xs font-semibold text-[var(--text)]">What to do</h3>
+              </header>
+              <div className="px-3 py-2.5 space-y-2">
+                <label className="flex items-start gap-2 cursor-pointer select-none">
+                  <input type="checkbox" className="mt-0.5 shrink-0 accent-[var(--accent)]"
+                    checked={doAnalysis} onChange={(e) => setDoAnalysis(e.target.checked)} disabled={running} />
+                  <span className="text-[11px] leading-snug">
+                    <span className="text-[var(--text)]">Analyse against the web course</span>
+                    <span className="text-[var(--text-faint)]"> — finds material the web course covers and these cards do not, content that is wrong or out of date, and cards failing a check. You review the plan before anything is written.</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 cursor-pointer select-none">
+                  <input type="checkbox" className="mt-0.5 shrink-0 accent-[var(--accent)]"
+                    checked={doRewrite} onChange={(e) => setDoRewrite(e.target.checked)} disabled={running} />
+                  <span className="text-[11px] leading-snug">
+                    <span className="text-[var(--text)]">Rewrite text of all cards</span>
+                    <span className="text-[var(--text-faint)]"> — every card rewritten to the house rules and character limits. No review step.</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 cursor-pointer select-none">
+                  <input type="checkbox" className="mt-0.5 shrink-0 accent-[var(--accent)]"
+                    checked={doImages} onChange={(e) => setDoImages(e.target.checked)} disabled={running} />
+                  <span className="text-[11px] leading-snug">
+                    <span className="text-[var(--text)]">Regenerate all images</span>
+                    <span className="text-amber-700 dark:text-amber-400"> — every picture drawn again in the current style. Lottie, D2, SVG and uploaded originals are replaced for good.</span>
+                  </span>
+                </label>
+                {!doAnalysis && (doRewrite || doImages) && (
+                  <p className="text-[11px] text-[var(--text-faint)]">
+                    No analysis: the selected sweeps run straight away, and no card is added.
+                  </p>
+                )}
+                {!doAnalysis && !doRewrite && !doImages && (
+                  <p className="text-[11px] text-red-500">Pick at least one.</p>
+                )}
+              </div>
             </section>
 
             {/* The reference course */}
             <section className="rounded-lg border border-[var(--border)] overflow-hidden">
               <header className="flex items-baseline gap-2 px-3 py-2 bg-[var(--border)]/20 border-b border-[var(--border)]">
-                <span className="text-[10px] font-mono text-[var(--text-faint)]">2</span>
+                <span className="text-[10px] font-mono text-[var(--text-faint)]">3</span>
                 <h3 className="text-xs font-semibold text-[var(--text)]">Compare against the web course</h3>
                 <span className="ml-auto text-[11px] text-[var(--text-faint)]">optional</span>
               </header>
@@ -427,7 +576,7 @@ export function CourseUpdateDialog({
             {/* Steering */}
             <section className="rounded-lg border border-[var(--border)] overflow-hidden">
               <header className="flex items-baseline gap-2 px-3 py-2 bg-[var(--border)]/20 border-b border-[var(--border)]">
-                <span className="text-[10px] font-mono text-[var(--text-faint)]">3</span>
+                <span className="text-[10px] font-mono text-[var(--text-faint)]">4</span>
                 <h3 className="text-xs font-semibold text-[var(--text)]">Tell the analyst what you want</h3>
                 <span className="ml-auto text-[11px] text-[var(--text-faint)]">optional</span>
               </header>
@@ -436,17 +585,13 @@ export function CourseUpdateDialog({
                   id="course-update-instruction"
                   className="input w-full text-sm"
                   rows={3}
-                  placeholder={intent === 'new-chapter'
-                    ? 'For example: cover the caching building block in 10 cards, with one diagram card.'
-                    : intent === 'refresh'
-                      ? 'For example: correct anything the web course now contradicts, and leave the wording alone otherwise.'
-                      : 'For example: only add cards for material the web course added this year, and keep the chapter under 25 cards.'}
+                  placeholder="For example: only add cards for material the web course added this year, and keep the chapter under 25 cards." 
                   value={instruction}
                   onChange={(e) => setInstruction(e.target.value)}
                   disabled={running}
                 />
                 <div className="flex flex-wrap gap-1.5">
-                  {(intent === 'new-chapter' ? NEW_CHAPTER_HINTS : intent === 'refresh' ? REFRESH_HINTS : UPDATE_HINTS).map((hint) => (
+                  {UPDATE_HINTS.map((hint) => (
                     <button
                       key={hint}
                       className="pill text-[11px] hover:border-[var(--accent)]"
@@ -480,15 +625,27 @@ export function CourseUpdateDialog({
                   {unpaired.length} web chapter{unpaired.length === 1 ? '' : 's'} not paired with anything here
                 </summary>
                 <p className="text-[11px] text-[var(--text-faint)] mt-1">
-                  Most of these belong to parts of the course you are not working on. Add any that should be
-                  compared, with the search box on the chapter below.
+                  Some belong to parts of the course you are not working on — pair those with the search box on
+                  a chapter below. One the mobile course does not cover at all can be generated as a new mobile
+                  chapter, which runs the normal card pipeline and appends it at the end.
                 </p>
-                <ul className="mt-1 max-h-32 overflow-y-auto">
+                <ul className="mt-1 max-h-48 overflow-y-auto space-y-0.5">
                   {unpaired.map((c) => (
-                    <li key={c.index} className="text-[11px] text-[var(--text-dim)] truncate">
-                      <span className="font-mono text-[10px] text-[var(--text-faint)] mr-1">{c.index}</span>
-                      {c.title}
-                      <span className="text-[var(--text-faint)]"> · {c.lessons.length} lesson{c.lessons.length === 1 ? '' : 's'}</span>
+                    <li key={c.index} className="flex items-center gap-2 text-[11px] text-[var(--text-dim)]">
+                      <span className="font-mono text-[10px] text-[var(--text-faint)]">{c.index}</span>
+                      <span className="truncate flex-1">{c.title}</span>
+                      <span className="text-[var(--text-faint)] shrink-0">{c.lessons.length} lesson{c.lessons.length === 1 ? '' : 's'}</span>
+                      {added.includes(c.index) ? (
+                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 shrink-0">added</span>
+                      ) : (
+                        <button
+                          className="text-[10px] rounded border border-[var(--border)] px-1.5 py-0.5 shrink-0 hover:text-[var(--text)] disabled:opacity-50"
+                          disabled={adding !== null || running}
+                          onClick={() => addWebChapter(c.index, c.title)}
+                        >
+                          {adding === c.index ? 'Generating…' : 'Add mobile chapter'}
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -726,6 +883,9 @@ export function CourseUpdateDialog({
               </div>
             ))}
             {result && <p className="text-sm text-emerald-600">{result}</p>}
+            {sweepLog && (
+              <pre className="text-[11px] whitespace-pre-wrap rounded-lg border border-[var(--border)] px-3 py-2 text-[var(--text-dim)]">{sweepLog}</pre>
+            )}
             {log.length > 0 && (
               <details className="text-[11px] text-[var(--text-faint)]">
                 <summary className="cursor-pointer">Generation log ({log.length})</summary>

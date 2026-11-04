@@ -11,7 +11,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { generateText } from './ai';
-import { slugify } from './imageGen';
+import { slugify, IMAGE_QUALITY, IMAGE_FORMAT, IMAGE_EXT } from './imageGen';
 import { buildCardImagePrompt, generateCardImage } from './mobileCoursePipeline';
 import { enforceCharLimits } from './mobileShortsPipeline';
 import type { MobileCard } from './mobileCourseStorage';
@@ -24,16 +24,26 @@ export function cardImageSubfolder(courseId: string, chapterId: string): string 
 
 export type MediaMode = 'd2' | 'recreate' | 'fresh';
 
+/** A picture the image model cannot take as input, so there is nothing to recreate from. */
+export function isUnreadableImage(url: unknown): boolean {
+  // SVG is vector XML, not raster: the edits endpoint rejects it, and a card
+  // carrying one has to be re-illustrated from its words like a Lottie.
+  return /\.svgz?(\?|#|$)/i.test(String(url || ''));
+}
+
 /**
  * Which replacement a card's picture needs, or null when it has none we can
  * better. D2 source is redrawn from the source, a hosted raster is redrawn
- * from the picture itself, and a Lottie animation — which we cannot read at
- * all — is replaced by an illustration drawn from the card's own words.
+ * from the picture itself, and a Lottie animation or an SVG — neither of which
+ * the image model can read — is replaced by an illustration drawn from the
+ * card's own words.
  */
 export function mediaModeFor(card: MobileCard): MediaMode | null {
   if (card.d2Code) return 'd2';
   if (card.lottieUrl || card.remoteKind === 'text-with-animation') return 'fresh';
-  if (/^https?:\/\//.test(String(card.imageUrl || ''))) return 'recreate';
+  if (/^https?:\/\//.test(String(card.imageUrl || ''))) {
+    return isUnreadableImage(card.imageUrl) ? 'fresh' : 'recreate';
+  }
   return null;
 }
 
@@ -41,14 +51,30 @@ export function mediaModeFor(card: MobileCard): MediaMode | null {
 export async function describeD2Diagram(card: MobileCard): Promise<string> {
   const code = String(card.d2Code || '').slice(0, 6000);
   if (!code.trim()) throw new Error('This card has no D2 source to work from');
-  const prompt = `Below is the D2 source of a technical diagram from a lesson titled "${card.title || ''}".
+  // The card's own words say what the diagram is for; the source says what it
+  // contains. A brief written from the source alone reproduces shapes without
+  // understanding them, which is where the technical errors came from.
+  const context = [card.text, card.img_context, card.explanation]
+    .filter(Boolean).join('\n').slice(0, 2000);
+  const prompt = `Below is the D2 source of a technical diagram from a card titled "${card.title || ''}".
 
-Describe the picture it draws, as an illustration brief for an artist who cannot read D2.
-Name every box, group and actor, and every arrow with its label and direction. Keep the same
-wording for labels so the drawing matches the original. Say what the overall shape is
-(left-to-right flow, layered stack, hub and spokes, and so on). No preamble, no markdown,
-one paragraph of at most 120 words.
+Write the illustration brief for an artist who cannot read D2.
 
+Read the source for what it means, not only for what it draws. Work out what the diagram is
+teaching, then describe the picture that teaches it.
+
+Rules:
+- Every component, label and arrow direction must come from the source. Invent nothing, rename
+  nothing, and reverse no arrow. Where the source labels an edge, keep that label's wording.
+- Keep it high-level. Carry across the components that matter to the point being made and drop
+  decorative or repeated ones; say "three workers" rather than naming six identical boxes.
+- Name the overall shape the source actually has — left-to-right flow, layered stack, hub and
+  spokes, cycle, comparison — and do not impose a different one.
+- If the source and the card's words disagree about a name or a direction, follow the source and
+  say so at the end in one short clause.
+
+No preamble, no markdown, one paragraph of at most 120 words.
+${context ? `\nWhat the card teaches:\n${context}\n` : ''}
 D2 source:
 ${code}`;
   const out = await generateText(prompt, { tier: 'normal', maxTokens: 1200, noThinking: true });
@@ -116,10 +142,15 @@ export async function recreateCardImage(
   if (!/^https?:\/\//.test(source)) {
     throw new Error('This card has no hosted image to recreate');
   }
+  // An SVG only named by its content type gets caught below, after the fetch.
+  if (isUnreadableImage(source)) return imageFromText(card, courseId, chapterId, order, note);
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
 
   const { buf, type } = await fetchImageBytes(source);
+  // Some pages serve an SVG from a path that does not say so. The edits
+  // endpoint cannot take it, so fall back to drawing from the card's words.
+  if (/svg/i.test(type)) return imageFromText(card, courseId, chapterId, order, note);
   const brief = `${card.illustration_idea || card.title || ''}`.trim();
   const prompt = `# Images attached
 The attached image is the SUBJECT to recreate: keep what it depicts, its structure, its labels and their wording. Redraw it, do not trace over it.
@@ -130,8 +161,8 @@ ${buildCardImagePrompt({ ...card, illustration_idea: brief || 'the attached diag
   form.append('model', 'gpt-image-2');
   form.append('prompt', prompt);
   form.append('size', '1024x1536');
-  form.append('quality', 'high');
-  form.append('output_format', 'png');
+  form.append('quality', IMAGE_QUALITY);
+  form.append('output_format', IMAGE_FORMAT);
   form.append('image', new Blob([new Uint8Array(buf)], { type }), 'source.png');
 
   const res = await fetch('https://api.openai.com/v1/images/edits', {
@@ -147,7 +178,7 @@ ${buildCardImagePrompt({ ...card, illustration_idea: brief || 'the attached diag
   const subfolder = cardImageSubfolder(courseId, chapterId);
   const dir = path.join(IMAGES_DIR, ...subfolder.split('/'));
   await fs.mkdir(dir, { recursive: true });
-  const filename = `recreated${order}-${crypto.randomBytes(4).toString('hex')}.png`;
+  const filename = `recreated${order}-${crypto.randomBytes(4).toString('hex')}.${IMAGE_EXT}`;
   await fs.writeFile(path.join(dir, filename), Buffer.from(b64, 'base64'));
 
   return {
@@ -179,12 +210,36 @@ export async function imageFromText(
   if (!body.trim()) throw new Error('This card has no text to illustrate');
 
   const idea = (await generateText(
-    `Below is a mobile learning card. Write the illustration brief for one technical diagram that
-teaches what the card teaches, for an artist who has not read it.
+    `Below is a mobile learning card whose picture cannot be read and has to be drawn again from
+the card itself. Write the illustration brief for one technical diagram, for an artist who has
+not read the card.
 
-Name every box, actor and arrow, with the label each one carries and the direction it points.
-Say what the overall shape is (left-to-right flow, layered stack, hub and spokes, and so on).
-Draw only what the card states — invent no component, number or product name.
+The card's prose and this picture teach one concept between them. They are not two tellings of
+the same thing. The prose already carries the reasoning — why it matters, what it costs, when it
+does not hold — so the picture must carry what prose is bad at: the structure, the order, the
+relationship, the comparison, the shape of the thing.
+
+So: find the part of the concept the prose states but cannot show, and draw that. A reader who
+has read the prose should still learn something from the picture; a reader who has only the
+picture should still need the prose. If your brief could be replaced by reading the card aloud,
+it is the wrong brief.
+
+Rules:
+- Draw only what the card states. Invent no component, number, product name or relationship, and
+  do not fill the picture out with plausible architecture the card never mentions. This is where
+  these conversions go wrong: a picture that looks right and says something the card does not.
+- Keep it high-level: three to six elements. A picture that teaches one thing clearly beats one
+  that covers the whole card.
+- Never set the card's sentences in the picture. Labels name things — a component, a step, an
+  axis, a side of a comparison — they do not restate the prose. No caption, no title, no summary
+  line, and no bullet list of what the card already says.
+- Name every box, actor and arrow you do include, with its label and the direction it points,
+  using the card's own wording for names.
+- Say what the overall shape is — left-to-right flow, layered stack, hub and spokes, comparison,
+  cycle — choosing the one the card's content actually has.
+- If the card does not describe anything a diagram can show, say so in one sentence instead of
+  inventing a diagram.
+
 No preamble, no markdown, one paragraph of at most 120 words.
 
 Card:
@@ -214,6 +269,36 @@ ${body}`,
     lottieName: undefined,
     regeneratedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Draw a card's picture again from the brief it already has.
+ *
+ * Nothing about the card changes but the picture, so this is what a style
+ * change or a prompt change needs: the card already carries an illustration
+ * idea of our own, and only the drawing is out of date.
+ */
+export async function redrawCardImage(
+  card: MobileCard,
+  courseId: string,
+  chapterId: string,
+  order: number,
+  note = '',
+): Promise<MobileCard> {
+  if (card.readOnly) throw new Error('This card is read-only; replace its media first');
+  const brief = String(card.illustration_idea || '').trim();
+  // No brief of our own to draw from — work one out from the card's words.
+  if (!brief) return imageFromText(card, courseId, chapterId, order, note);
+
+  const draft: MobileCard = note ? { ...card, illustration_idea: `${brief}\n\nAlso: ${note}` } : card;
+  const url = await generateCardImage(draft, order, courseId, chapterId);
+  if (!url) throw new Error('Image generation failed');
+  return { ...card, imageUrl: url, regeneratedAt: new Date().toISOString() };
+}
+
+/** Whether a card carries a picture at all, replaceable or our own. */
+export function hasPicture(card: MobileCard): boolean {
+  return !!mediaModeFor(card) || card.type === 'text_img' || card.type === 'img_only';
 }
 
 /** Run whichever replacement a card needs. */

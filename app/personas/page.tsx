@@ -8,6 +8,7 @@ type Persona = {
   name: string;
   body: string;
   builtin: boolean;
+  imageStyleId?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -119,6 +120,11 @@ export default function PersonasPage() {
                   {p.body ? p.body.split('\n')[0].slice(0, 120) : '(empty)'}
                 </div>
               </Link>
+              {p.imageStyleId && (
+                <span className="pill text-[10px]" title="Illustrations use this persona's own image style">
+                  own image style
+                </span>
+              )}
               <span className={`pill ${p.builtin ? '' : 'pill-success'}`}>
                 {p.builtin ? 'built-in' : 'custom'}
               </span>

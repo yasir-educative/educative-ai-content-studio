@@ -9,6 +9,7 @@
 // whole-course route skipped it. This is the whole-course version.
 
 import { uploadLessonImageFromUrl } from './courseEducative';
+import { applyScenarioHeadings, normalizeScenarioCardType, scenarioHeadings } from './mobileCardTypes';
 import type { MobileCard } from './mobileCourseStorage';
 import { pageContent, remoteContentHash } from './remoteContent';
 
@@ -184,15 +185,19 @@ export function buildCardComponents(
 
     case 'scenarioCard': {
       const t = resolveComponentTitle(card, pageTitle, 'Scenario Card');
+      // The variant owns the headings, so publish them from it rather than from
+      // whatever the card happens to carry.
+      const scenarioType = normalizeScenarioCardType(card.scenarioType, card.sections);
+      const headings = scenarioHeadings(scenarioType);
       const payload: any = {
         type: 'scenarioCard',
         title: t,
         sections: (card.sections || [])
-          .map((s) => ({ heading: safeStr(s.heading), content: safeStr(s.content) }))
+          .map((s, i) => ({ heading: safeStr(headings?.[i] ?? s.heading), content: safeStr(s.content) }))
           .filter((s) => s.heading || s.content),
         explanation: safeStr(card.explanation),
       };
-      if (card.scenarioType) payload.scenarioType = card.scenarioType;
+      if (scenarioType) payload.scenarioType = scenarioType;
       return {
         components: [makeFlashCard(t, 'custom', '', JSON.stringify(payload), 1, 3), makeSlateHTML(true)],
         summary: { title: t, titleUpdated: true },
@@ -401,6 +406,12 @@ export function parseMobileCard(
       payload.output_available = String(payload.output_available) === 'true';
       if (payload.card_number !== '' && payload.card_number !== undefined) payload.card_number = Number(payload.card_number);
       else delete payload.card_number;
+    }
+    // A published scenario can carry a variant this app no longer offers, or
+    // none at all. Read it back from the headings before the editor sees it.
+    if (payload.type === 'scenarioCard') {
+      payload.scenarioType = normalizeScenarioCardType(payload.scenarioType, payload.sections);
+      Object.assign(payload, applyScenarioHeadings(payload));
     }
     return { ...payload, ...base, title };
   } catch (e: any) {

@@ -26,7 +26,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   try {
     const web = await fetchWebOutline(authorId, sourceCollectionId);
-    const matches = await mapChapters(course, web, mobileIndexes);
+    // Picking chapters to generate needs the outline, not the pairing, and the
+    // pairing is a model call — skip it when only the list is wanted.
+    const matches = body.outlineOnly ? [] : await mapChapters(course, web, mobileIndexes);
     // An imported course does not know where it came from. Remember it once the
     // read succeeds, so the author types the ID only the first time.
     if (course.collectionId !== sourceCollectionId) {

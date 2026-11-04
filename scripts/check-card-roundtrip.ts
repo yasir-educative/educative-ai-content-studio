@@ -13,6 +13,13 @@ const t = (name: string, ok: boolean, detail = '') => {
 const CARDS: MobileCard[] = [
   { id: 'c1', type: 'text', title: 'Two words', text: 'x'.repeat(380) },
   { id: 'c2', type: 'highlightCard', title: 'Key point', text: 'y'.repeat(115), highlightCardType: 'key-insight' },
+  { id: 'c3', type: 'scenarioCard', title: 'Cache drift', scenarioType: 'how-would-you-fix',
+    sections: [
+      { heading: 'What went wrong', content: 'z'.repeat(110) },
+      { heading: "Why it's wrong", content: 'z'.repeat(110) },
+      { heading: 'The fix', content: 'z'.repeat(210) },
+    ],
+    explanation: 'Invalidate on write.' },
   { id: 'c3', type: 'quiz', title: 'Check it', question: 'What is it?',
     options: [{ id: 1, text: 'A' }, { id: 2, text: 'B' }, { id: 3, text: 'C' }], correctAnswer: 2,
     incorrectMessage: 'Not quite' },

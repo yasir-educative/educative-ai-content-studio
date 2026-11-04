@@ -1,5 +1,5 @@
 import { CARD_LIMITS } from './mobileCardLimits';
-import { PLANNER_CARD_TYPES, highlightCardTypeGuide, plannerToCardType, type MobileCardType } from './mobileCardTypes';
+import { PLANNER_CARD_TYPES, highlightCardTypeGuide, plannerToCardType, scenarioCardTypeGuide, type MobileCardType } from './mobileCardTypes';
 
 function targetBand(type: MobileCardType, index = 0, separator = '–'): string {
   return CARD_LIMITS[type]![index].target!.join(separator);
@@ -57,6 +57,7 @@ export function cardsGeneratorPrompt({
   cardPlan,
   topicDetails,
   highlightInstructions,
+  scenarioInstructions,
   isHighlightCardNeeded,
   numCards,
   level,
@@ -67,7 +68,9 @@ export function cardsGeneratorPrompt({
   cardPlan: string;
   topicDetails?: string;
   highlightInstructions?: string;
+  scenarioInstructions?: string;
   isHighlightCardNeeded?: boolean;
+  isScenarioCardNeeded?: boolean;
   numCards?: number;
   level?: string;
   objective?: string;
@@ -109,7 +112,7 @@ The \`content\` field of every TEXT_IMG card must be a **single prose paragraph*
     - TEXT → content: ${targetBand('text')} chars
     - TEXT_IMG → content: ${targetBand('text_img')} chars
     - HIGHLIGHT → content: ${targetBand('highlightCard')} chars
-    - SCENARIO → each section's content: ${targetBand('scenarioCard')} chars (Context/Why), ${targetBand('scenarioCard', 1)} chars (The Fix)
+    - SCENARIO → tabs 1 and 2: ${targetBand('scenarioCard')} chars each; tab 3: ${targetBand('scenarioCard', 1)} chars. Every tab has a minimum, not just a maximum.
 
 # Editorial and Tone Guidelines (Strict)
 - Voice: Peer-to-peer, senior engineer tone. Practical, calm, and grounded in production reality.
@@ -164,6 +167,9 @@ All titles must be 2–5 words. All titles and list items must be in sentence ca
 - **Workload split:**
   - Diagram owns: the steps, components, flow, and structure.
   - Text owns: the insight those steps produce — the trade-off, the failure mode, the consequence, the definition, the "so what."
+  - Neither repeats the other. Between them they teach one concept; alone, each is incomplete.
+  - The text stands on its own. It never refers to the picture — no "as shown above", "the diagram below", "see the figure", "this illustrates". A reader with no picture must still get a complete thought.
+  - The text is never a caption for the picture, and the picture is never the text set in a box.
 - **How to convert steps to prose (required technique):**
   1. List the steps mentally (do NOT write them out).
   2. Ask: "What is the key insight or consequence when all these steps complete?"
@@ -195,11 +201,16 @@ Set \`highlightCardType\` to exactly one of:
 ${highlightCardTypeGuide()}
 ${highlightInstructions || (isHighlightCardNeeded ? 'Follow the fixed plan; at most one highlight.' : 'HIGHLIGHT is disabled.')}
 ## 5. SCENARIO (Critical Thinking)
-Lengths: ${targetBand('scenarioCard')} chars (Context/Why), ${targetBand('scenarioCard', 1)} chars (The Fix)
-Tabs: Use ONLY these matching pairs:
-- \`how-would-you-fix\`: ["What went wrong", "Why it's wrong", "The fix"]
-- \`whats-going-on\`: ["The Context", "What it Implies", "Key Takeaway"]
-- \`what-would-you-do\`: ["The Situation", "Risks and Impact", "Recommended approach"]
+Lengths, counted per tab and all three mandatory:
+- Tab 1: ${targetBand('scenarioCard')} chars
+- Tab 2: ${targetBand('scenarioCard')} chars
+- Tab 3: ${targetBand('scenarioCard', 1)} chars — the longest tab, roughly twice either of the first two
+A tab of one short sentence is wrong. Tabs 1 and 2 are two or three sentences each; tab 3 states the
+fix or recommendation and says why it works. Count the characters of each tab before returning it.
+Set \`scenarioType\` to exactly one of the three below, and use that type's three tab headings,
+in that order, spelled exactly as written. Never mix headings across types, and never invent one.
+${scenarioCardTypeGuide()}
+${scenarioInstructions || 'Follow the fixed plan.'}
 # Output Format (JSON)
 Return one JSON object per card, with ONLY:
 - \`card_number\` (from plan, unchanged)
@@ -222,17 +233,20 @@ If both checks pass, the card is ready to output.`;
 }
 
 export function shortsJsonGeneratorPrompt({
-  cardsOutput, isHighlightCardNeeded, highlightInstructions,
+  cardsOutput, isHighlightCardNeeded, highlightInstructions, isScenarioCardNeeded, scenarioInstructions,
 }: {
   cardsOutput: string;
   isHighlightCardNeeded?: boolean;
   highlightInstructions?: string;
+  isScenarioCardNeeded?: boolean;
+  scenarioInstructions?: string;
 }): string {
   return `Convert the supplied cards into { "cards": [...] } using the strict response schema.
 Preserve card_number, title, and exact content. Do not add, drop, expand, summarize, or rewrite cards.
 Use canonical types from the schema; the input's planner names map to their canonical equivalents.
 ${PLANNER_CARD_TYPES.map((type) => `${type} becomes ${plannerToCardType[type]}`).join(', ')}.
 Put content in text for text, text_img, and highlightCard. Preserve scenario sections and scenarioType.
+Scenario tab headings belong to the scenarioType and must be copied through unchanged.
 Use null for unused fields, not invented content. Preserve Markdown and raw characters exactly.
 For text-with-code preserve text_1, text_2, language, and code. For code-with-output preserve output_available and output.
 For comparisons preserve heading and both options. For recaps preserve content as heading/text pairs.
@@ -240,6 +254,7 @@ For quizzes map quiz_options to options (id/text), answer to correctAnswer, and 
 For true/false preserve correctAnswer and explanation. For fillInTheBlank preserve options and correctOptions and use the literal token "_blank_" in the question.
 For highlights preserve highlightCardType. For scenarios preserve sections, explanation, and scenarioType.
 ${highlightInstructions || (isHighlightCardNeeded ? 'Keep any assigned HIGHLIGHT card.' : 'HIGHLIGHT is disabled.')}
+${scenarioInstructions || (isScenarioCardNeeded ? 'Keep any assigned SCENARIO card.' : 'SCENARIO is disabled.')}
 Input to convert:
 ${cardsOutput}`;
 }

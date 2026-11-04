@@ -40,6 +40,8 @@ export default function NewMobileCoursePage() {
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState('');
   const [courseTitle, setCourseTitle] = useState('');
+  // Scenario cards are opt-in per run, the same way highlights are in shorts.
+  const [includeScenario, setIncludeScenario] = useState(false);
   const [chapters, setChapters] = useState<ChapterRef[]>([]);
 
   // ── New topic state ───────────────────────────────────────────────────────
@@ -118,6 +120,7 @@ export default function NewMobileCoursePage() {
           authorId: authorId.trim(),
           courseTitle,
           previewedChapters: selectedChapters,
+          isScenarioCardNeeded: includeScenario,
         }),
         signal: abortRef.current.signal,
       });
@@ -237,6 +240,7 @@ export default function NewMobileCoursePage() {
           authorId: authorId.trim(),
           courseTitle: generatedCourseName || newTopic,
           previewedChapters: selectedChapters,
+          isScenarioCardNeeded: includeScenario,
         }),
         signal: abortRef.current.signal,
       });
@@ -389,6 +393,11 @@ export default function NewMobileCoursePage() {
               </p>
             </div>
             <div className="flex gap-2">
+              <label className="flex items-center gap-1.5 cursor-pointer select-none mr-1">
+                <input type="checkbox" className="accent-[var(--accent)]"
+                  checked={includeScenario} onChange={(e) => setIncludeScenario(e.target.checked)} />
+                <span className="text-xs text-[var(--text-dim)]">Scenario cards</span>
+              </label>
               <button className="btn-secondary text-sm" onClick={() => setStep('existing-input')}>← Back</button>
               <button
                 className="btn-primary text-sm"
@@ -505,6 +514,11 @@ export default function NewMobileCoursePage() {
               </p>
             </div>
             <div className="flex gap-2 shrink-0">
+              <label className="flex items-center gap-1.5 cursor-pointer select-none mr-1">
+                <input type="checkbox" className="accent-[var(--accent)]"
+                  checked={includeScenario} onChange={(e) => setIncludeScenario(e.target.checked)} />
+                <span className="text-xs text-[var(--text-dim)]">Scenario cards</span>
+              </label>
               <button className="btn-secondary text-sm" onClick={() => setStep('new-input')}>← Back</button>
               <button
                 className="btn-primary text-sm"

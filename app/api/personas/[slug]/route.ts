@@ -11,11 +11,15 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
 
 export async function PUT(req: Request, { params }: { params: { slug: string } }) {
   const body = await req.json().catch(() => null);
-  if (!body || (body.body === undefined && body.name === undefined)) {
-    return NextResponse.json({ error: 'body or name required' }, { status: 400 });
+  if (!body || (body.body === undefined && body.name === undefined && body.imageStyleId === undefined)) {
+    return NextResponse.json({ error: 'body, name or imageStyleId required' }, { status: 400 });
   }
   try {
-    const updated = await savePersona(params.slug, { body: body.body, name: body.name });
+    const updated = await savePersona(params.slug, {
+      body: body.body,
+      name: body.name,
+      imageStyleId: body.imageStyleId === undefined ? undefined : String(body.imageStyleId ?? ''),
+    });
     return NextResponse.json(updated);
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || String(e) }, { status: 400 });

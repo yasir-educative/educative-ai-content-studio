@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { IMAGE_QUALITY, IMAGE_FORMAT, IMAGE_EXT } from '@/lib/imageGen';
 
 export const runtime = 'nodejs';
 
@@ -62,7 +63,8 @@ export async function POST(req: NextRequest) {
     formData.append('model', 'gpt-image-2');
     formData.append('prompt', prompt);
     formData.append('size', detectSize(imageBuffer));
-    formData.append('quality', 'low');
+    formData.append('quality', IMAGE_QUALITY);
+    formData.append('output_format', IMAGE_FORMAT);
     const arrayBuffer = imageBuffer.buffer.slice(
       imageBuffer.byteOffset,
       imageBuffer.byteOffset + imageBuffer.byteLength,
@@ -90,7 +92,7 @@ export async function POST(req: NextRequest) {
     const editedBuffer = Buffer.from(b64, 'base64');
     const dir = path.dirname(resolved.filePath);
     const hash = crypto.randomBytes(4).toString('hex');
-    const editedFilename = `edited-${hash}.png`;
+    const editedFilename = `edited-${hash}.${IMAGE_EXT}`;
     const editedFilePath = path.join(dir, editedFilename);
     await fs.writeFile(editedFilePath, editedBuffer);
 

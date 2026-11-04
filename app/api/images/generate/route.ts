@@ -3,8 +3,8 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { checkSize, IMAGE_FORMATS, IMAGE_MODELS, IMAGE_QUALITIES } from '@/lib/educativeImageStyle';
-import { getImageStyle } from '@/lib/imageStyleStore';
-import { readReferenceBytes } from '@/lib/referenceImageStore';
+import { IMAGE_FORMAT } from '@/lib/imageGen';
+import { getStyleById, readStyleReference } from '@/lib/imageStyleStore';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
     let mode: 'create' | 'edit' = 'create';
     let model = IMAGE_MODELS[0] as string;
     let quality = 'high';
-    let format = 'png';
+    let format = IMAGE_FORMAT as string;
     let compression: string | number = '';
     let width = 0;
     let height = 0;
@@ -120,7 +120,10 @@ export async function POST(req: NextRequest) {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) return NextResponse.json({ error: 'OPENAI_API_KEY is not set' }, { status: 500 });
 
-    const reference = useReference ? await readReferenceBytes() : null;
+    // The reference picture belongs to the style, so it follows whichever one
+    // is selected rather than being a single global image.
+    const style = getStyleById(styleId);
+    const reference = useReference ? await readStyleReference(style.id) : null;
     const hasSubject = !!(upload || sourceBuf);
 
     // An edit works inside an image that already follows the house style, so
@@ -130,7 +133,7 @@ export async function POST(req: NextRequest) {
     let prompt = mode === 'edit'
       ? instructions
       : styleApplied
-        ? `${getImageStyle(styleId).style}\n\n# Create\n${instructions}`
+        ? `${style.body}\n\n# Create\n${instructions}`
         : `# Create\n${instructions}`;
 
     // With two images the model needs to be told which is which, and in what
@@ -218,7 +221,7 @@ export async function POST(req: NextRequest) {
       usedReference: !!reference,
       usedSubject: hasSubject,
       styleApplied,
-      styleName: styleApplied ? getImageStyle(styleId).name : null,
+      styleName: styleApplied ? style.name : null,
       size: `${width}x${height}`,
     });
   } catch (e: any) {

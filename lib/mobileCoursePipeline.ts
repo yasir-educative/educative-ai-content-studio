@@ -8,15 +8,16 @@ import { generateText, generateJSON, parseJsonLoose } from './ai';
 import { fetchCollectionWithContent, fetchLessonContent, CollectionChapterData } from './courseEducative';
 import { generateGptImage, slugify } from './imageGen';
 import type { MobileCard, MobileCardType, MobileChapter } from './mobileCourseStorage';
-import { normalizeCardType, normalizeHighlightCardType, isHighlightCardType, coursePlannerToCardType, type CoursePlannerType } from './mobileCardTypes';
+import { applyScenarioHeadings, normalizeCardType, normalizeHighlightCardType, normalizeScenarioCardType,
+  isHighlightCardType, coursePlannerToCardType, type CoursePlannerType } from './mobileCardTypes';
 import {
   registeredCardPlannerPrompt,
   registeredCardsGeneratorPrompt,
   registeredCardTextRefinerPrompt,
 } from './mobileCoursePromptsRegistry';
 
-import { COURSE_PROFILE, chapterContainsCode, decideTypes, type PlannedCourseCard } from './cardTypeDecider';
-import { COURSE_PLANNER_SCHEMA, SHORTS_CARDS_SCHEMA } from './mobileShortsSchemas';
+import { courseProfile, chapterContainsCode, decideTypes, type PlannedCourseCard } from './cardTypeDecider';
+import { coursePlannerSchema, SHORTS_CARDS_SCHEMA } from './mobileShortsSchemas';
 import { enforceTextImgProse, enforceCharLimits } from './mobileShortsPipeline';
 import { COURSE_CARD_LIMITS, checkCards } from './mobileCardLimits';
 import { finishCards } from './mobileCardRepair';
@@ -47,6 +48,8 @@ export interface MobileCourseInput {
   courseTitle?: string;
   targetCollectionId?: string;
   previewedChapters?: PreviewedChapter[];
+  /** Scenario cards are opt-in per run and default off. */
+  isScenarioCardNeeded?: boolean;
 }
 
 export interface MobileCourseEvent {
@@ -194,7 +197,7 @@ function mapRawCard(raw: any, index: number): MobileCard {
       })()
     : undefined;
 
-  return {
+  return applyScenarioHeadings({
     id: raw.id || `card-${index + 1}`,
     type,
     card_number: Number(raw.card_number || index + 1),
@@ -221,9 +224,9 @@ function mapRawCard(raw: any, index: number): MobileCard {
     explanation: raw.explanation || '',
     correctOptions: raw.correctOptions || raw.correct_options,
     sections,
-    scenarioType: raw.scenarioType || raw.scenario_type || raw.content?.scenario_type || '',
+    scenarioType: normalizeScenarioCardType(raw.scenarioType || raw.scenario_type || raw.content?.scenario_type, sections),
     highlightCardType: normalizeHighlightCardType(raw.highlightCardType || raw.highlight_card_type),
-  };
+  });
 }
 
 // ── Image prompt builder ─────────────────────────────────────────────────────
@@ -266,12 +269,13 @@ export async function processChapter(
   courseId: string,
   chapterId: string,
   emit: MobileCourseEmit,
+  scenario = false,
 ): Promise<MobileCard[]> {
   // Stage 1: Card Planner
   emit({ type: 'stage', name: `${chapterId}-card-planner`, status: 'start' });
   const plannerOut = await generateJSON<{ cards: CoursePlanCard[] }>(
     registeredCardPlannerPrompt({ courseTitle, chapterTitle, lessonList: lessonTitles.join(', '), content: content.slice(0, 6000) }),
-    COURSE_PLANNER_SCHEMA, { name: 'course_card_plan', tier: 'main', maxTokens: 8000 },
+    coursePlannerSchema(scenario), { name: 'course_card_plan', tier: 'main', maxTokens: 8000 },
   );
   const cardPlan = [...plannerOut.cards].sort((a, b) => a.card_number - b.card_number)
     .map((card, index) => ({ ...card, card_number: index + 1 }));
@@ -292,7 +296,7 @@ export async function processChapter(
   const decided = await decideTypes(plan, {
     topic: `${courseTitle}: ${chapterTitle}`, additionalContext: lessonTitles.join(', '),
     sourceHasCode: chapterContainsCode(content),
-  }, log, COURSE_PROFILE);
+  }, log, courseProfile(scenario));
   emit({ type: 'data', name: `${chapterId}-card-type-decision`, payload: { cards: decided } });
   emit({ type: 'stage', name: `${chapterId}-card-type-decision`, status: 'done' });
   const fixedPlan = cardPlan.map((card, index) => ({ ...card, card_type: decided[index].decision.chosen }));
@@ -485,6 +489,7 @@ export async function runMobileCoursePipeline(
           courseId,
           chapterId,
           emit,
+          !!input.isScenarioCardNeeded,
         );
 
         chapter.cards = cards;

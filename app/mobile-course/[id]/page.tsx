@@ -5,11 +5,13 @@ import Link from 'next/link';
 // The card shape, the gate and the rewrite dialog all come from the shared
 // modules so the page cannot drift from what the server enforces.
 import type { MobileCard } from '@/lib/mobileCourseStorage';
-import { HighlightTypePicker } from '@/app/_components/HighlightTypePicker';
+import { HighlightTypePicker, ScenarioTypePicker } from '@/app/_components/HighlightTypePicker';
+import { applyScenarioHeadings } from '@/lib/mobileCardTypes';
 import { checkCard, checkCourse } from '@/lib/mobileCardLimits';
 import { CardIssues, CardIssueSummary } from '@/app/_components/CardIssues';
 import { CardRewriteControl, CardRegenerateButton } from '@/app/_components/CardRewriteControl';
 import { CourseUpdateDialog } from '@/app/_components/CourseUpdateDialog';
+import { AddWebChaptersDialog } from '@/app/_components/AddWebChaptersDialog';
 
 interface MobileChapter {
   id: string;
@@ -886,6 +888,11 @@ function CardView({
 
           return (
             <div className="space-y-1.5">
+              <ScenarioTypePicker
+                value={String(card.scenarioType || '')}
+                readOnly={!onUpdate}
+                onChange={(id) => onUpdate?.(applyScenarioHeadings({ ...card, scenarioType: id }))}
+              />
               {allItems.map((item, i) => {
                 const isOpen = openScenarioIdx === i;
                 const c = scenarioColor(item.heading, i);
@@ -1336,13 +1343,14 @@ function CardEditorModal({
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-[var(--text-faint)]">Scenario type</label>
-                <select className="input text-sm" value={draft.scenarioType || ''} onChange={(e) => upd({ scenarioType: e.target.value })}>
-                  <option value="">— select —</option>
-                  <option value="how-would-you-fix">how-would-you-fix</option>
-                  <option value="whats-going-on">whats-going-on</option>
-                  <option value="what-would-you-do">what-would-you-do</option>
-                  <option value="how-should-this-evolve">how-should-this-evolve</option>
-                </select>
+                <ScenarioTypePicker
+                  value={draft.scenarioType || ''}
+                  onChange={(id) => {
+                    const next = applyScenarioHeadings({ ...draft, scenarioType: id });
+                    setSectionsRaw(JSON.stringify(next.sections || [], null, 2));
+                    upd({ scenarioType: id, sections: next.sections });
+                  }}
+                />
               </div>
             </>
           )}
@@ -1518,7 +1526,12 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
   const [chapterPublishResult, setChapterPublishResult] = useState<Record<string, string>>({});
   // Which chapter the update dialog is scoped to, and what it is being asked
   // for. `undefined` scope means the whole course.
-  const [update, setUpdate] = useState<{ chapter?: number; intent: 'gaps' | 'refresh' | 'new-chapter' } | null>(null);
+  const [update, setUpdate] = useState<{ chapter?: number } | null>(null);
+  // Chapter id whose pictures are being redrawn, and where that has got to.
+  const [imagesBusy, setImagesBusy] = useState<string | null>(null);
+  const [imagesProgress, setImagesProgress] = useState('');
+  // Open the web-chapter picker. A number fixes the position; null uses the web order.
+  const [addWeb, setAddWeb] = useState<{ insertAt?: number } | null>(null);
   const [mediaCardId, setMediaCardId] = useState<string | null>(null);
   const [publishingAdds, setPublishingAdds] = useState(false);
   const [addResult, setAddResult] = useState<string | null>(null);
@@ -1679,6 +1692,57 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
   }
 
   /** Replace a card's Educative-authored diagram or photo with a generated image. */
+  /**
+   * Draw every picture in a chapter again.
+   *
+   * Educative's own media is replaced; a picture of ours is redrawn from the
+   * brief it already has, which is what a style or prompt change needs.
+   */
+  async function regenerateChapterImages(chapterId: string, title: string, count: number) {
+    if (imagesBusy) return;
+    if (!confirm(
+      `Redraw every picture in "${title}"? ${count} card${count === 1 ? '' : 's'} will be regenerated, `
+      + 'and any Lottie, D2, SVG or uploaded original is replaced for good. Nothing is published.',
+    )) return;
+    setImagesBusy(chapterId);
+    setImagesProgress('');
+    setAddResult(null);
+    try {
+      const res = await fetch(`/api/mobile-course/${params.id}/chapters/${chapterId}/images`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      });
+      if (!res.body) throw new Error('No response from the server');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let summary = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const event = JSON.parse(line.slice(6));
+          if (event.type === 'card' && event.status === 'start') {
+            setImagesProgress(`${event.done + 1} of ${event.total}: ${event.title}`);
+          } else if (event.type === 'done') {
+            summary = `Redrew ${event.done} of ${event.total} picture${event.total === 1 ? '' : 's'}`
+              + (event.failed ? `, ${event.failed} failed` : '');
+          }
+        }
+      }
+      setAddResult(summary || 'Nothing to redraw');
+      await load();
+    } catch (e: any) {
+      setAddResult(`Error: ${e?.message}`);
+    } finally {
+      setImagesBusy(null);
+      setImagesProgress('');
+    }
+  }
+
   async function convertMedia(chapterId: string, card: MobileCard, mode: 'd2' | 'recreate' | 'fresh') {
     setMediaCardId(card.id);
     setAddResult(null);
@@ -1835,17 +1899,8 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
 
         <div className="p-3 border-t border-[var(--border)] space-y-2">
           {hasPublishedCards && (
-            <button className="btn-secondary w-full text-xs" onClick={() => setUpdate({ intent: 'gaps' })}>
+            <button className="btn-secondary w-full text-xs" onClick={() => setUpdate({})}>
               Update course…
-            </button>
-          )}
-          {hasPublishedCards && (
-            <button
-              className="btn-secondary w-full text-xs"
-              onClick={() => setUpdate({ intent: 'refresh' })}
-              title="Review the cards you already have: content, lengths, and generated illustrations in place of Lottie, D2 and uploaded pictures"
-            >
-              Update cards…
             </button>
           )}
           {hasPublishedCards && unpublished.length > 0 && (
@@ -1935,22 +1990,34 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
                   <>
                     <button
                       className="btn-secondary text-xs px-3 py-1.5"
-                      onClick={() => setUpdate({ chapter: activeChapter, intent: 'gaps' })}
+                      onClick={() => setUpdate({ chapter: activeChapter })}
                       title="Analyse this chapter against the web course and plan what it needs"
                     >
                       Update chapter…
                     </button>
+                    {(() => {
+                      const chapter = course.chapters[activeChapter];
+                      const pictures = (chapter?.cards || []).filter(
+                        (k) => k.type === 'text_img' || k.type === 'img_only' || k.d2Code || k.lottieUrl
+                          || /^https?:\/\//.test(String(k.imageUrl || '')),
+                      ).length;
+                      if (!chapter || !pictures) return null;
+                      const running = imagesBusy === chapter.id;
+                      return (
+                        <button
+                          className="btn-secondary text-xs px-3 py-1.5"
+                          disabled={!!imagesBusy}
+                          onClick={() => regenerateChapterImages(chapter.id, chapter.title, pictures)}
+                          title="Draw every picture in this chapter again in the current style. Lottie, D2, SVG and uploaded originals are replaced for good."
+                        >
+                          {running ? (imagesProgress || 'Redrawing…') : `Regenerate images (${pictures})`}
+                        </button>
+                      );
+                    })()}
                     <button
                       className="btn-secondary text-xs px-3 py-1.5"
-                      onClick={() => setUpdate({ chapter: activeChapter, intent: 'refresh' })}
-                      title="Review every card here: content, lengths, and a generated illustration in place of any Lottie, D2 or uploaded picture"
-                    >
-                      Update cards…
-                    </button>
-                    <button
-                      className="btn-secondary text-xs px-3 py-1.5"
-                      onClick={() => setUpdate({ chapter: activeChapter, intent: 'new-chapter' })}
-                      title="Plan a new chapter to go directly after this one"
+                      onClick={() => setAddWeb({ insertAt: activeChapter + 1 })}
+                      title="Pick web chapters and generate them with the normal card pipeline, directly after this one"
                     >
                       Add chapter after…
                     </button>
@@ -2051,11 +2118,19 @@ export default function MobileCourseDetailPage({ params }: { params: { id: strin
         />
       )}
 
+      {addWeb && (
+        <AddWebChaptersDialog
+          course={{ id: params.id, collectionId: course.collectionId }}
+          insertAt={addWeb.insertAt}
+          onClose={() => setAddWeb(null)}
+          onDone={load}
+        />
+      )}
+
       {update && (
         <CourseUpdateDialog
           course={course}
           scopeChapter={update.chapter}
-          intent={update.intent}
           onClose={() => setUpdate(null)}
           onApplied={load}
         />

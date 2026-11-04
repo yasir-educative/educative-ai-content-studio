@@ -1,4 +1,4 @@
-import { COURSE_PLANNER_TYPES, shortsPlannerTypes, type CoursePlannerType, type ShortsPlannerType } from './mobileCardTypes';
+import { coursePlannerTypes, shortsPlannerTypes, type CoursePlannerType, type ShortsPlannerType } from './mobileCardTypes';
 import { COURSE_TYPE_DESCRIPTIONS } from './mobilePrompts';
 import { getAbortSignal } from './abortContext';
 
@@ -17,19 +17,28 @@ export interface CardTypeDecision<T extends string = ShortsPlannerType | CourseP
   planner: T;
   chosen: T;
   probabilities: Partial<Record<T, number>>;
-  backend: 'decisions' | 'planner-fallback';
+  backend: 'decisions' | 'planner-fallback' | 'planner-pinned';
 }
 
 export type DecidedCard<T extends string> = PlannedCard<T> & { decision: CardTypeDecision<T> };
 export type DecidedShortCard = DecidedCard<ShortsPlannerType>;
 export interface DecisionContext {
   topic: string; level?: string; objective?: string; additionalContext?: string;
-  isHighlightCardNeeded?: boolean; sourceHasCode?: boolean;
+  isHighlightCardNeeded?: boolean; isScenarioCardNeeded?: boolean; sourceHasCode?: boolean;
 }
 export interface CardTypeProfile<T extends string> {
   types: readonly T[];
   descriptions: Record<T, string>;
   rulesText: string;
+  /**
+   * Types the Decisions backend may not override.
+   *
+   * A type the author switched on is a request, not a suggestion. The backend
+   * scores every card on its own merits and reliably prefers TEXT_IMG, so a
+   * planner-proposed SCENARIO loses 0.92 to 0.08 and the toggle looks broken.
+   * Where the planner proposed a pinned type, its choice stands.
+   */
+  pinned?: readonly T[];
   applyHardRules(cards: DecidedCard<T>[], ctx: DecisionContext, log: (message: string) => void): void;
 }
 
@@ -43,16 +52,17 @@ export interface DecisionAnswer {
 export const CARD_TYPE_DESCRIPTIONS: Record<ShortsPlannerType, string> = {
   TEXT: 'Definitions, judgment, caveats, or concepts whose diagram would be decorative.',
   TEXT_IMG: 'A diagram teaches structure, flow, branching, state changes, or relationships; prose adds why it matters.',
-  IMG_ONLY: 'A standalone visual teaches the whole concept through layout and embedded labels, without a paragraph.',
-  SCENARIO: 'Last resort for a realistic decision, failure, or trade-off that loses meaning without context; only above 3 cards.',
+  IMG_ONLY: 'A standalone visual that teaches the whole concept through layout and embedded labels, with no paragraph at all. Use it where the idea is a structure, a flow or a comparison the reader should read off the picture.',
+  SCENARIO: 'A realistic decision, failure, or trade-off that loses meaning without context; allowed only when the scenario toggle is on, and only above 3 cards.',
   HIGHLIGHT: 'One concise modern insight; allowed only when the highlight toggle is on, at most one per short.',
 };
 
-export function cardTypeRules(highlight: boolean): string {
-  return `${shortsPlannerTypes(highlight).map((type) => `${type}: ${CARD_TYPE_DESCRIPTIONS[type]}`).join('\n')}
+export function cardTypeRules(highlight: boolean, scenario: boolean): string {
+  return `${shortsPlannerTypes(highlight, scenario).map((type) => `${type}: ${CARD_TYPE_DESCRIPTIONS[type]}`).join('\n')}
 Highlight toggle: ${highlight ? 'on; at most one HIGHLIGHT' : 'off; never HIGHLIGHT'}.
-SCENARIO is a last resort, only when there are more than 3 cards, all required content is covered, and TEXT or TEXT_IMG would teach it materially less well.
+Scenario toggle: ${scenario ? 'on; the author asked for a scenario card, so include exactly one whenever there are more than 3 cards — pick the card whose content is a real decision, failure, or trade-off' : 'off; never SCENARIO'}.
 Visual minimum: 5 cards need at least 2 visual cards, 4 need at least 2, 3 need at least 1; 1–2 have no minimum. TEXT_IMG and IMG_ONLY count as visual.
+Standalone visual: a short of 4 or more cards must include exactly one IMG_ONLY, never as the first card. Propose it for the card whose idea is carried best by the picture alone.
 Keep one focused teaching goal per card and cover the objective and additional context before optional insights.`;
 }
 
@@ -75,29 +85,64 @@ export function chooseTypes<T extends string>(
       }
     }
     const usable = valid && Object.keys(probabilities).length > 0;
+    const pinned = !!profile.pinned?.includes(card.proposed_type);
     let chosen = card.proposed_type;
-    if (usable) {
+    if (usable && !pinned) {
       // The floor biases close calls toward the planner; raw probabilities stay available for audit.
       const score = (type: T) => Math.max(probabilities[type] ?? 0, type === card.proposed_type ? 0.2 : 0);
       chosen = allowed.reduce((best, type) => score(type) > score(best) ? type : best,
         allowed.includes(card.proposed_type) ? card.proposed_type : allowed[0]);
     }
     return { ...card, decision: { planner: card.proposed_type, chosen, probabilities,
-      backend: usable ? 'decisions' : 'planner-fallback' } };
+      backend: pinned ? 'planner-pinned' : usable ? 'decisions' : 'planner-fallback' } };
   });
   profile.applyHardRules(cards, ctx, log);
   return cards;
 }
 
-export function shortsProfile(highlight: boolean): CardTypeProfile<ShortsPlannerType> {
-  return { types: shortsPlannerTypes(highlight), descriptions: CARD_TYPE_DESCRIPTIONS,
-    rulesText: cardTypeRules(highlight), applyHardRules(cards) {
+export function shortsProfile(highlight: boolean, scenario: boolean): CardTypeProfile<ShortsPlannerType> {
+  return { types: shortsPlannerTypes(highlight, scenario), descriptions: CARD_TYPE_DESCRIPTIONS,
+    rulesText: cardTypeRules(highlight, scenario),
+    pinned: scenario ? ['SCENARIO'] : [],
+    applyHardRules(cards, _ctx, log) {
       let highlights = 0;
       for (const card of cards) {
         if (card.decision.chosen === 'HIGHLIGHT' && (!highlight || highlights++ >= 1)) card.decision.chosen = 'TEXT';
       }
       for (const card of cards) {
-        if (card.decision.chosen === 'SCENARIO' && cards.length <= 3) card.decision.chosen = 'TEXT';
+        if (card.decision.chosen === 'SCENARIO' && (!scenario || cards.length <= 3)) card.decision.chosen = 'TEXT';
+      }
+      // Switching the toggle on asks for a scenario card, so produce one. The
+      // planner's own pick comes first; failing that, the card the backend
+      // rated highest for SCENARIO. Runs before the visual minimum, which then
+      // makes up any visual the conversion cost.
+      if (scenario && cards.length > 3 && !cards.some((card) => card.decision.chosen === 'SCENARIO')) {
+        const eligible = cards.filter((card) => card.decision.chosen !== 'HIGHLIGHT');
+        const pick = eligible.find((card) => card.decision.planner === 'SCENARIO')
+          ?? eligible.slice().sort((a, b) =>
+            (b.decision.probabilities.SCENARIO ?? 0) - (a.decision.probabilities.SCENARIO ?? 0))[0];
+        if (pick) {
+          log(`card-type-decision: scenario toggle is on; card ${pick.card_number} becomes SCENARIO`);
+          pick.decision.chosen = 'SCENARIO';
+        }
+      }
+      // A short never produced a standalone visual: the planner rarely proposes
+      // IMG_ONLY and the backend scores it near zero, so nothing ever chose one.
+      // Courses already guarantee one; do the same once there are enough cards
+      // for an opener that is not the visual.
+      if (cards.length >= 4 && !cards.some((card) => card.decision.chosen === 'IMG_ONLY')) {
+        const candidate = cards.slice(1)
+          .filter((card) => ['TEXT_IMG', 'TEXT'].includes(card.decision.chosen))
+          .sort((a, b) =>
+            Number(b.decision.planner === 'IMG_ONLY') - Number(a.decision.planner === 'IMG_ONLY')
+            || (b.decision.probabilities.IMG_ONLY ?? 0) - (a.decision.probabilities.IMG_ONLY ?? 0)
+            || (b.decision.probabilities.TEXT_IMG ?? 0) - (a.decision.probabilities.TEXT_IMG ?? 0))[0];
+        if (candidate) {
+          log(`card-type-decision: no standalone visual; card ${candidate.card_number} becomes IMG_ONLY`);
+          candidate.decision.chosen = 'IMG_ONLY';
+        } else {
+          log('card-type-decision: no eligible card for the standalone visual');
+        }
       }
       const minimum = cards.length === 5 || cards.length === 4 ? 2 : cards.length === 3 ? 1 : 0;
       let visuals = cards.filter((card) => ['TEXT_IMG', 'IMG_ONLY'].includes(card.decision.chosen)).length;
@@ -117,8 +162,8 @@ export function shortsProfile(highlight: boolean): CardTypeProfile<ShortsPlanner
   };
 }
 
-export function chooseCardTypes(plan: PlannedShortCard[], answers: DecisionAnswer[], highlight: boolean): DecidedShortCard[] {
-  return chooseTypes(plan, answers, shortsProfile(highlight), { topic: '' });
+export function chooseCardTypes(plan: PlannedShortCard[], answers: DecisionAnswer[], highlight: boolean, scenario: boolean): DecidedShortCard[] {
+  return chooseTypes(plan, answers, shortsProfile(highlight, scenario), { topic: '' });
 }
 
 export function chapterContainsCode(source: string): boolean {
@@ -126,8 +171,14 @@ export function chapterContainsCode(source: string): boolean {
   return /```[\s\S]*?```|~~~[\s\S]*?~~~|"type"\s*:\s*"(?:Code|CodeSnippet|CodeExercise|CodeRunnable)"|<code\b/i.test(source);
 }
 
+export function courseProfile(scenario: boolean): CardTypeProfile<CoursePlannerType> {
+  // Unlike a short, a course is many chapters: the toggle is permission, not a
+  // quota, so a planner-proposed scenario is protected but none is forced in.
+  return { ...COURSE_PROFILE, types: coursePlannerTypes(scenario), pinned: scenario ? ['scenario'] : [] };
+}
+
 export const COURSE_PROFILE: CardTypeProfile<CoursePlannerType> = {
-  types: COURSE_PLANNER_TYPES,
+  types: coursePlannerTypes(true),
   descriptions: COURSE_TYPE_DESCRIPTIONS,
   rulesText: `Code types require code in the chapter source. First card must be text or text_img.
 Recap appears exactly once, as the last card. Include at least one img_only after the introduction.
@@ -198,7 +249,7 @@ export async function decideTypes<T extends string>(
 
 // Keep the original shorts entry point and fallback semantics for existing callers.
 export function decideCardTypes(plan: PlannedShortCard[], context: DecisionContext, log: (message: string) => void): Promise<DecidedShortCard[]> {
-  return decideTypes(plan, context, log, shortsProfile(!!context.isHighlightCardNeeded), false);
+  return decideTypes(plan, context, log, shortsProfile(!!context.isHighlightCardNeeded, !!context.isScenarioCardNeeded), false);
 }
 
 // Shared Decisions transport; callers retain their own fallback policy.

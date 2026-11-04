@@ -791,9 +791,10 @@ export async function uploadLessonImage(
 
     // Step 2: POST the file as multipart/form-data (field name "file-0" matches n8n)
     const formData = new FormData();
+    // The blob's type must match the bytes; images are JPEG now, not PNG.
     formData.append(
       'file-0',
-      new Blob([buffer as unknown as ArrayBuffer], { type: 'image/png' }),
+      new Blob([buffer as unknown as ArrayBuffer], { type: imageTypeFor(filename).imageType.replace('data:', '') }),
       filename,
     );
     const uploadFullUrl = slot.uploadUrl.startsWith('http')
@@ -1143,7 +1144,15 @@ export function makeHintBlock(hint: { title: string; content: string }): any {
 
 // Lesson image block — mirrors n8n "Format Image Widget" node schema exactly
 // version:3 lives inside content; contentID is at block level; no alt field
+/** The image's own type, so a JPEG is not announced to Educative as a PNG. */
+function imageTypeFor(imagePath: string): { name: string; imageType: string } {
+  const ext = (imagePath.split('?')[0].split('.').pop() || 'png').toLowerCase();
+  const mime = ext === 'jpg' || ext === 'jpeg' ? 'jpeg' : ext === 'webp' ? 'webp' : 'png';
+  return { name: `image.${mime === 'jpeg' ? 'jpg' : mime}`, imageType: `data:image/${mime}` };
+}
+
 export function makeLessonImageBlock(imagePath: string, caption: string, meta?: { width?: number; height?: number; sizeInBytes?: number }): any {
+  const kind = imageTypeFor(imagePath);
   return {
     type: 'Image',
     mode: 'edit',
@@ -1153,7 +1162,7 @@ export function makeLessonImageBlock(imagePath: string, caption: string, meta?: 
         width: meta?.width ?? 1126,
         height: meta?.height ?? 561,
         sizeInBytes: meta?.sizeInBytes ?? 55533,
-        name: 'image.png',
+        name: kind.name,
       },
       caption: caption || '',
       version: 3,
@@ -1161,7 +1170,7 @@ export function makeLessonImageBlock(imagePath: string, caption: string, meta?: 
       redirectionUrl: '',
       comp_id: uid('image'),
       width: 944,
-      imageType: 'data:image/png',
+      imageType: kind.imageType,
     },
     iteration: 2,
     hash: 0,

@@ -212,6 +212,9 @@ export default function ContentQueriesPage() {
   // Empty means "the default project"; non-empty searches across those projects.
   const [scope, setScope] = useState<string[]>([]);
   const [scoping, setScoping] = useState(false);
+  // Shut by default: the point of this page is the queries, and the filters
+  // pushed them below the fold.
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const [issues, setIssues] = useState<Issue[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -239,6 +242,7 @@ export default function ContentQueriesPage() {
   // Draft before the last polish, so one click can undo it.
   const [prePolish, setPrePolish] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
   const [postMsg, setPostMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [transitions, setTransitions] = useState<Transition[]>([]);
   const [transitionId, setTransitionId] = useState('');
@@ -609,6 +613,7 @@ export default function ContentQueriesPage() {
           usedLesson: !!analysis.usedLesson,
           needsManualReview: !!analysis.needsManualReview,
           imagesRead: analysis.imagesRead || 0,
+          changes: analysis.changes || [],
           reason: analysis.reason, lessonTitle: analysis.lessonTitle,
           lessonUrl: analysis.lessonUrl, warning: analysis.warning,
           edited: replyDraft !== (analysis.reply || ''),
@@ -662,30 +667,50 @@ export default function ContentQueriesPage() {
     } catch (e: any) { setPolishErr(e?.message || String(e)); } finally { setPolishing(false); }
   }
 
+  function readAsBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+      reader.onload = () => resolve(String(reader.result || '').replace(/^data:[^;]*;base64,/, ''));
+      reader.readAsDataURL(file);
+    });
+  }
+
   async function postUpdate() {
-    if (!detail || !replyDraft.trim()) return;
+    if (!detail) return;
+    const reply = replyDraft.trim();
+    // Either half is a complete update on its own: a comment, or just a status.
+    if (!reply && !transitionId) return;
     const mentionId = mention?.accountId || '';
     const mentionName = mention?.displayName || '';
     const target = transitions.find((t) => t.id === transitionId);
-    const label = target ? ` and moved it to ${target.to}` : '';
-    if (!confirm(`Post this update to ${detail.key}${label}?`)) return;
+    const attaching = reply ? files : [];
+    const what = reply
+      ? `Post this update to ${detail.key}${attaching.length ? ` with ${attaching.length} file(s)` : ''}${target ? ` and move it to ${target.to}` : ''}?`
+      : `Move ${detail.key} to ${target!.to} without commenting?`;
+    if (!confirm(what)) return;
 
     setPosting(true); setPostMsg(null);
     try {
+      const attachments = await Promise.all(attaching.map(async (f) => ({
+        filename: f.name, contentType: f.type || 'application/octet-stream', data: await readAsBase64(f),
+      })));
       const r = await fetch('/api/jira/post-update', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          key: detail.key, reply: replyDraft, instruction,
+          key: detail.key, reply, instruction,
           mentionAccountId: mentionId || undefined, mentionName: mentionName || undefined,
           transitionId: transitionId || undefined,
+          attachments: attachments.length ? attachments : undefined,
         }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || 'Post failed');
-      setPostMsg({
-        ok: true,
-        text: j.warning || `Posted to ${detail.key}${j.transitioned && target ? ` and moved to ${target.to}` : ''}.`,
-      });
+      if (j.commented) setFiles([]);
+      const posted = j.commented
+        ? `Posted to ${detail.key}${j.attached ? ` with ${j.attached} file(s)` : ''}${j.transitioned && target ? ` and moved to ${target.to}` : ''}.`
+        : `${detail.key} moved to ${target?.to}.`;
+      setPostMsg({ ok: true, text: j.warning || posted });
       if (j.transitioned && target) {
         setDetail((d) => (d ? { ...d, status: target.to, statusCategory: target.toCategory } : d));
         setIssues((prev) => (prev || []).map((i) => i.key === detail.key ? { ...i, status: target.to, statusCategory: target.toCategory } : i));
@@ -713,6 +738,26 @@ export default function ContentQueriesPage() {
     () => [...pinnedBoards, ...sessionBoards.filter((k) => !pinnedBoards.includes(k))],
     [pinnedBoards, sessionBoards],
   );
+
+  /** What is narrowing the list right now, for the collapsed summary line. */
+  const activeFilters = useMemo(() => {
+    const out: string[] = [];
+    if (assignee) out.push(`@${assignee.displayName}`);
+    else if (mine) out.push('assigned to me');
+    if (scope.length) out.push(scope.length === 1 ? scope[0] : `${scope.length} boards`);
+    if (active.length) out.push(active.length === 1 ? active[0] : `${active.length} statuses`);
+    for (const [name, value] of Object.entries(facetSel)) if (value) out.push(`${name}: ${value}`);
+    return out;
+  }, [assignee, mine, scope, active, facetSel]);
+
+  function clearFilters() {
+    setMine(false);
+    setAssignee(null);
+    setScope([]);
+    setActive([]);
+    setFacetSel({});
+    loadIssues([], false, [], search, {}, '');
+  }
 
   const boardName = useCallback(
     (key: string) => projects.find((p) => p.key === key)?.name
@@ -902,6 +947,31 @@ export default function ContentQueriesPage() {
       {cfg.configured && cfg.projectKey && !editing && (
         <>
           <div className="card p-3 space-y-2.5">
+            {/* Filters collapse so the queries themselves are the first thing
+                on screen; the summary keeps what is active visible when shut. */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => setFiltersOpen((v) => !v)}
+                aria-expanded={filtersOpen}
+                className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-[var(--text-faint)] hover:text-[var(--text)] transition-colors"
+              >
+                <span className={`inline-block transition-transform ${filtersOpen ? 'rotate-90' : ''}`}>›</span>
+                Filters
+              </button>
+              {!filtersOpen && (
+                <span className="text-[11px] text-[var(--text-dim)] truncate">
+                  {activeFilters.length ? activeFilters.join(' · ') : 'none'}
+                </span>
+              )}
+              {activeFilters.length > 0 && (
+                <button onClick={clearFilters}
+                  className="text-[10px] text-[var(--text-faint)] hover:text-red-400 ml-auto">
+                  clear all
+                </button>
+              )}
+            </div>
+
+            {filtersOpen && (<>
             <div className="flex items-center gap-2 flex-wrap pb-2.5 border-b border-[var(--border)]">
               <span className="text-[10px] uppercase tracking-wide text-[var(--text-faint)] w-12 shrink-0">Scope</span>
               <button
@@ -1160,6 +1230,8 @@ export default function ContentQueriesPage() {
               </div>
             )}
 
+            </>)}
+
             <input className="input w-full text-sm" placeholder="Search all queries — text, or an issue key like PSB2C-20468…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
 
@@ -1339,6 +1411,33 @@ export default function ContentQueriesPage() {
                       )}
                     </div>
                     {polishErr && <p className="text-[11px] text-red-600 dark:text-red-300">{polishErr}</p>}
+
+                    {/* Internal note: what the material needs. Never posted. */}
+                    {Array.isArray(analysis?.changes) && analysis.changes.length > 0 && (
+                      <div className="rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/20 p-2.5 space-y-2">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <p className="text-[10px] uppercase tracking-wide text-amber-800 dark:text-amber-300">
+                            Content changes needed
+                          </p>
+                          <span className="text-[10px] text-[var(--text-faint)]">internal — not posted to the ticket</span>
+                        </div>
+                        <ol className="space-y-1.5 list-decimal list-inside">
+                          {analysis.changes.map((c: any, i: number) => (
+                            <li key={i} className="text-[11px] leading-relaxed">
+                              <span className="font-medium text-[var(--text)]">{c.where}</span>
+                              {' — '}
+                              <span className="text-[var(--text-dim)]">{c.change}</span>
+                              {c.why && <span className="text-[var(--text-faint)]"> ({c.why})</span>}
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+                    {analysis && !analysis.error && Array.isArray(analysis.changes) && analysis.changes.length === 0 && (
+                      <p className="text-[10px] text-[var(--text-faint)]">
+                        No content changes needed — the material answers this as it stands.
+                      </p>
+                    )}
                   </div>
 
                           {/* Post to Jira */}
@@ -1402,18 +1501,55 @@ export default function ContentQueriesPage() {
                                 <input className="input text-xs py-1" value={instruction} onChange={(e) => setInstruction(e.target.value)} />
                               </label>
                               <label className="flex flex-col gap-0.5">
-                                <span className="text-[10px] text-[var(--text-faint)]">Then set status</span>
+                                <span className="text-[10px] text-[var(--text-faint)]">Set status</span>
                                 <select className="input text-xs py-1" value={transitionId} onChange={(e) => setTransitionId(e.target.value)}>
                                   <option value="">Leave unchanged</option>
                                   {transitions.map((t) => <option key={t.id} value={t.id}>{t.to}</option>)}
                                 </select>
                               </label>
-                              <button className="btn-primary text-xs py-1.5 px-3" onClick={postUpdate} disabled={posting || !replyDraft.trim()}>
-                                {posting ? 'Posting…' : 'Post update'}
+                              <button
+                                className="btn-primary text-xs py-1.5 px-3"
+                                onClick={postUpdate}
+                                disabled={posting || (!replyDraft.trim() && !transitionId)}
+                              >
+                                {posting
+                                  ? 'Posting…'
+                                  : replyDraft.trim() ? 'Post update' : 'Set status'}
                               </button>
                             </div>
+
+                            {/* Attachments ride with a comment; Jira has no comment-only attachment. */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <label className="text-[10px] rounded border border-[var(--border)] px-2 py-1 cursor-pointer text-[var(--text-dim)] hover:text-[var(--text)] transition-colors">
+                                Attach files
+                                <input
+                                  type="file"
+                                  multiple
+                                  className="hidden"
+                                  disabled={!replyDraft.trim()}
+                                  onChange={(e) => {
+                                    setFiles((prev) => [...prev, ...Array.from(e.target.files || [])]);
+                                    e.target.value = '';
+                                  }}
+                                />
+                              </label>
+                              {files.map((f, i) => (
+                                <span key={`${f.name}-${i}`} className="inline-flex items-center gap-1 text-[10px] rounded border border-[var(--border)] bg-[var(--panel)] pl-2 pr-1 py-1">
+                                  <span className="max-w-[12rem] truncate">{f.name}</span>
+                                  <span className="text-[var(--text-faint)]">{(f.size / 1024).toFixed(0)}KB</span>
+                                  <button
+                                    className="text-[var(--text-faint)] hover:text-red-400 px-0.5"
+                                    onClick={() => setFiles((prev) => prev.filter((_, n) => n !== i))}
+                                    title="Remove"
+                                  >×</button>
+                                </span>
+                              ))}
+                            </div>
+
                             <p className="text-[10px] text-[var(--text-faint)]">
-                              Posts as a comment, led by the mention and instruction, then applies the status change.
+                              {replyDraft.trim()
+                                ? 'Posts as a comment, led by the mention and instruction, then applies the status change. Files attach to the issue and the comment names them.'
+                                : 'With no reply written, this only changes the status — no comment is posted.'}
                             </p>
                             {postMsg && (
                               <p className={`text-[11px] rounded px-2 py-1.5 border-l-4 ${postMsg.ok ? 'border-emerald-500 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200' : 'border-red-500 bg-red-100 dark:bg-red-950/40 text-red-900 dark:text-red-200'}`}>

@@ -11,8 +11,10 @@
 
 import { openaiSearch, generateText, generateJSON, parseJsonLoose } from './ai';
 import { generateGptImage, slugify } from './imageGen';
+import { getMobileStyle, readStyleReference } from './imageStyleStore';
 import type { MobileCard } from './mobileCourseStorage';
-import { normalizeCardType, normalizeHighlightCardType, resolveCardType, isCardType, plannerToCardType, shortsPlannerTypes, type MobileCardType } from './mobileCardTypes';
+import { applyScenarioHeadings, normalizeCardType, normalizeHighlightCardType, normalizeScenarioCardType,
+  resolveCardType, isCardType, plannerToCardType, shortsPlannerTypes, type MobileCardType } from './mobileCardTypes';
 import { decideCardTypes, type PlannedShortCard } from './cardTypeDecider';
 import { shortsPlannerSchema, SHORTS_CARDS_SCHEMA } from './mobileShortsSchemas';
 import { CARD_LIMITS, COURSE_CARD_LIMITS, checkCard, type CardProduct } from './mobileCardLimits';
@@ -33,6 +35,8 @@ export interface MobileShortInput {
   objective?: string;
   additionalContext?: string;
   isHighlightCardNeeded?: boolean;
+  /** Scenario cards are opt-in and default off; nothing in the sheet sets this. */
+  isScenarioCardNeeded?: boolean;
   numCards?: number;
   sheetUrl?: string;
   rowIdx?: number;
@@ -60,10 +64,13 @@ export { buildMobileCardImagePrompt as buildShortCardImagePrompt } from './mobil
 export async function generateCardImage(card: any, order: number, shortId: string, product: 'short' | 'course' = 'short', styleBody?: string): Promise<string | null> {
   try {
     const subfolder = `${product === 'course' ? 'mobile-courses' : 'mobile-shorts'}/${slugify(shortId)}`;
-    const rawPrompt = buildMobileCardImagePrompt(card, styleBody);
+    const style = getMobileStyle();
+    const rawPrompt = buildMobileCardImagePrompt(card, styleBody ?? style.body);
     const result = await generateGptImage(card.illustration_idea || '', order, subfolder, {
       size: '1024x1536',
       rawPrompt,
+      // Only the chosen style's own picture; an explicit styleBody overrides it.
+      reference: styleBody === undefined ? await readStyleReference(style.id) : null,
     });
     return result.url;
   } catch (e: any) {
@@ -108,10 +115,10 @@ export function mapRawCard(raw: any, index: number): MobileCard {
     explanation: raw.explanation || '',
     correctOptions: raw.correctOptions,
     sections: raw.sections,
-    scenarioType: raw.scenarioType || raw.scenariotype || '',
+    scenarioType: normalizeScenarioCardType(raw.scenarioType || raw.scenariotype, raw.sections),
     highlightCardType: normalizeHighlightCardType(raw.highlightCardType),
   };
-  return card;
+  return applyScenarioHeadings(card);
 }
 
 // ── TEXT_IMG prose enforcer ───────────────────────────────────────────────────
@@ -201,8 +208,13 @@ export function endsMidSentence(text: string): boolean {
  * sentence that remains intact, which is what a reader sees; a cut made inside
  * a sentence is what they see first. Only when one block is left does this fall
  * back to cutting the prose, and then at a sentence end.
+ *
+ * `min` is the card's lower limit. A block can be most of a card, so dropping
+ * one can leave far too little — a 460-character card down to 200 against a
+ * 350 minimum. Below `min`, cutting the prose keeps more of the card, so that
+ * is what happens instead.
  */
-export function trimToMax(text: string, max: number): string {
+export function trimToMax(text: string, max: number, min = 0): string {
   if (text.length <= max) return text;
 
   const blocks = text.split(/\n\s*\n/);
@@ -210,7 +222,9 @@ export function trimToMax(text: string, max: number): string {
     const kept = [...blocks];
     while (kept.length > 1 && kept.join('\n\n').trim().length > max) kept.pop();
     const joined = kept.join('\n\n').trim();
-    if (kept.length > 1 || joined.length <= max) return trimToMax(joined, max);
+    if (joined.length >= min && (kept.length > 1 || joined.length <= max)) {
+      return trimToMax(joined, max, min);
+    }
   }
 
   const slice = text.slice(0, max);
@@ -249,18 +263,56 @@ Cards: ${JSON.stringify(offending.map(({ card, index }) => ({ card_number: index
   return fixed;
 }
 
-export async function enforceCharLimits(cards: any[], emit: MobileShortEmit, product: CardProduct = 'short'): Promise<any[]> {
-  cards = await enforceTitleLimits(cards, emit, product);
+/**
+ * One card's entry in the rewrite request.
+ *
+ * A card well under its minimum cannot be expanded out of its own sentence, so
+ * this carries what the card is for. A scenario tab carries more still: on its
+ * own it reads as a stray fragment, which is why those came back far short.
+ */
+export function charLimitRequest(c: any, text: string, rejectedBecause: string) {
+  const lim = c.limit;
+  return {
+    card_number: c.card_number,
+    card_type: c.type,
+    card_title: c.title || undefined,
+    card_context: c.img_context || c.illustration_idea || c.explanation || undefined,
+    part_of_card: c.part,
+    other_tabs: c.siblings?.length ? c.siblings : undefined,
+    current_length: text.length,
+    required_min: lim.min,
+    required_max: lim.max,
+    action: text.length > lim.max ? 'SHORTEN' : 'EXPAND with meaningful depth, not padding',
+    rejected_because: rejectedBecause,
+    current_text: text,
+  };
+}
+
+/** The work items a card breaks into: a scenario is three, everything else is one. */
+export function charLimitUnits(cards: any[], product: CardProduct = 'short') {
   const limits = product === 'course' ? COURSE_CARD_LIMITS : CARD_LIMITS;
-  const units = cards.flatMap((card, cardIndex) => card.type === 'scenarioCard'
+  return cards.flatMap((card, cardIndex) => card.type === 'scenarioCard'
     ? (card.sections || []).map((section: any, sectionIndex: number) => ({
       cardIndex, sectionIndex, text: section.content || '',
       limit: limits.scenarioCard![sectionIndex === card.sections.length - 1 ? 1 : 0],
+      part: `tab ${sectionIndex + 1} of ${card.sections.length}, headed "${section.heading || ''}"`,
+      siblings: (card.sections || [])
+        .map((other: any, i: number) => i === sectionIndex ? null : `${other.heading || `tab ${i + 1}`}: ${other.content || ''}`)
+        .filter(Boolean) as string[],
     }))
     : [{ cardIndex, sectionIndex: -1, text: cardText(card),
-      limit: limits[card.type as MobileCardType]?.find((limit) => limit.field === 'text') }]);
+      limit: limits[card.type as MobileCardType]?.find((limit) => limit.field === 'text'),
+      part: undefined as string | undefined, siblings: undefined as string[] | undefined }]);
+}
+
+export async function enforceCharLimits(cards: any[], emit: MobileShortEmit, product: CardProduct = 'short'): Promise<any[]> {
+  cards = await enforceTitleLimits(cards, emit, product);
+  const units = charLimitUnits(cards, product);
   // Unique internal numbers let the existing rewrite contract handle sections too.
-  const workCards = units.map((unit, i) => ({ ...cards[unit.cardIndex], text: unit.text, card_number: i + 1, limit: unit.limit }));
+  const workCards = units.map((unit, i) => ({
+    ...cards[unit.cardIndex], text: unit.text, card_number: i + 1, limit: unit.limit,
+    part: unit.part, siblings: unit.siblings,
+  }));
   // A rewrite that lands in range but stops mid-sentence is the failure this
   // whole step used to produce, so it counts as unfinished work too.
   const unusable = (c: any, text = cardText(c)) => {
@@ -283,23 +335,13 @@ export async function enforceCharLimits(cards: any[], emit: MobileShortEmit, pro
   });
 
   const rewrites: Record<number, string> = {};
-  const buildPrompt = (batch: any[]) => `You are a technical editor enforcing strict character limits on mobile learning cards. Rewrite ONLY the text of each card below so it lands inside its required character range. Preserve the meaning, voice, and any markdown. Do not add new facts.
+  const buildPrompt = (batch: any[]) => `You are a technical editor enforcing strict character limits on mobile learning cards. Rewrite ONLY the text of each card below so it lands inside its required character range. Preserve the meaning, voice, and any markdown. Stay on the card's own subject: card_title and card_context say what it is about.
 
 Cards to fix:
 ${JSON.stringify(
   batch.map((c) => {
-    const lim = c.limit;
     const text = rewrites[Number(c.card_number)] ?? cardText(c);
-    return {
-      card_number: c.card_number,
-      card_type: c.type,
-      current_length: text.length,
-      required_min: lim.min,
-      required_max: lim.max,
-      action: text.length > lim.max ? 'SHORTEN' : 'EXPAND with meaningful depth, not padding',
-      rejected_because: unusable(c, text),
-      current_text: text,
-    };
+    return charLimitRequest(c, text, unusable(c, text));
   }),
   null,
   2,
@@ -313,7 +355,28 @@ Rules:
   and never leave a bullet, a table row or a note half-written.
 - To SHORTEN, drop a whole sentence, bullet or table row, or say the same thing in fewer
   words. Cutting the tail off the last sentence is not shortening.
+- Keep the card's structure. A card that arrives with bullets leaves with bullets, a bold key
+  term stays bold, a table stays a table, a blockquote callout stays a callout. Shorten the
+  items; never flatten a structured card into one block of prose to make it fit, and never add
+  structure to a card that is plain prose.
+- Markdown syntax counts toward the length, so a structured card has fewer words to spend. That
+  is expected: lose a bullet before you lose the formatting.
+- To EXPAND, add substance: the mechanism behind the point, what it costs or buys, or one
+  concrete case of it. Write whole new sentences on the card's own subject. Restating the
+  same point in more words, or adding a sentence that teaches nothing, is padding and is
+  worse than being short. Never invent a number, product name or claim the card's subject
+  does not already support.
+- required_min matters as much as required_max. A card far under its minimum is half a card.
+- Where part_of_card is given, this is one tab of a three-tab scenario and other_tabs holds the
+  rest of it. Write the tab out in full for its own heading: the first two tabs set up the
+  situation and what it costs, the third gives the fix or recommendation and is the longest of
+  the three. Do not repeat what another tab already says, and do not answer the scenario early.
 - text_img cards must remain a single prose paragraph with no lists, blockquotes, or tables.
+- A text_img card's words and its picture teach one concept between them and never repeat each
+  other: the picture owns the structure and the steps, the words own the reasoning — why it
+  matters, what it costs, when it fails. Do not describe the picture, do not caption it, and
+  never refer to it ("as shown above", "the diagram below", "see the figure"). The words must
+  read as a complete thought to someone who cannot see it.
 - highlightCard text must contain no markdown at all.
 - Raw JSON only, no markdown fences.`;
 
@@ -343,7 +406,11 @@ Rules:
     offending = offending.filter((c) => unusable(c, rewrites[Number(c.card_number)] ?? cardText(c)));
   }
   if (offending.length) {
-    emit({ type: 'log', message: `char limits: ${offending.length} card(s) trimmed to fit after ${2} attempts` });
+    // Being short is a warning the author sees, not a failure, so say which it is.
+    const short = offending.filter((c) => (rewrites[Number(c.card_number)] ?? cardText(c)).length < c.limit.min).length;
+    const over = offending.length - short;
+    const parts = [over && `${over} trimmed to fit`, short && `${short} still under the minimum`].filter(Boolean);
+    emit({ type: 'log', message: `char limits: ${parts.join(', ')} after 2 attempts` });
   }
 
   const fixed = workCards.map((c) => {
@@ -353,7 +420,7 @@ Rules:
     let text = typeof rewritten === 'string' && rewritten.trim() ? rewritten : cardText(c);
     // Hard guarantee on the ceiling; an under-length card is left as-is since
     // truncation cannot fix it and the content is still usable.
-    if (text.length > lim.max) text = trimToMax(text, lim.max);
+    if (text.length > lim.max) text = trimToMax(text, lim.max, lim.min);
     // Whatever the length, never ship a sentence that stops halfway. Ending
     // short is a warning the author can see; ending mid-clause reads as broken.
     if (endsMidSentence(text)) {
@@ -422,7 +489,7 @@ export async function runMobileShortPipeline(
 
   const wanted = Math.min(5, Math.max(1, Math.floor(input.numCards || 5)));
   emit({ type: 'stage', name: 'card-planner', status: 'start' });
-  const allowed = shortsPlannerTypes(!!input.isHighlightCardNeeded);
+  const allowed = shortsPlannerTypes(!!input.isHighlightCardNeeded, !!input.isScenarioCardNeeded);
   // The schema already pins the count, but a model can still mis-number or pick a
   // type outside the enum. Retry rather than failing the run: a short that comes
   // back wrong twice is repaired below, never abandoned.
@@ -432,7 +499,7 @@ export async function runMobileShortPipeline(
   for (let attempt = 1; attempt <= 3; attempt++) {
     const planned = await generateJSON<{ cards: PlannedShortCard[] }>(
       registeredShortsCardPlannerPrompt({ ...input, numCards: wanted, topicDetails }),
-      shortsPlannerSchema(wanted, !!input.isHighlightCardNeeded),
+      shortsPlannerSchema(wanted, !!input.isHighlightCardNeeded, !!input.isScenarioCardNeeded),
       // Shorts planning is intentionally cheaper than the shared card-planner main-tier default.
       { name: 'shorts_card_plan', tier: 'normal', maxTokens: 8000 },
     );

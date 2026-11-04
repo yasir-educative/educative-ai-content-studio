@@ -14,7 +14,7 @@ export async function GET() {
 // POST /api/mobile-short — start a new run and stream events
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { topic, domain, level, objective, additionalContext, isHighlightCardNeeded, numCards, sheetUrl, rowIdx, authorId } = body;
+  const { topic, domain, level, objective, additionalContext, isHighlightCardNeeded, isScenarioCardNeeded, numCards, sheetUrl, rowIdx, authorId } = body;
 
   if (!topic) {
     return Response.json({ error: 'topic is required' }, { status: 400 });
@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
     objective: objective ? String(objective) : undefined,
     additionalContext: additionalContext ? String(additionalContext) : undefined,
     isHighlightCardNeeded: isHighlightCardNeeded !== undefined ? Boolean(isHighlightCardNeeded) : undefined,
+    isScenarioCardNeeded: Boolean(isScenarioCardNeeded),
     numCards: numCards !== undefined ? Number(numCards) : undefined,
     sheetUrl: sheetUrl ? String(sheetUrl) : undefined,
     rowIdx: rowIdx !== undefined ? Number(rowIdx) : undefined,

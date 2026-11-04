@@ -43,6 +43,7 @@ import {
   fetchLessonTitle,
 } from './courseEducative';
 import { generateGptImage, buildCourseImagePrompt, enhanceImageDescription, slugify } from './imageGen';
+import { getScopeStyle, readStyleReference } from './imageStyleStore';
 import { buildRunJsHtml } from './runJsTemplate';
 import { updateBlog } from './storage';
 import type { StageEvent, Emit } from './pipeline';
@@ -713,7 +714,11 @@ export async function runCourseLessonPipeline(input: CourseInput, emit: Emit): P
       const { description, caption } = rawImages[i];
       try {
         const { enhancedOutline, caption: enhancedCaption } = await enhanceImageDescription(description);
-        const result = await generateGptImage(enhancedOutline, i, imgSubfolder, { rawPrompt: buildCourseImagePrompt(enhancedOutline) });
+        const style = getScopeStyle('course');
+        const result = await generateGptImage(enhancedOutline, i, imgSubfolder, {
+          rawPrompt: buildCourseImagePrompt(enhancedOutline, style.body),
+          reference: await readStyleReference(style.id),
+        });
         blocks.push(makeTempImageBlock(result.url, caption || enhancedCaption || description.slice(0, 80)));
       } catch (e: any) {
         console.warn('[coursePipeline] image widget failed:', e?.message);

@@ -25,7 +25,7 @@ export function buildMobileCardImagePrompt(card: any, styleBody?: string): strin
       : `Derive labels and annotations from the illustration idea and context. Label every key element with short phrases (2–8 words).`;
     return `Self-contained technical infographic, portrait 640×1024. No external text — viewer must fully understand the concept from this diagram and annotations alone.
 
-Layout: 24px margins. Top-to-bottom or left-to-right flow. Center-aligned. 5–10 primary elements — rich but not cluttered. Generous whitespace. Arrows, connector lines, numbered steps for hierarchy.
+Layout: 24px margins minimum. Choose the shape the idea actually has — a flow, a stack, a hub, a comparison, a cycle, a branch, or one labelled object — rather than defaulting to the same arrangement every time. Centred and balanced; do not fill the canvas for its own sake. Keep it high-level: 4–8 primary elements, generous whitespace, arrows and connector lines only where they carry meaning.
 
 ${style}
 
@@ -44,20 +44,30 @@ Context (do NOT render as text): "${title} — ${imgContext}"`;
     : `Derive concise labels (2–5 words each) from the illustration idea and context. Label every key element.`;
   return `Technical infographic, portrait 640×1024. Diagram-only — no title, no heading, no paragraphs.
 
-Layout:
-- Fill the canvas. Content spans about 85% of the width and 80% of the height, with 24px margins, visually centered and balanced. No large empty bands at the top, bottom, or sides.
-- Never use a single horizontal line or a single vertical column of components.
-- Arrange components in 3–4 horizontal rows, with 2–3 components per row, rows spaced evenly from top to bottom.
-- Flow zigzags: row 1 reads left to right; a short connector turns down to row 2, which reads right to left; then down again to row 3, and so on. Every turn is a clear rounded bend, so the reading path is obvious.
-- Parallel items (workers, replicas, renditions, fan-out targets) sit side by side in one row, never stacked in a column.
-- A component that many others connect to sits in the center row, with the others arranged around it.
-- 4–8 primary elements maximum. Generous whitespace between logical groups, tight spacing within a group.
-- Size for mobile reading: icons about 110–140px wide; labels at least 26px high; all icons in the same row share one size. Arrows are short, about 40–80px between icons.
+Layout — choose the one shape that fits this idea, and commit to it:
+- Pick from: left-to-right flow; top-to-bottom pipeline; layered stack; hub with spokes; two columns
+  compared side by side; a cycle; a branch or decision; a before-and-after pair; a single labelled
+  object with callouts. The idea decides which — a comparison is two columns, a sequence is a flow,
+  a central service is a hub. Do not force a shape the content does not have.
+- Stay high-level. Draw only the elements the idea needs, usually 3 to 6, and leave the rest out.
+  An uncrowded picture that teaches one thing beats a dense one that teaches everything.
+- Do not fill the canvas for the sake of it. Generous margins and empty space are fine; the drawing
+  sits centred and balanced at whatever size suits it, with at least 24px margins.
+- Parallel items (workers, replicas, renditions, fan-out targets) sit side by side, never stacked.
+- Size for mobile reading: labels at least 26px high, icons large enough to read at arm's length,
+  and icons that belong to the same tier share one size.
 
 ${style}
 
 Text: ${labelsBlock} Capitalize first word of every label, rest lowercase unless acronym. Example: "API gateway" not "api gateway" or "API Gateway". No misspellings.
 
+What the picture is for: the card's prose and this picture teach one concept between them. The
+prose carries the reasoning — why it matters, what it costs, when it does not hold. The picture
+carries what prose is bad at: the structure, the order, the relationship, the comparison. Draw
+that. Do not set the prose in the picture, do not caption it, and do not illustrate a sentence
+literally. Someone who reads only the prose should still be missing something, and this is it.
+
 Illustration idea: "${illustrationIdea}"
-Context (do NOT render as text): "${title} — ${content}"`;
+Context, for understanding only — never rendered as text, never restated in the drawing:
+"${title} — ${content}"`;
 }

@@ -74,6 +74,7 @@ export async function POST(
         id,
         chapterId,
         (event) => send(event),
+        !!course.isScenarioCardNeeded,
       );
 
       const now = new Date().toISOString();

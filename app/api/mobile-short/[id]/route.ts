@@ -20,7 +20,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const short = await getMobileShort(id);
   if (!short) return Response.json({ error: 'not found' }, { status: 404 });
 
-  const allowed: (keyof typeof body)[] = ['topic', 'domain', 'level', 'objective', 'additionalContext', 'isHighlightCardNeeded', 'numCards', 'status', 'collectionId', 'publishedUrl', 'cards'];
+  const allowed: (keyof typeof body)[] = ['topic', 'domain', 'level', 'objective', 'additionalContext', 'isHighlightCardNeeded', 'isScenarioCardNeeded', 'numCards', 'status', 'collectionId', 'publishedUrl', 'cards'];
   const patch: any = {};
   for (const key of allowed) {
     if (body[key] !== undefined) patch[key] = body[key];

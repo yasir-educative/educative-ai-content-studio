@@ -1,8 +1,37 @@
-import { COURSE_PLANNER_TYPES, HIGHLIGHT_CARD_TYPE_IDS, highlightCardTypeGuide, type CoursePlannerType } from './mobileCardTypes';
+import { COURSE_PLANNER_TYPES, HIGHLIGHT_CARD_TYPE_IDS, highlightCardTypeGuide,
+  SCENARIO_CARD_TYPES, SCENARIO_CARD_TYPE_IDS, type CoursePlannerType } from './mobileCardTypes';
 
 // Mobile course prompt functions — refactored with single object-arg signatures so
 // promptStore's Proxy-based template extraction can capture {{var}} placeholders.
 // Callers pre-process array/slice args before passing them in.
+
+// Shared with the rewrite paths, so a rewritten card keeps the structure a
+// generated one is given rather than collapsing into flat prose.
+export const CARD_FORMATTING_RULES = `## Formatting rules
+
+### Rich text for TEXT cards (these rules do NOT apply to TEXT_IMG)
+
+Apply Markdown only where it genuinely aids scanning. Prose that flows naturally should stay as prose.
+
+- **Bold** (\`**text**\`): Key terms and concepts. Max 1-2 per card.
+- *Italics* (\`*text*\`): For emphasis.
+- Lists (\`- item\`): Use **only** when content has 3+ discrete, parallel items with no natural connective tissue. If items join naturally with "and," "then," or "because," write as prose instead. **Never open a list immediately after the first sentence** — add a bridging sentence before bullets.
+- Blockquotes (\`> text\`): For "Pro tip" or "Note" callouts. Use sparingly.
+- Tables: Only when comparing 2-3 items across 2-3 attributes.
+
+### TEXT_IMG cards — completely different format (do NOT use TEXT card rules above)
+
+TEXT_IMG cards never use bullets, blockquotes, or tables. See the TEXT_IMG card specification below.
+
+### No rich text
+
+- \`HIGHLIGHT\` cards: Plain text only. No bold, italics, lists, or formatting.
+
+### Spacing
+
+- \`\\n\\n\` between paragraphs.
+- \`\\n\\n\` before and after lists.
+- \`\\n\` between individual list items.`;
 
 export const COURSE_TYPE_DESCRIPTIONS: Record<CoursePlannerType, string> = {
   text: 'A concept is best explained with simple prose alone.',
@@ -181,32 +210,7 @@ Your job: turn each plan item into a polished, final card. Follow all character 
 
 ---
 
-## Formatting rules
-
-### Rich text for TEXT cards (these rules do NOT apply to TEXT_IMG)
-
-Apply Markdown only where it genuinely aids scanning. Prose that flows naturally should stay as prose.
-
-- **Bold** (\`**text**\`): Key terms and concepts. Max 1-2 per card.
-- *Italics* (\`*text*\`): For emphasis.
-- Lists (\`- item\`): Use **only** when content has 3+ discrete, parallel items with no natural connective tissue. If items join naturally with "and," "then," or "because," write as prose instead. **Never open a list immediately after the first sentence** — add a bridging sentence before bullets.
-- Blockquotes (\`> text\`): For "Pro tip" or "Note" callouts. Use sparingly.
-- Tables: Only when comparing 2-3 items across 2-3 attributes.
-
-### TEXT_IMG cards — completely different format (do NOT use TEXT card rules above)
-
-TEXT_IMG cards never use bullets, blockquotes, or tables. See the TEXT_IMG card specification below.
-
-### No rich text
-
-- \`HIGHLIGHT\` cards: Plain text only. No bold, italics, lists, or formatting.
-
-### Spacing
-
-- \`\\n\\n\` between paragraphs.
-- \`\\n\\n\` before and after lists.
-- \`\\n\` between individual list items.
-
+${CARD_FORMATTING_RULES}
 ---
 
 ## Card type specifications
@@ -226,6 +230,9 @@ TEXT_IMG cards never use bullets, blockquotes, or tables. See the TEXT_IMG card 
 - **Workload split:**
   - Diagram owns: the steps, components, flow, and structure.
   - Text owns: the insight those steps produce — the trade-off, the failure mode, the consequence, the definition, the "so what."
+  - Neither repeats the other. Between them they teach one concept; alone, each is incomplete.
+  - The text stands on its own. It never refers to the picture — no "as shown above", "the diagram below", "see the figure", "this illustrates". A reader with no picture must still get a complete thought.
+  - The text is never a caption for the picture, and the picture is never the text set in a box.
 - **How to convert steps to prose (required technique):**
   1. List the steps mentally (do NOT write them out).
   2. Ask: "What is the key insight or consequence when all these steps complete?"
@@ -274,14 +281,11 @@ ${highlightCardTypeGuide().replace(/^/gm, '  ')}
 
 #### 8. SCENARIO (tabs)
 - **Length:** 100-130 chars for first two tabs, 200-230 chars for the third tab.
-- **Choose one scenario type** and use only its matching tab labels:
+- **Choose one scenario type** and use only its three tab headings, in that order, spelled exactly as written:
 
 | Type | Tab 1 | Tab 2 | Tab 3 |
 |------|-------|-------|-------|
-| \`how-would-you-fix\` | What went wrong | Why it's wrong | The fix |
-| \`whats-going-on\` | The context | What it implies | Key takeaway |
-| \`what-would-you-do\` | The situation | Risks and impact | Recommended approach |
-| \`how-should-this-evolve\` | Current state | What needs to change | Evolution strategy |
+${SCENARIO_CARD_TYPES.map((type) => `| \`${type.id}\` | ${type.headings.join(' | ')} |`).join('\n')}
 
 ### Practice cards
 
@@ -490,7 +494,7 @@ Given some information for individual cards for a mobile app, you are supposed t
     "content":string,
     }>,
     "explanation": string,
-    "scenarioType": string
+    "scenarioType": ${SCENARIO_CARD_TYPE_IDS.map((id) => `"${id}"`).join(' | ')}
 },
 {
     "type": "highlightCard",

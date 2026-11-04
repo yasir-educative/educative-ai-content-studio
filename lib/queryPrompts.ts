@@ -57,6 +57,15 @@ Accuracy over sympathy. A precise, slightly blunt answer beats a warm, wrong one
 const VOICE = `# Voice
 - Thank them once, at the start. No further apology unless a confirmed defect warrants it.
 - Address their specific point. Do not restate the ticket.
+
+# Give the answer, not the investigation
+The checking above is how you reach the answer; it is not the answer. The reply states the
+conclusion and the one or two facts that support it. Never narrate the process: no "I checked",
+"I reviewed", "on reviewing the lesson", "after looking into this", "I can confirm that upon".
+Never describe what you did or did not find, where you looked, or how sure you are.
+Do not list what will be changed, which section will be updated, or what the team will edit —
+that is recorded separately and is not the learner's business. Say what is true, and if
+something is genuinely wrong, say it will be corrected, in one sentence, with no plan.
 - Two to four short paragraphs. Bullets only for a genuine sequence.
 - Plain professional English. No marketing tone, no filler, no em-dashes.
 - Never invent wording, URLs, names, or a date a fix will ship.
@@ -145,6 +154,46 @@ ${ticket}
 ${classification}
 
 # Session content
+${lesson}`;
+}
+
+// ── Content changes ──────────────────────────────────────────────────────────
+// Not a reply. This is the internal note under the draft saying what the
+// material needs, so the author knows what to edit and where.
+
+export function queriesChangesPrompt({ ticket, lesson, reply, focus }: {
+  ticket: string;
+  lesson: string;
+  reply: string;
+  focus: string;
+}): string {
+  return `You list the edits a learning resource needs, for the content team.
+
+This is an internal note, never sent to anyone. The reply to the learner is already written and
+is shown to you only so you do not contradict it.
+
+Rules:
+- List an edit only when the material is actually wrong, unclear, missing or inconsistent, and
+  the query shows it. A query that is answered by the material as it stands needs no edit:
+  return an empty list. An empty list is the correct, common answer — do not invent work.
+- "where" must be findable: quote the heading, the widget, or the exact phrase to change.
+  Never write "the lesson" or "the introduction" alone.
+- "change" says what to do, concretely enough to act on without re-reading the ticket.
+  Give the replacement wording where the fix is wording.
+- "why" is one short clause tying it to the query.
+- At most 5 edits, most important first. No preamble, no markdown fences.
+
+Return JSON only:
+{"changes":[{"where":"...","change":"...","why":"..."}]}
+
+# Query
+${ticket}
+${focus}
+
+# Reply already sent
+${reply}
+
+# Material
 ${lesson}`;
 }
 

@@ -72,6 +72,42 @@ export function extractLessonHtml(page: any, ids?: { authorId: string; collectio
     out.push(imagePlaceholder(src, caption));
   };
 
+  /**
+   * Anything the cases below do not name.
+   *
+   * Dropping these silently is why a query about a quiz, a code exercise or a
+   * canvas arrived with a lesson that contained no quiz, code exercise or
+   * canvas — and got a generic answer about the prose instead. Label the
+   * widget and keep whatever text it carries, so the reader can see it exists.
+   */
+  const other = (w: any) => {
+    const type = String(w?.type || '').trim();
+    if (!type) return;
+    const seen = new Set<string>();
+    const bits: string[] = [];
+    const walk = (v: any, depth = 0) => {
+      if (depth > 4 || bits.length > 40) return;
+      if (typeof v === 'string') {
+        const s = v.trim();
+        // Ids, hashes, colours and comp refs are noise to a reader.
+        if (s.length < 2 || s.length > 1200 || seen.has(s)) return;
+        if (/^(#[0-9a-f]{3,8}|[0-9a-f]{16,}|https?:\/\/\S+)$/i.test(s)) return;
+        seen.add(s);
+        bits.push(s);
+        return;
+      }
+      if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
+      if (v && typeof v === 'object') {
+        for (const [k, x] of Object.entries(v)) {
+          if (/^(comp_id|contentID|hash|id|uid|version|saveVersion|iteration|status)$/i.test(k)) continue;
+          walk(x, depth + 1);
+        }
+      }
+    };
+    walk(w?.content);
+    out.push(`[widget type="${type}"]${bits.length ? `\n${bits.join('\n')}` : ''}\n[/widget]`);
+  };
+
   const take = (w: any) => {
     if (!w || typeof w !== 'object') return;
 
@@ -122,9 +158,14 @@ export function extractLessonHtml(page: any, ids?: { authorId: string; collectio
         if (c?.type === 'Table' && Array.isArray(c?.content?.data)) {
           const t = htmlTable(c.content.data);
           if (t) out.push(t);
+          continue;
         }
+        other(c);
       }
+      return;
     }
+
+    other(w);
   };
 
   for (const w of components) take(w);

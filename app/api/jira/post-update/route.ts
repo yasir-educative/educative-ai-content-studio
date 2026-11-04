@@ -17,11 +17,21 @@ export async function GET(req: NextRequest) {
   }
 }
 
+/** Attachments travel as base64 in the JSON body, so cap what one post may carry. */
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
 export async function POST(req: NextRequest) {
   const c = getJiraConfig();
   if (!isConfigured(c)) return NextResponse.json({ error: 'Jira is not connected yet' }, { status: 400 });
   try {
-    return NextResponse.json(await postUpdate(c, await req.json()));
+    const body = await req.json();
+    const files = Array.isArray(body?.attachments) ? body.attachments : [];
+    // base64 is 4 characters per 3 bytes; close enough to refuse before uploading.
+    const bytes = files.reduce((sum: number, f: any) => sum + Math.floor(String(f?.data || '').length * 0.75), 0);
+    if (bytes > MAX_ATTACHMENT_BYTES) {
+      return NextResponse.json({ error: `Attachments total ${(bytes / 1024 / 1024).toFixed(1)}MB; the limit is 10MB` }, { status: 400 });
+    }
+    return NextResponse.json(await postUpdate(c, body));
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Failed to post update' }, { status: 400 });
   }

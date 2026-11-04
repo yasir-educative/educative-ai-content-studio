@@ -17,6 +17,13 @@ export interface StoredPersona {
   name: string;
   body: string;
   builtin: boolean;
+  /**
+   * The image style this persona's illustrations are drawn in.
+   *
+   * A persona is a voice, and the pictures are part of that voice. Empty means
+   * the pipeline's own default style, which is what every persona did before.
+   */
+  imageStyleId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -98,6 +105,19 @@ export function getPersona(slug: string): StoredPersona | null {
   return null;
 }
 
+/**
+ * The style id bound to a persona, by display name, or undefined for none.
+ *
+ * The caller passes it as the style override; an id pointing at a style that
+ * has since been deleted resolves back to the scope default on its own.
+ */
+export function getPersonaImageStyleId(name: string): string | undefined {
+  if (!name) return undefined;
+  const direct = getPersona(slugify(name));
+  const hit = direct && direct.name === name ? direct : listPersonas().find((p) => p.name === name);
+  return hit?.imageStyleId?.trim() || undefined;
+}
+
 // Used by the pipeline. Looks up the live (possibly user-edited) body by display name.
 export function getPersonaBody(name: string): string {
   // Try slug-from-name first; fall back to scanning the list (handles renames).
@@ -131,7 +151,10 @@ export async function createPersona(name: string, body: string): Promise<StoredP
   return p;
 }
 
-export async function savePersona(slug: string, patch: { body?: string; name?: string }): Promise<StoredPersona> {
+export async function savePersona(
+  slug: string,
+  patch: { body?: string; name?: string; imageStyleId?: string },
+): Promise<StoredPersona> {
   const existing = getPersona(slug);
   if (!existing) throw new Error(`unknown persona: ${slug}`);
   const now = new Date().toISOString();
@@ -141,6 +164,10 @@ export async function savePersona(slug: string, patch: { body?: string; name?: s
     name: existing.builtin ? existing.name : (patch.name?.trim() || existing.name),
     body: patch.body !== undefined ? patch.body : existing.body,
     builtin: existing.builtin,
+    // An empty string clears the binding and returns the persona to the default.
+    imageStyleId: patch.imageStyleId !== undefined
+      ? (patch.imageStyleId.trim() || undefined)
+      : existing.imageStyleId,
     createdAt: existing.createdAt || now,
     updatedAt: now,
   };

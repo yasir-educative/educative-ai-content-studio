@@ -1,4 +1,4 @@
-import { isCardType, isHighlightCardType, type MobileCardType } from './mobileCardTypes';
+import { isCardType, isHighlightCardType, normalizeScenarioCardType, scenarioHeadings, type MobileCardType } from './mobileCardTypes';
 import type { MobileCard } from './mobileCourseStorage';
 
 export interface FieldLimit {
@@ -97,8 +97,18 @@ export function checkCard(card: MobileCard, product: CardProduct = 'short'): Lim
   if (card.type === 'scenarioCard') {
     const sections = Array.isArray(card.sections) ? card.sections : [];
     count('sections', sections, 'Scenario sections', 3, 3);
+    // The variant owns the three tab headings, so an unset variant leaves the
+    // card unlabelled — the same blocker a highlight with no type gets.
+    // A card saved before the variants were fixed carries the headings and no
+    // id; those headings name the variant, so read it back rather than blocking.
+    const resolved = normalizeScenarioCardType(card.scenarioType, sections);
+    const headings = scenarioHeadings(resolved);
+    if (!resolved) issue('scenarioType', 'Scenario type is not selected');
     sections.forEach((section, i) => {
       text(`sections[${i}].heading`, section?.heading, `Section ${i + 1} heading`);
+      if (headings && i < headings.length && section?.heading && section.heading !== headings[i]) {
+        issue(`sections[${i}].heading`, `Section ${i + 1} heading should be "${headings[i]}" for this scenario type`, 0, 0, 0, 'warning');
+      }
       const limit = limits![i < 2 ? 0 : 1];
       text(`sections[${i}].content`, section?.content, `Section ${i + 1} content`, limit.min, limit.max);
     });

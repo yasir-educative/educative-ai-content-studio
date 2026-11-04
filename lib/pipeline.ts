@@ -24,7 +24,7 @@ import {
   newsletterTextGeneratorPrompt,
   technicalBlogTextGeneratorPrompt,
 } from './promptsRegistry';
-import { getPersonaBody } from './personaStore';
+import { getPersonaBody, getPersonaImageStyleId } from './personaStore';
 import { modelForStage } from './modelTiers';
 import {
   sanitizeText,
@@ -44,7 +44,8 @@ import {
   makeTableBlock,
   makeImageBlock,
 } from './educative';
-import { generateGptImage, extractImageContents, slugify } from './imageGen';
+import { generateGptImage, extractImageContents, slugify, buildBlogImagePrompt } from './imageGen';
+import { getScopeStyle, readStyleReference } from './imageStyleStore';
 
 export type StageEvent =
   | { type: 'stage'; name: string; status: 'start' | 'done' | 'error'; message?: string }
@@ -580,7 +581,14 @@ export async function runBlogPipeline(input: BlogInput, emit: Emit, waitForResum
         `image-generate#${b.order}`,
         '(gpt-image-2)',
         { content: item.content },
-        () => generateGptImage(item.content, b.order, blogImgSubfolder),
+        async () => {
+          // A persona can own an image style; without one this is the blog default.
+          const style = getScopeStyle('blog', getPersonaImageStyleId(input.persona));
+          return generateGptImage(item.content, b.order, blogImgSubfolder, {
+            rawPrompt: buildBlogImagePrompt(item.content, style.body),
+            reference: await readStyleReference(style.id),
+          });
+        },
         (r) => ({ url: r.url, filename: r.filename }),
       );
       localUrl = result.url;
@@ -969,7 +977,14 @@ export async function runNewsletterPipeline(input: NewsletterInput, emit: Emit, 
         `image-generate#${b.order}`,
         '(gpt-image-2)',
         { content: item.content },
-        () => generateGptImage(item.content, b.order, newsletterImgSubfolder),
+        async () => {
+          // NewsletterInput carries no persona, so this is always the blog default.
+          const style = getScopeStyle('blog');
+          return generateGptImage(item.content, b.order, newsletterImgSubfolder, {
+            rawPrompt: buildBlogImagePrompt(item.content, style.body),
+            reference: await readStyleReference(style.id),
+          });
+        },
         (r) => ({ url: r.url, filename: r.filename }),
       );
       localUrl = result.url;

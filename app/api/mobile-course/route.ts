@@ -14,7 +14,7 @@ export async function GET() {
 // POST /api/mobile-course — start a new run and stream events
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { collectionId, authorId, targetCollectionId, courseTitle, previewedChapters } = body;
+  const { collectionId, authorId, targetCollectionId, courseTitle, previewedChapters, isScenarioCardNeeded } = body;
 
   if (!collectionId) {
     return Response.json({ error: 'collectionId is required' }, { status: 400 });
@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
     targetCollectionId: targetCollectionId ? String(targetCollectionId) : undefined,
     courseTitle: courseTitle ? String(courseTitle) : undefined,
     previewedChapters: Array.isArray(previewedChapters) ? previewedChapters : undefined,
+    isScenarioCardNeeded: Boolean(isScenarioCardNeeded),
   });
 
   const stream = new ReadableStream({

@@ -5,7 +5,8 @@ import Link from 'next/link';
 // The card shape, the gate and the rewrite dialog all come from the shared
 // modules so the page cannot drift from what the server enforces.
 import type { MobileCard, MobileCardType } from '@/lib/mobileCourseStorage';
-import { HighlightTypePicker } from '@/app/_components/HighlightTypePicker';
+import { HighlightTypePicker, ScenarioTypePicker } from '@/app/_components/HighlightTypePicker';
+import { applyScenarioHeadings } from '@/lib/mobileCardTypes';
 import { checkCard, checkCards } from '@/lib/mobileCardLimits';
 import { CardIssues, CardIssueSummary } from '@/app/_components/CardIssues';
 import { CardRewriteControl, CardRegenerateButton } from '@/app/_components/CardRewriteControl';
@@ -776,6 +777,11 @@ function CardView({
 
           return (
             <div className="space-y-1.5">
+              <ScenarioTypePicker
+                value={String(card.scenarioType || '')}
+                readOnly={!onUpdate}
+                onChange={(id) => onUpdate?.(applyScenarioHeadings({ ...card, scenarioType: id }))}
+              />
               {allItems.map((item, i) => {
                 const isOpen = openScenarioIdx === i;
                 const c = scenarioColor(item.heading, i);
@@ -1159,13 +1165,13 @@ function CardEditorModal({
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-[var(--text-faint)]">Scenario type</label>
-                <select className="input text-sm" value={draft.scenarioType || ''} onChange={(e) => upd({ scenarioType: e.target.value })}>
-                  <option value="">— select —</option>
-                  <option value="how-would-you-fix">how-would-you-fix</option>
-                  <option value="whats-going-on">whats-going-on</option>
-                  <option value="what-would-you-do">what-would-you-do</option>
-                  <option value="how-should-this-evolve">how-should-this-evolve</option>
-                </select>
+                <ScenarioTypePicker
+                  value={draft.scenarioType || ''}
+                  onChange={(id) => {
+                    const next = applyScenarioHeadings({ ...draft, scenarioType: id });
+                    upd({ scenarioType: id, sections: next.sections });
+                  }}
+                />
               </div>
             </>
           )}

@@ -12,6 +12,7 @@ import {
   publishCourse,
   lessonUrlForIds,
 } from '@/lib/courseEducative';
+import { normalizeScenarioCardType, scenarioHeadings } from '@/lib/mobileCardTypes';
 import type { MobileCard } from '@/lib/mobileCourseStorage';
 
 export const runtime = 'nodejs';
@@ -175,15 +176,19 @@ function buildCardComponents(
     }
     case 'scenarioCard': {
       const t = resolveTitle('Scenario Card');
+      // The variant owns the headings, so publish them from it rather than from
+      // whatever the card happens to carry.
+      const scenarioType = normalizeScenarioCardType(card.scenarioType, card.sections);
+      const headings = scenarioHeadings(scenarioType);
       const payload: any = {
         type: 'scenarioCard',
         title: t,
         sections: (card.sections || [])
-          .map((s) => ({ heading: safeStr(s.heading), content: safeStr(s.content) }))
+          .map((s, i) => ({ heading: safeStr(headings?.[i] ?? s.heading), content: safeStr(s.content) }))
           .filter((s) => s.heading || s.content),
         explanation: safeStr(card.explanation),
       };
-      if (card.scenarioType) payload.scenarioType = card.scenarioType;
+      if (scenarioType) payload.scenarioType = scenarioType;
       return {
         components: [makeFlashCard(t, 'custom', '', JSON.stringify(payload), 1, 3), makeSlateHTML(true)],
         summary: { title: t, titleUpdated: true },

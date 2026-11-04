@@ -7,8 +7,8 @@ const IMAGES_DIR = path.join(process.cwd(), 'data', 'images');
 
 // The canonical list lives in mobileCardTypes so the enums, JSON schemas and the
 // gate all build from one source; re-exported here for existing importers.
-export type { MobileCardType, HighlightCardType } from './mobileCardTypes';
-import type { MobileCardType, HighlightCardType } from './mobileCardTypes';
+export type { MobileCardType, HighlightCardType, ScenarioCardType } from './mobileCardTypes';
+import type { MobileCardType, HighlightCardType, ScenarioCardType } from './mobileCardTypes';
 
 export interface MobileCard {
   id: string;
@@ -69,7 +69,7 @@ export interface MobileCard {
   correctOptions?: string[];
   // scenarioCard
   sections?: Array<{ heading: string; content: string }>;
-  scenarioType?: string;
+  scenarioType?: ScenarioCardType;
   // highlightCard
   highlightCardType?: HighlightCardType;
   // publish state
@@ -103,6 +103,8 @@ export interface MobileCourse {
   collectionId: string;
   authorId: string;
   targetCollectionId?: string;
+  /** Scenario cards were enabled for this run; chapter regeneration reuses it. */
+  isScenarioCardNeeded?: boolean;
   chapters: MobileChapter[];
   stageOutputs?: Record<string, any>;
   errorMessage?: string;

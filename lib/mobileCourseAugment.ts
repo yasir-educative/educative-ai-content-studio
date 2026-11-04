@@ -270,14 +270,80 @@ export async function fetchWebChapterContent(
 /** One mobile chapter, in full: this is what the analyst judges. */
 export function chapterOutline(chapter: MobileChapter): string {
   return chapter.cards.map((card, i) => {
-    const body = [card.text, card.question, card.heading, card.explanation]
-      .filter(Boolean).join(' / ').replace(/\s+/g, ' ').slice(0, 400);
+    // Every field that carries teaching, not just the prose. The analyser is
+    // asked to catch a quiz whose answer is wrong and a scenario that does not
+    // resolve, which it cannot do if the options, the answer and the tabs are
+    // left out of what it is shown.
+    const extra: string[] = [];
+    const options = Array.isArray(card.options) ? card.options : [];
+    if (options.length) {
+      extra.push(`options: ${options.map((o: any, oi: number) =>
+        `${typeof o === 'object' ? `${o?.id ?? oi + 1}. ${o?.text ?? ''}` : o}`).join(' | ')}`);
+    }
+    if (card.correctAnswer !== undefined && card.correctAnswer !== null && card.correctAnswer !== '') {
+      extra.push(`correct: ${card.correctAnswer}`);
+    }
+    if (Array.isArray(card.correctOptions) && card.correctOptions.length) {
+      extra.push(`answers: ${card.correctOptions.join(', ')}`);
+    }
+    if (Array.isArray(card.sections) && card.sections.length) {
+      extra.push(`tabs: ${card.sections.map((s) => `${s.heading}: ${s.content}`).join(' | ')}`);
+    }
+    if (card.leftOption || card.rightOption) {
+      extra.push(`sides: ${card.leftOption?.label || 'left'}: ${card.leftOption?.description || ''} | ${card.rightOption?.label || 'right'}: ${card.rightOption?.description || ''}`);
+    }
+    if (Array.isArray(card.content) && card.content.length) {
+      extra.push(`items: ${card.content.map((x: any) => `${x?.heading}: ${x?.text}`).join(' | ')}`);
+    }
+    if (card.code) extra.push(`code: ${String(card.code).slice(0, 600)}`);
+    if (card.illustration_idea) extra.push(`picture: ${card.illustration_idea}`);
+
+    const body = [card.text, card.question, card.heading, card.text_1, card.text_2, card.explanation, ...extra]
+      .filter(Boolean).join(' / ').replace(/\s+/g, ' ').slice(0, 1200);
     const mode = mediaModeFor(card);
     const media = mode === 'd2' ? ' (D2 diagram)'
       : mode === 'fresh' ? ' (Lottie animation)'
       : mode === 'recreate' ? ' (uploaded image)' : '';
     return `[${i}] ${card.type}${media}${card.readOnly ? ' (read-only)' : ''} — ${card.title || 'untitled'}${body ? `: ${body}` : ''}`;
   }).join('\n');
+}
+
+/**
+ * The most new cards one chapter may gain in a single update: 30% of what it
+ * already has, rounded up, and at least one.
+ *
+ * Without a ceiling the analyst proposes a dozen cards per chapter and a
+ * thirty-chapter course grows past 800 cards in one pass. A gap that genuinely
+ * needs more than this is a new chapter, not an addition.
+ */
+export function newCardBudget(existing: number): number {
+  return Math.max(1, Math.ceil(existing * 0.3));
+}
+
+/**
+ * Hold the plan to its budget, keeping the proposals the analyst ranked first.
+ *
+ * Whole proposals are kept while they fit, because half an idea teaches worse
+ * than none. The exception is a single proposal larger than the whole budget:
+ * that one is trimmed rather than dropped, or the chapter gains nothing at all.
+ */
+export function capNewCards(proposals: Proposal[], budget: number): { proposals: Proposal[]; dropped: number } {
+  let left = budget;
+  let dropped = 0;
+  const out: Proposal[] = [];
+  for (const p of proposals) {
+    if (p.kind !== 'cards') { out.push(p); continue; }
+    if (left <= 0) { dropped += p.cards.length; continue; }
+    if (p.cards.length <= left) {
+      left -= p.cards.length;
+      out.push(p);
+      continue;
+    }
+    dropped += p.cards.length - left;
+    out.push({ ...p, cards: p.cards.slice(0, left) });
+    left = 0;
+  }
+  return { proposals: out, dropped };
 }
 
 /** Whole-course outline, for the overview the dialog shows before analysing. */
@@ -337,6 +403,12 @@ export interface AnalyseChapterInput {
    * 'new-chapter' plan one new chapter to follow it, and nothing else
    */
   intent?: 'gaps' | 'refresh' | 'new-chapter';
+  /**
+   * What a refresh is allowed to touch. Either half alone is a complete job:
+   * rewriting the words, or redrawing the pictures. Both is the old behaviour,
+   * and neither means there is nothing to do. Ignored for the other intents.
+   */
+  refresh?: { text: boolean; media: boolean };
   web?: {
     courseTitle: string;
     chapters: Array<{ title: string; lessons: Array<{ title: string; content: string }> }>;
@@ -353,6 +425,12 @@ export async function analyseChapter(
 ): Promise<ChapterPlan> {
   const chapter = course.chapters[input.mobileIndex];
   if (!chapter) throw new Error(`There is no chapter ${input.mobileIndex}`);
+
+  // The analysis always runs, whatever the toggles say. A card it names is
+  // changed, and the gate's failing checks are applied to every other card;
+  // the toggles decide what work is added on top, never what is skipped.
+  const refresh = input.refresh ?? { text: true, media: true };
+  const budget = newCardBudget(chapter.cards.length);
 
   const webBlock = (input.web?.chapters || [])
     .map((c) => `### Web chapter: ${c.title}\n${c.lessons.map((l) => `#### ${l.title}\n${l.content}`).join('\n\n')}`)
@@ -376,13 +454,38 @@ ${webBlock}
 ` : ''}${input.instruction ? `## What the author asked for\n${input.instruction}\n` : ''}
 ## Your job
 
-You are reviewing this chapter on three counts, in this order:
+Work the chapter card by card, then${input.web ? ' lesson by lesson' : ' idea by idea'}. Do not skim: a
+proposal you do not make is a defect that ships. Before judging anything, note to yourself what each
+card actually teaches, so you neither miss a gap nor report one that is already covered elsewhere in
+the list.
+
+Three things are being asked of you, in this order. Everything else is someone else's job:
+the wording pass and the pictures are separate sweeps the author runs, so do not propose work
+for either.
+
+You are reviewing this chapter on four counts, in this order:
 
 1. **Correctness.** Is what these cards say true, current and precise? Wrong facts, stale numbers,
-   outdated names, a definition that no longer holds, a quiz whose answer is wrong.
+   outdated names, a definition that no longer holds, a quiz whose stated answer is not the right
+   one, a scenario whose fix does not follow from its setup, a comparison that misstates a side,
+   a code sample that would not run or does not do what the text claims, a picture whose labels
+   contradict the prose.
 2. **Coverage.** What does the subject require that these cards never mention${input.web ? ', and the web course covers' : ''}?
-3. **Quality.** Where is a card vague, padded, mistyped for its job, or carrying a picture that
-   teaches nothing?
+   Go through${input.web ? ' every web lesson above' : ' the chapter\'s own promise'} in order and account for each
+   substantive idea: covered here, deliberately out of scope, or missing. Report the missing ones.
+   Include the unglamorous kinds: a term used but never defined, a constraint or limit never stated,
+   the failure case of a happy path, the "when not to use this", the cost or trade-off of a
+   recommendation, and the worked example an abstract rule needs.
+3. **Connections.** A chapter is a sequence, not a pile. Look for the joins that are missing:
+   - a card that depends on an idea the reader has not met yet, or meets only later
+   - two cards that teach the same thing twice, or that disagree with each other
+   - a jump in difficulty with no bridging card between them
+   - a term introduced in one card and silently renamed in another
+   - an opening that does not say what the chapter is for, or an ending that does not close it
+   - a practice card testing something the chapter never taught, or teaching with nothing to practise
+   Order problems are real problems: say so, and propose the card or rewrite that fixes the join.
+4. **Checks.** Which cards fail the course's own rules — a character limit, a missing required
+   field, a card typed wrongly for what it carries? Those are facts, not opinions: name them.
 
 ${input.intent === 'new-chapter' ? `Propose exactly one new chapter, to be placed directly after the chapter above.
 Use kind \`chapter\`, give it a \`chapter_title\` and its full set of cards, and propose nothing else:
@@ -397,8 +500,16 @@ above, and \`note\` is the instruction the writer follows: say what is wrong and
 should say instead, in enough detail that it can be rewritten without reading this plan twice.
 Leave \`cards\` empty. A card marked read-only cannot be rewritten; propose nothing for it.
 
-Leave a card alone when it is correct, clear and on topic. The pictures are handled separately
-and automatically — never propose a rewrite only to change an illustration.` : `Plan what this chapter needs. Three kinds of proposal:
+Leave a card alone when it is correct, clear and on topic.${refresh.media
+  ? ' The pictures are handled separately\nand automatically — never propose a rewrite only to change an illustration.'
+  : ' The pictures are not being touched on this\nrun: never propose a rewrite to change an illustration, and do not comment on the pictures.'}${refresh.text
+  ? ''
+  : `
+
+The author did not ask for a wording pass, so hold a higher bar: propose a rewrite only where a card
+is actually wrong, out of date, contradicts another card, or cannot be understood as written. Do not
+propose one to tighten prose, improve flow or vary a phrase. What you do propose is still carried
+out, so propose it only when leaving it would be a mistake.`}` : `Plan what this chapter needs. Three kinds of proposal:
 
 - \`cards\`: add cards. \`insert_at\` is the position the first new card takes in the list above
   (0 puts them first, ${chapter.cards.length} puts them last). Give the cards.
@@ -409,18 +520,45 @@ and automatically — never propose a rewrite only to change an illustration.` :
   names it, and the new chapter goes directly after this one.`}
 
 Rules:
-${input.web ? `- The web course is the reference for all three: where the two disagree it is right, and
+${input.web ? `- The web course is the reference for all four: where the two disagree it is right, and
   material it teaches that these cards never mention is a gap. Name the web lesson each
   proposal comes from in \`reason\`.
-- Do not propose a card for web material that is already covered here, in any wording.
+- The web course is the version that has been updated. Treat anything in it that these cards
+  contradict as a correctness problem, not a difference of wording, and anything added to it since
+  as the most likely gap.
+- Do not propose a card for web material that is already covered here, in any wording. Check the
+  whole card list before calling something missing, not just the cards near where it would go.
 ` : `- Judge correctness against what you know of the subject, and say in \`reason\` what is wrong.
 - Propose a card only where it teaches something the surrounding cards leave out.
-`}- \`content_focus\` is the brief a writer works from: state the idea, its scope and the facts to use.
+`}${input.web ? `- A web lesson with no counterpart in the card list is new material. Work it into the chapter where
+  it belongs in the teaching order — after what it depends on, before what depends on it — not at the
+  end because that is where it sits in the web course. Say in \`reason\` which card it follows and why
+  that is the right place.
+- New material arriving mid-chapter usually needs a join as well as cards: if the card before it now
+  leads nowhere, or the card after it assumes something the new cards displaced, propose the rewrite
+  that reconnects them in the same plan. Cards added without their joins read as an interruption.
+- Match what is already there: a chapter of short text_img cards does not want three dense text cards
+  dropped into it. Follow the chapter's own card mix, depth and voice.
+` : ''}- **Budget: at most ${budget} new card${budget === 1 ? '' : 's'} for this chapter, across all your \`cards\`
+  proposals put together.** It has ${chapter.cards.length} already. This is a hard ceiling, not a target:
+  none is a perfectly good answer, and a chapter that is complete should get none. Anything past
+  ${budget} is discarded unread, so spend the budget on the gaps that matter most and leave the rest.
+  Where a gap genuinely needs more cards than that, it is a chapter of its own — say so in
+  \`summary\` rather than proposing it here.
+- A rewrite costs nothing against the budget. Where an existing card could carry the missing
+  point with a better brief, prefer rewriting it to adding a card beside it.
+- \`content_focus\` is the brief a writer works from: state the idea, its scope and the facts to use.
 - \`illustration_idea\` only for the image types, otherwise null.
 - Each proposal needs a short unique \`id\`.
-- A correctness problem outranks a gap, and a gap outranks a polish: say which of the three a
-  proposal answers in \`reason\`, and put the correctness ones first.
-- Propose nothing rather than padding. An empty list is a valid answer.
+- A correctness problem outranks a gap, a gap outranks a broken connection, and that outranks a
+  polish: say which of the four a proposal answers in \`reason\`, and keep them in that order.
+- \`reason\` is evidence, not a verdict. Quote or name the exact card, line, option or lesson that
+  shows the problem. "Card 4 could be clearer" is not a reason; "card 4 uses 'quorum' before card 7
+  defines it" is.
+- Say in \`summary\` what you checked and what you found: how many cards you read, the ideas the
+  chapter covers well, and the single most important thing wrong with it.
+- Propose nothing rather than padding. An empty list is a valid answer, and the right one for a
+  chapter that is correct, complete and in order.
 ${input.instruction ? `- The author's request above governs, over your own reading of the chapter.
 ` : ''}`;
 
@@ -457,14 +595,20 @@ ${input.instruction ? `- The author's request above governs, over your own readi
       ? { ...p, insert_at: Math.min(p.insert_at, chapter.cards.length) }
       : p));
 
+  // The prompt states the budget; this holds it to it. A model that proposes
+  // twelve cards for a fifteen-card chapter is not a model to take on trust.
+  const capped = input.intent === 'refresh'
+    ? { proposals: withRefreshWork(chapter, input.mobileIndex, proposals, refresh), dropped: 0 }
+    : capNewCards(proposals, budget);
+
   return {
     mobileIndex: input.mobileIndex,
     chapterTitle: chapter.title,
     comparedWith: (input.web?.chapters || []).map((c) => `${c.title} (${c.lessons.length} lesson${c.lessons.length === 1 ? '' : 's'})`),
-    summary: out.summary || '',
-    proposals: input.intent === 'refresh'
-      ? withRefreshWork(chapter, input.mobileIndex, proposals)
-      : proposals,
+    summary: capped.dropped
+      ? `${out.summary || ''}\n\nOver budget: ${capped.dropped} further card${capped.dropped === 1 ? '' : 's'} were proposed and dropped. This chapter may gain at most ${budget}.`.trim()
+      : out.summary || '',
+    proposals: capped.proposals,
   };
 }
 
@@ -485,13 +629,17 @@ export function withRefreshWork(
   chapter: MobileChapter,
   chapterIndex: number,
   proposals: Proposal[],
+  opts: { text: boolean; media: boolean } = { text: true, media: true },
 ): Proposal[] {
+  // A card the analysis named is rewritten whatever the toggles say, and the
+  // gate's failing checks apply to every remaining card. `opts` only decides
+  // what is added on top: the full wording review, and the pictures.
   const byCard = new Map<number, Proposal>();
   for (const p of proposals) if (p.kind === 'rewrite') byCard.set(p.insert_at, p);
 
   const out: Proposal[] = [];
   chapter.cards.forEach((card, i) => {
-    const media = mediaModeFor(card) ?? undefined;
+    const media = opts.media ? (mediaModeFor(card) ?? undefined) : undefined;
     const failing = checkCard(card, 'course').filter((issue) => issue.severity === 'error');
     const planned = byCard.get(i);
     if (!media && !failing.length && !planned) return;
